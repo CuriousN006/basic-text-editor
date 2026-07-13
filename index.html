@@ -136,6 +136,8 @@
       font-family: "Malgun Gothic", "맑은 고딕", Arial, sans-serif;
       font-size: 16px;
       line-height: 1.75;
+      tab-size: 4;
+      white-space: pre-wrap;
       word-break: break-word;
     }
 
@@ -221,7 +223,7 @@
       position: fixed;
       top: 104px;
       right: 22px;
-      width: min(390px, calc(100vw - 32px));
+      width: min(460px, calc(100vw - 32px));
       padding: 12px;
       border: 1px solid var(--line);
       border-radius: 10px;
@@ -268,6 +270,18 @@
     .particle-option input {
       margin: 0;
       accent-color: var(--accent);
+    }
+
+    .find-specials {
+      margin: 1px 0 8px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .find-specials code {
+      color: var(--text);
+      font-family: Consolas, monospace;
     }
 
     .find-actions {
@@ -406,6 +420,9 @@
         조사 자동 교정
       </label>
     </div>
+    <div class="find-specials">
+      특수기호: <code>^p</code> 문단 · <code>^l</code> 줄바꿈 · <code>^t</code> 탭 · <code>^^</code> ^ 문자
+    </div>
     <div class="find-actions">
       <button class="toolbar-button" type="button" data-find="next">다음 찾기</button>
       <button class="toolbar-button" type="button" data-find="replace">바꾸기</button>
@@ -444,6 +461,7 @@
       let toastTimer = null;
       let savedRange = null;
       let hoveredLink = null;
+      let specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
 
       const showToast = (message) => {
         toast.textContent = message;
@@ -776,8 +794,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escapeHtml(currentFileName.replace(/\.[^.]+$/, '') || '문서')}</title>
 <style>
-body{max-width:780px;margin:40px auto;padding:0 24px;color:#202124;font-family:"Malgun Gothic","맑은 고딕",Arial,sans-serif;font-size:16px;line-height:1.75;word-break:break-word}
-p{margin:0 0 1em}p.blank-line{min-height:1.75em;margin:0}h1{font-size:2em}h2{font-size:1.55em}h3{font-size:1.25em}blockquote{margin:1em 0;padding:.5em 1em;border-left:4px solid #94a3b8;background:#f8fafc;color:#475569}pre{overflow:auto;padding:14px 16px;border-radius:8px;background:#f4f5f7}code{font-family:Consolas,monospace}a{color:#1558d6}img{max-width:100%;height:auto}hr{border:0;border-top:1px solid #cdd2d9;margin:2em 0}
+body{max-width:780px;margin:40px auto;padding:0 24px;color:#202124;font-family:"Malgun Gothic","맑은 고딕",Arial,sans-serif;font-size:16px;line-height:1.75;tab-size:4;word-break:break-word}
+p,h1,h2,h3,blockquote,li,pre{white-space:pre-wrap}p{margin:0 0 1em}p.blank-line{min-height:1.75em;margin:0}h1{font-size:2em}h2{font-size:1.55em}h3{font-size:1.25em}blockquote{margin:1em 0;padding:.5em 1em;border-left:4px solid #94a3b8;background:#f8fafc;color:#475569}pre{overflow:auto;padding:14px 16px;border-radius:8px;background:#f4f5f7}code{font-family:Consolas,monospace}a{color:#1558d6}img{max-width:100%;height:auto}hr{border:0;border-top:1px solid #cdd2d9;margin:2em 0}
 </style>
 </head>
 <body>
@@ -826,9 +844,178 @@ ${sanitizeHtml(editor.innerHTML)}
         focusEditor();
       };
 
+      const SPECIAL_PARAGRAPH = '\uE000';
+      const SPECIAL_LINE_BREAK = '\uE001';
+
+      const parseSpecialCodes = (source) => {
+        const tokens = [];
+        let text = '';
+        let buffer = '';
+        let usesCodes = false;
+
+        const flushText = () => {
+          if (!buffer) return;
+          tokens.push({ type: 'text', value: buffer });
+          text += buffer;
+          buffer = '';
+        };
+
+        for (let index = 0; index < source.length; index += 1) {
+          const character = source[index];
+          const code = source[index + 1]?.toLowerCase();
+          if (character !== '^' || !['^', 'p', 'l', 't'].includes(code)) {
+            buffer += character;
+            continue;
+          }
+
+          usesCodes = true;
+          index += 1;
+          if (code === '^') {
+            buffer += '^';
+          } else {
+            flushText();
+            if (code === 'p') {
+              tokens.push({ type: 'paragraph' });
+              text += SPECIAL_PARAGRAPH;
+            } else if (code === 'l') {
+              tokens.push({ type: 'line' });
+              text += SPECIAL_LINE_BREAK;
+            } else {
+              tokens.push({ type: 'tab' });
+              text += '\t';
+            }
+          }
+        }
+        flushText();
+        return { text, tokens, usesCodes };
+      };
+
+      const getParagraphUnits = () => {
+        const units = [];
+        [...editor.childNodes].forEach((node) => {
+          if (node.nodeType === Node.ELEMENT_NODE && ['UL', 'OL'].includes(node.tagName)) {
+            [...node.children].filter((child) => child.tagName === 'LI').forEach((item) => units.push(item));
+          } else if (node.nodeType === Node.ELEMENT_NODE || (node.nodeType === Node.TEXT_NODE && node.nodeValue)) {
+            units.push(node);
+          }
+        });
+        return units;
+      };
+
+      const getNodePoint = (node, atEnd) => {
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        range.collapse(!atEnd);
+        return {
+          node: range.startContainer,
+          offset: range.startOffset
+        };
+      };
+
+      const buildSpecialSearchModel = () => {
+        const units = getParagraphUnits();
+        const items = [];
+
+        const addTextNode = (node) => {
+          for (let offset = 0; offset < node.nodeValue.length; offset += 1) {
+            const character = node.nodeValue[offset] === '\n' ? SPECIAL_LINE_BREAK : node.nodeValue[offset];
+            items.push({
+              character,
+              start: { node, offset },
+              end: { node, offset: offset + 1 }
+            });
+          }
+        };
+
+        const addElement = (node, placeholderBreak) => {
+          if (node.nodeType === Node.TEXT_NODE) {
+            addTextNode(node);
+            return;
+          }
+          if (node.nodeType !== Node.ELEMENT_NODE) return;
+          if (node.tagName === 'BR') {
+            if (placeholderBreak === node) return;
+            const siblings = [...node.parentNode.childNodes];
+            const offset = siblings.indexOf(node);
+            items.push({
+              character: SPECIAL_LINE_BREAK,
+              start: { node: node.parentNode, offset },
+              end: { node: node.parentNode, offset: offset + 1 }
+            });
+            return;
+          }
+          [...node.childNodes].forEach((child) => addElement(child, placeholderBreak));
+        };
+
+        units.forEach((unit, index) => {
+          const placeholderBreak = unit.nodeType === Node.ELEMENT_NODE
+            && !unit.textContent
+            && unit.childNodes.length === 1
+            && unit.firstElementChild?.tagName === 'BR'
+            ? unit.firstElementChild
+            : null;
+          addElement(unit, placeholderBreak);
+
+          if (index < units.length - 1) {
+            items.push({
+              character: SPECIAL_PARAGRAPH,
+              start: getNodePoint(unit, true),
+              end: getNodePoint(units[index + 1], false)
+            });
+          }
+        });
+
+        return {
+          text: items.map((item) => item.character).join(''),
+          items
+        };
+      };
+
+      const createRangeFromModel = (model, index, length) => {
+        if (index < 0 || length < 1 || index + length > model.items.length) return null;
+        const first = model.items[index];
+        const last = model.items[index + length - 1];
+        const range = document.createRange();
+        range.setStart(first.start.node, first.start.offset);
+        range.setEnd(last.end.node, last.end.offset);
+        return range;
+      };
+
+      const selectEditorRange = (range) => {
+        focusEditor();
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+      };
+
+      const findNextSpecial = (parsedQuery) => {
+        if (!parsedQuery.text) return false;
+        const model = buildSpecialSearchModel();
+        const sameQuery = specialSearchState.query === parsedQuery.text;
+        const startIndex = sameQuery ? specialSearchState.nextIndex : 0;
+        let index = model.text.indexOf(parsedQuery.text, startIndex);
+        if (index < 0 && startIndex > 0) index = model.text.indexOf(parsedQuery.text);
+        if (index < 0) return false;
+
+        const range = createRangeFromModel(model, index, parsedQuery.text.length);
+        if (!range) return false;
+        selectEditorRange(range);
+        specialSearchState = {
+          query: parsedQuery.text,
+          nextIndex: index + Math.max(1, parsedQuery.text.length),
+          index,
+          range: range.cloneRange()
+        };
+        return true;
+      };
+
       const findNext = () => {
         const query = findText.value;
         if (!query) return false;
+        const parsedQuery = parseSpecialCodes(query);
+        if (parsedQuery.usesCodes) return findNextSpecial(parsedQuery);
+
+        specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
         focusEditor();
         const found = window.find(query, false, false, true, false, false, false);
         if (!found) {
@@ -920,10 +1107,93 @@ ${sanitizeHtml(editor.innerHTML)}
         return { value: output, count, particleCount };
       };
 
+      const replaceRangeWithSpecialTokens = (range, tokens) => {
+        selectEditorRange(range);
+        const deleted = document.execCommand('delete', false, null);
+        if (!deleted) {
+          range.deleteContents();
+          range.collapse(true);
+          selectEditorRange(range);
+        }
+
+        tokens.forEach((token) => {
+          if (token.type === 'text' && token.value) {
+            document.execCommand('insertText', false, token.value);
+          } else if (token.type === 'tab') {
+            document.execCommand('insertText', false, '\t');
+          } else if (token.type === 'line') {
+            const inserted = document.execCommand('insertLineBreak', false, null);
+            if (!inserted) document.execCommand('insertHTML', false, '<br>');
+          } else if (token.type === 'paragraph') {
+            document.execCommand('insertParagraph', false, null);
+          }
+        });
+        normalizeEmptyDocument();
+        saveSelection();
+      };
+
+      const replaceAllSpecial = (parsedQuery, parsedReplacement) => {
+        if (!parsedQuery.text) return 0;
+        let beforeIndex = Number.POSITIVE_INFINITY;
+        let count = 0;
+
+        while (count < 10000) {
+          const model = buildSpecialSearchModel();
+          const searchable = model.text.slice(0, beforeIndex);
+          const index = searchable.lastIndexOf(parsedQuery.text);
+          if (index < 0) break;
+          const range = createRangeFromModel(model, index, parsedQuery.text.length);
+          if (!range) break;
+          replaceRangeWithSpecialTokens(range, parsedReplacement.tokens);
+          beforeIndex = index;
+          count += 1;
+        }
+        specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
+        return count;
+      };
+
       const replaceCurrent = () => {
         const selection = window.getSelection();
+        const parsedQuery = parseSpecialCodes(findText.value);
+        const parsedReplacement = parseSpecialCodes(replaceText.value);
+        const usesSpecialCodes = parsedQuery.usesCodes || parsedReplacement.usesCodes;
         let particleCount = 0;
         let replaced = false;
+
+        if (usesSpecialCodes) {
+          let range = null;
+          let matchIndex = -1;
+          if (parsedQuery.usesCodes
+            && specialSearchState.query === parsedQuery.text
+            && specialSearchState.range) {
+            range = specialSearchState.range.cloneRange();
+            matchIndex = specialSearchState.index;
+          } else if (!parsedQuery.usesCodes
+            && selection
+            && selection.rangeCount
+            && selection.toString() === parsedQuery.text
+            && selectionIsInsideEditor()) {
+            range = selection.getRangeAt(0).cloneRange();
+          }
+
+          if (range) {
+            replaceRangeWithSpecialTokens(range, parsedReplacement.tokens);
+            replaced = true;
+            if (parsedQuery.usesCodes) {
+              specialSearchState = {
+                query: parsedQuery.text,
+                nextIndex: Math.max(0, matchIndex + parsedReplacement.text.length),
+                index: -1,
+                range: null
+              };
+            }
+            updateCount();
+          }
+          findNext();
+          if (replaced) showToast('특수기호를 포함해 바꿨습니다.');
+          return;
+        }
+
         if (selection && selection.toString() === findText.value && selectionIsInsideEditor()) {
           let insertion = replaceText.value;
           if (adjustParticles.checked && selection.rangeCount) {
@@ -952,6 +1222,15 @@ ${sanitizeHtml(editor.innerHTML)}
       const replaceAll = () => {
         const query = findText.value;
         if (!query) return;
+        const parsedQuery = parseSpecialCodes(query);
+        const parsedReplacement = parseSpecialCodes(replaceText.value);
+        if (parsedQuery.usesCodes || parsedReplacement.usesCodes) {
+          const count = replaceAllSpecial(parsedQuery, parsedReplacement);
+          updateCount();
+          showToast(`${count}개 항목을 특수기호 규칙으로 바꿨습니다.`);
+          return;
+        }
+
         let count = 0;
         let particleCount = 0;
         const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
