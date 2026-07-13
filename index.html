@@ -462,6 +462,7 @@
       let savedRange = null;
       let hoveredLink = null;
       let specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
+      let pastePlainRequested = false;
 
       const showToast = (message) => {
         toast.textContent = message;
@@ -1109,11 +1110,13 @@ ${sanitizeHtml(editor.innerHTML)}
 
       const replaceRangeWithSpecialTokens = (range, tokens) => {
         selectEditorRange(range);
-        const deleted = document.execCommand('delete', false, null);
-        if (!deleted) {
-          range.deleteContents();
-          range.collapse(true);
-          selectEditorRange(range);
+        if (!range.collapsed) {
+          const deleted = document.execCommand('delete', false, null);
+          if (!deleted) {
+            range.deleteContents();
+            range.collapse(true);
+            selectEditorRange(range);
+          }
         }
 
         tokens.forEach((token) => {
@@ -1130,6 +1133,100 @@ ${sanitizeHtml(editor.innerHTML)}
         });
         normalizeEmptyDocument();
         saveSelection();
+      };
+
+      const normalizeClipboardText = (value) => String(value).replace(/\r\n?/g, '\n');
+
+      const plainTextToSpecialTokens = (source) => {
+        const tokens = [];
+        let buffer = '';
+        const flushText = () => {
+          if (!buffer) return;
+          tokens.push({ type: 'text', value: buffer });
+          buffer = '';
+        };
+
+        for (const character of normalizeClipboardText(source)) {
+          if (character === '\n') {
+            flushText();
+            tokens.push({ type: 'line' });
+          } else if (character === '\t') {
+            flushText();
+            tokens.push({ type: 'tab' });
+          } else {
+            buffer += character;
+          }
+        }
+        flushText();
+        return tokens;
+      };
+
+      const insertPlainTextPreservingBreaks = (text) => {
+        const selection = window.getSelection();
+        let range = null;
+        if (selection && selection.rangeCount && selectionIsInsideEditor()) {
+          range = selection.getRangeAt(0).cloneRange();
+        } else {
+          range = document.createRange();
+          range.selectNodeContents(editor);
+          range.collapse(false);
+        }
+        replaceRangeWithSpecialTokens(range, plainTextToSpecialTokens(text));
+        updateCount();
+      };
+
+      const clipboardBlockTags = new Set([
+        'P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+        'LI', 'UL', 'OL', 'BLOCKQUOTE', 'PRE', 'TR', 'TABLE',
+        'SECTION', 'ARTICLE', 'HEADER', 'FOOTER'
+      ]);
+
+      const clipboardHtmlToPlainText = (html) => {
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        let output = '';
+
+        const containsBlockChild = (element) => [...element.children]
+          .some((child) => clipboardBlockTags.has(child.tagName));
+
+        const walk = (node) => {
+          if (node.nodeType === Node.TEXT_NODE) {
+            const value = normalizeClipboardText(node.nodeValue || '');
+            if (!value.trim() && node.parentElement && containsBlockChild(node.parentElement)) return;
+            output += value;
+            return;
+          }
+          if (node.nodeType !== Node.ELEMENT_NODE) return;
+          if (node.tagName === 'BR') {
+            output += '\n';
+            return;
+          }
+
+          const isBlock = clipboardBlockTags.has(node.tagName);
+          const startLength = output.length;
+          [...node.childNodes].forEach(walk);
+          if (isBlock && (output.length === startLength || !output.endsWith('\n'))) output += '\n';
+        };
+
+        [...doc.body.childNodes].forEach(walk);
+        return output;
+      };
+
+      const getLineSignature = (text) => {
+        const lines = normalizeClipboardText(text)
+          .replace(/\u00A0/g, ' ')
+          .split('\n')
+          .map((line) => line.replace(/[ \t]+/g, ' ').trim());
+        while (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+        return lines;
+      };
+
+      const htmlMatchesPlainLineStructure = (html, plainText) => {
+        const normalizedPlain = normalizeClipboardText(plainText);
+        if (!normalizedPlain.includes('\n')) return true;
+        const fromHtml = getLineSignature(clipboardHtmlToPlainText(html));
+        const fromPlain = getLineSignature(normalizedPlain);
+        return fromHtml.length === fromPlain.length
+          && fromHtml.every((line, index) => line === fromPlain[index]);
       };
 
       const replaceAllSpecial = (parsedQuery, parsedReplacement) => {
@@ -1353,21 +1450,46 @@ ${sanitizeHtml(editor.innerHTML)}
 
       editor.addEventListener('paste', (event) => {
         const selection = window.getSelection();
-        const plain = event.clipboardData?.getData('text/plain')?.trim() || '';
-        if (selection && !selection.isCollapsed && isUrl(plain) && selectionIsInsideEditor()) {
+        const plain = event.clipboardData?.getData('text/plain') || '';
+        const html = event.clipboardData?.getData('text/html') || '';
+        const explicitPlainPaste = pastePlainRequested;
+        const linkCandidate = plain.trim();
+        pastePlainRequested = false;
+
+        if (!explicitPlainPaste
+          && selection
+          && !selection.isCollapsed
+          && isUrl(linkCandidate)
+          && selectionIsInsideEditor()) {
           event.preventDefault();
-          document.execCommand('createLink', false, plain);
+          document.execCommand('createLink', false, linkCandidate);
           showToast('선택한 글자에 링크를 걸었습니다.');
           updateCount();
           return;
         }
 
-        const html = event.clipboardData?.getData('text/html');
-        if (html) {
+        if (explicitPlainPaste || !html) {
+          if (!plain) return;
           event.preventDefault();
-          document.execCommand('insertHTML', false, sanitizeHtml(html));
-          updateCount();
+          insertPlainTextPreservingBreaks(plain);
+          showToast(explicitPlainPaste
+            ? '서식을 빼고 원문의 줄바꿈대로 붙여넣었습니다.'
+            : '원문의 줄바꿈대로 붙여넣었습니다.');
+          return;
         }
+
+        const sanitized = sanitizeHtml(html);
+        if (plain && !htmlMatchesPlainLineStructure(sanitized, plain)) {
+          event.preventDefault();
+          insertPlainTextPreservingBreaks(plain);
+          showToast('줄바꿈 차이를 감지해 원문 줄 구조를 우선했습니다.');
+          return;
+        }
+
+        event.preventDefault();
+        document.execCommand('insertHTML', false, sanitized);
+        normalizeEmptyDocument();
+        updateCount();
       });
 
       document.querySelectorAll('[data-find]').forEach((button) => {
@@ -1398,8 +1520,9 @@ ${sanitizeHtml(editor.innerHTML)}
 
       document.addEventListener('keydown', (event) => {
         const ctrl = event.ctrlKey || event.metaKey;
-        if (!ctrl) return;
         const key = event.key.toLowerCase();
+        if (ctrl && event.shiftKey && key === 'v') pastePlainRequested = true;
+        if (!ctrl) return;
         if (key === 'k') {
           event.preventDefault();
           saveSelection();
@@ -1416,6 +1539,11 @@ ${sanitizeHtml(editor.innerHTML)}
           showToast('HTML 파일로 저장했습니다.');
         }
       });
+
+      document.addEventListener('keyup', (event) => {
+        if (event.key.toLowerCase() === 'v') pastePlainRequested = false;
+      });
+      window.addEventListener('blur', () => { pastePlainRequested = false; });
 
       updateCount();
     })();
