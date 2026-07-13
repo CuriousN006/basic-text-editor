@@ -252,6 +252,24 @@
 
     .find-input:focus { border-color: var(--accent); }
 
+    .particle-option {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      min-height: 34px;
+      padding: 0 4px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .particle-option input {
+      margin: 0;
+      accent-color: var(--accent);
+    }
+
     .find-actions {
       display: flex;
       flex-wrap: wrap;
@@ -383,7 +401,10 @@
     </div>
     <div id="replaceRow" class="find-row">
       <input id="replaceText" class="find-input" type="text" placeholder="바꿀 내용" autocomplete="off">
-      <span></span>
+      <label class="particle-option" title="바꾼 단어의 받침에 맞춰 바로 뒤의 조사를 교정합니다.">
+        <input id="adjustParticles" type="checkbox" checked>
+        조사 자동 교정
+      </label>
     </div>
     <div class="find-actions">
       <button class="toolbar-button" type="button" data-find="next">다음 찾기</button>
@@ -415,6 +436,7 @@
       const findText = document.getElementById('findText');
       const replaceText = document.getElementById('replaceText');
       const replaceRow = document.getElementById('replaceRow');
+      const adjustParticles = document.getElementById('adjustParticles');
       const blockFormat = document.getElementById('blockFormat');
       const linkPreview = document.getElementById('linkPreview');
       const linkPreviewUrl = document.getElementById('linkPreviewUrl');
@@ -821,31 +843,131 @@ ${sanitizeHtml(editor.innerHTML)}
         return true;
       };
 
+      const particlePairs = [
+        { consonant: '으로부터', vowel: '로부터', rieul: '로부터' },
+        { consonant: '으로써', vowel: '로써', rieul: '로써' },
+        { consonant: '으로서', vowel: '로서', rieul: '로서' },
+        { consonant: '이에요', vowel: '예요' },
+        { consonant: '이랑', vowel: '랑' },
+        { consonant: '이나', vowel: '나' },
+        { consonant: '으로', vowel: '로', rieul: '로' },
+        { consonant: '은', vowel: '는' },
+        { consonant: '이', vowel: '가' },
+        { consonant: '을', vowel: '를' },
+        { consonant: '과', vowel: '와' }
+      ];
+
+      const getHangulEnding = (value) => {
+        const lastCharacter = String(value).slice(-1);
+        if (!lastCharacter) return null;
+        const code = lastCharacter.charCodeAt(0);
+        if (code < 0xAC00 || code > 0xD7A3) return null;
+        const finalIndex = (code - 0xAC00) % 28;
+        return {
+          hasFinal: finalIndex !== 0,
+          isRieul: finalIndex === 8
+        };
+      };
+
+      const isParticleBoundary = (character) => !character || !/[\p{L}\p{N}]/u.test(character);
+
+      const getParticleAdjustment = (suffix, replacement) => {
+        const ending = getHangulEnding(replacement);
+        if (!ending) return null;
+
+        for (const pair of particlePairs) {
+          const desired = ending.hasFinal
+            ? (ending.isRieul && pair.rieul ? pair.rieul : pair.consonant)
+            : pair.vowel;
+          const currentForms = [...new Set([pair.consonant, pair.vowel, pair.rieul].filter(Boolean))]
+            .sort((left, right) => right.length - left.length);
+          for (const current of currentForms) {
+            if (suffix.startsWith(current) && isParticleBoundary(suffix[current.length])) {
+              return { current, desired };
+            }
+          }
+        }
+        return null;
+      };
+
+      const replaceLiteralText = (source, query, replacement, withParticles) => {
+        let cursor = 0;
+        let count = 0;
+        let particleCount = 0;
+        let output = '';
+
+        while (cursor <= source.length) {
+          const matchIndex = source.indexOf(query, cursor);
+          if (matchIndex < 0) {
+            output += source.slice(cursor);
+            break;
+          }
+
+          output += source.slice(cursor, matchIndex) + replacement;
+          cursor = matchIndex + query.length;
+          count += 1;
+
+          if (withParticles) {
+            const adjustment = getParticleAdjustment(source.slice(cursor), replacement);
+            if (adjustment && adjustment.current !== adjustment.desired) {
+              output += adjustment.desired;
+              cursor += adjustment.current.length;
+              particleCount += 1;
+            }
+          }
+        }
+
+        return { value: output, count, particleCount };
+      };
+
       const replaceCurrent = () => {
         const selection = window.getSelection();
+        let particleCount = 0;
+        let replaced = false;
         if (selection && selection.toString() === findText.value && selectionIsInsideEditor()) {
-          document.execCommand('insertText', false, replaceText.value);
+          let insertion = replaceText.value;
+          if (adjustParticles.checked && selection.rangeCount) {
+            const range = selection.getRangeAt(0);
+            const endNode = range.endContainer;
+            if (endNode.nodeType === Node.TEXT_NODE) {
+              const suffix = endNode.nodeValue.slice(range.endOffset);
+              const adjustment = getParticleAdjustment(suffix, replaceText.value);
+              if (adjustment && adjustment.current !== adjustment.desired) {
+                range.setEnd(endNode, range.endOffset + adjustment.current.length);
+                selection.removeAllRanges();
+                selection.addRange(range);
+                insertion += adjustment.desired;
+                particleCount = 1;
+              }
+            }
+          }
+          document.execCommand('insertText', false, insertion);
           updateCount();
+          replaced = true;
         }
         findNext();
+        if (replaced && particleCount) showToast('단어와 조사를 받침에 맞게 바꿨습니다.');
       };
 
       const replaceAll = () => {
         const query = findText.value;
         if (!query) return;
         let count = 0;
+        let particleCount = 0;
         const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
         const nodes = [];
         while (walker.nextNode()) nodes.push(walker.currentNode);
         nodes.forEach((node) => {
-          const parts = node.nodeValue.split(query);
-          if (parts.length > 1) {
-            count += parts.length - 1;
-            node.nodeValue = parts.join(replaceText.value);
+          const result = replaceLiteralText(node.nodeValue, query, replaceText.value, adjustParticles.checked);
+          if (result.count) {
+            count += result.count;
+            particleCount += result.particleCount;
+            node.nodeValue = result.value;
           }
         });
         updateCount();
-        showToast(`${count}개 항목을 바꿨습니다.`);
+        const particleMessage = particleCount ? ` · 조사 ${particleCount}개 자동 교정` : '';
+        showToast(`${count}개 항목을 바꿨습니다${particleMessage}.`);
       };
 
       document.querySelectorAll('[data-command]').forEach((button) => {
