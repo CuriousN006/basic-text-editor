@@ -393,12 +393,12 @@
         <option value="PRE">코드 블록</option>
       </select>
       <button class="toolbar-button" type="button" data-command="bold" aria-pressed="false" title="굵게 (Ctrl+B)"><b>B</b></button>
-      <button class="toolbar-button" type="button" data-command="italic" title="기울임 (Ctrl+I)"><i>I</i></button>
-      <button class="toolbar-button" type="button" data-command="underline" title="밑줄 (Ctrl+U)"><u>U</u></button>
-      <button class="toolbar-button" type="button" data-command="strikeThrough" title="취소선"><s>S</s></button>
+      <button class="toolbar-button" type="button" data-command="italic" aria-pressed="false" title="기울임 (Ctrl+I)"><i>I</i></button>
+      <button class="toolbar-button" type="button" data-command="underline" aria-pressed="false" title="밑줄 (Ctrl+U)"><u>U</u></button>
+      <button class="toolbar-button" type="button" data-command="strikeThrough" aria-pressed="false" title="취소선"><s>S</s></button>
       <span class="separator" aria-hidden="true"></span>
-      <button class="toolbar-button" type="button" data-command="insertUnorderedList" title="글머리 기호 목록">• 목록</button>
-      <button class="toolbar-button" type="button" data-command="insertOrderedList" title="번호 목록">1. 목록</button>
+      <button class="toolbar-button" type="button" data-command="insertUnorderedList" aria-pressed="false" title="글머리 기호 목록">• 목록</button>
+      <button class="toolbar-button" type="button" data-command="insertOrderedList" aria-pressed="false" title="번호 목록">1. 목록</button>
       <button class="toolbar-button" type="button" data-action="link" title="하이퍼링크 (Ctrl+K)">🔗</button>
       <button class="toolbar-button" type="button" data-command="unlink" title="링크 제거">링크 해제</button>
       <button class="toolbar-button" type="button" data-action="clear-format" title="글자 및 문단 서식 제거">서식 제거</button>
@@ -462,7 +462,8 @@
       const replaceRow = document.getElementById('replaceRow');
       const adjustParticles = document.getElementById('adjustParticles');
       const blockFormat = document.getElementById('blockFormat');
-      const boldButton = document.querySelector('[data-command="bold"]');
+      const statefulCommandButtons = [...document.querySelectorAll('[data-command][aria-pressed]')];
+      const supportedBlockFormats = new Set(['P', 'H1', 'H2', 'H3', 'BLOCKQUOTE', 'PRE']);
       const linkPreview = document.getElementById('linkPreview');
       const linkPreviewUrl = document.getElementById('linkPreviewUrl');
       let currentFileName = '새 문서';
@@ -495,7 +496,7 @@
         focusEditor();
         document.execCommand(command, false, value);
         updateCount();
-        updateBoldButtonState();
+        updateFormattingControlsState();
       };
 
       const selectionIsInsideEditor = () => {
@@ -505,17 +506,32 @@
         return node === editor || editor.contains(node.nodeType === Node.TEXT_NODE ? node.parentNode : node);
       };
 
-      const updateBoldButtonState = () => {
-        let isBold = false;
-        if (selectionIsInsideEditor()) {
-          try {
-            isBold = document.queryCommandState('bold');
-          } catch (error) {
-            isBold = false;
+      const updateFormattingControlsState = () => {
+        const selectionInside = selectionIsInsideEditor();
+        statefulCommandButtons.forEach((button) => {
+          let isActive = false;
+          if (selectionInside) {
+            try {
+              isActive = document.queryCommandState(button.dataset.command);
+            } catch (error) {
+              isActive = false;
+            }
           }
+          button.classList.toggle('is-active', isActive);
+          button.setAttribute('aria-pressed', String(isActive));
+        });
+
+        if (!selectionInside) return;
+        let currentBlock = 'P';
+        try {
+          currentBlock = String(document.queryCommandValue('formatBlock') || 'P')
+            .replace(/[<>]/g, '')
+            .toUpperCase();
+        } catch (error) {
+          currentBlock = 'P';
         }
-        boldButton.classList.toggle('is-active', isBold);
-        boldButton.setAttribute('aria-pressed', String(isBold));
+        if (currentBlock === 'DIV') currentBlock = 'P';
+        blockFormat.value = supportedBlockFormats.has(currentBlock) ? currentBlock : 'P';
       };
 
       const saveSelection = () => {
@@ -569,7 +585,7 @@
         blockFormat.value = 'P';
         updateCount();
         saveSelection();
-        updateBoldButtonState();
+        updateFormattingControlsState();
         showToast('글자와 문단 서식을 제거했습니다.');
       };
 
@@ -1356,7 +1372,6 @@ ${sanitizeHtml(editor.innerHTML)}
 
       blockFormat.addEventListener('change', () => {
         runCommand('formatBlock', blockFormat.value);
-        blockFormat.value = 'P';
       });
 
       fileInput.addEventListener('change', async () => {
@@ -1387,17 +1402,17 @@ ${sanitizeHtml(editor.innerHTML)}
       editor.addEventListener('input', () => {
         normalizeEmptyDocument();
         updateCount();
-        updateBoldButtonState();
+        updateFormattingControlsState();
       });
       editor.addEventListener('mouseup', () => {
         saveSelection();
-        updateBoldButtonState();
+        updateFormattingControlsState();
       });
       editor.addEventListener('keyup', () => {
         saveSelection();
-        updateBoldButtonState();
+        updateFormattingControlsState();
       });
-      document.addEventListener('selectionchange', updateBoldButtonState);
+      document.addEventListener('selectionchange', updateFormattingControlsState);
 
       editor.addEventListener('mouseover', (event) => {
         const anchor = event.target.closest?.('a');
@@ -1509,7 +1524,7 @@ ${sanitizeHtml(editor.innerHTML)}
       window.addEventListener('blur', () => { pastePlainRequested = false; });
 
       updateCount();
-      updateBoldButtonState();
+      updateFormattingControlsState();
     })();
   </script>
 </body>
