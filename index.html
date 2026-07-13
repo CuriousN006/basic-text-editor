@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>?ㅽ봽?쇱씤 由ъ튂 ?쇱씠??/title>
+  <title>오프라인 리치 라이터</title>
   <style>
     :root {
       color-scheme: light;
@@ -31,7 +31,7 @@
       overflow: hidden;
       background: var(--bg);
       color: var(--text);
-      font-family: "Malgun Gothic", "留묒? 怨좊뵓", system-ui, sans-serif;
+      font-family: "Malgun Gothic", "맑은 고딕", system-ui, sans-serif;
     }
 
     button, select, input {
@@ -133,7 +133,7 @@
     #editor {
       min-height: 850px;
       outline: none;
-      font-family: "Malgun Gothic", "留묒? 怨좊뵓", Arial, sans-serif;
+      font-family: "Malgun Gothic", "맑은 고딕", Arial, sans-serif;
       font-size: 16px;
       line-height: 1.75;
       word-break: break-word;
@@ -141,7 +141,7 @@
 
     #editor:empty::before {
       color: #9aa0a6;
-      content: "?ш린??湲???낅젰?섍굅??留덊겕?ㅼ슫 ?뚯씪???ъ꽭?붴?;
+      content: "여기에 글을 입력하거나 마크다운 파일을 여세요…";
       pointer-events: none;
     }
 
@@ -331,74 +331,74 @@
 <body>
   <header class="topbar">
     <div class="filebar">
-      <span class="brand">?ㅽ봽?쇱씤 由ъ튂 ?쇱씠??/span>
-      <button class="toolbar-button" type="button" data-action="new" title="??臾몄꽌">??臾몄꽌</button>
-      <button class="toolbar-button" type="button" data-action="open" title="留덊겕?ㅼ슫쨌HTML쨌?띿뒪???닿린">?뚯씪 ?닿린</button>
-      <button class="toolbar-button" type="button" data-action="save-html" title="HTML濡????(Ctrl+S)">HTML ???/button>
-      <button class="toolbar-button" type="button" data-action="save-md" title="留덊겕?ㅼ슫?쇰줈 ???>MD ???/button>
+      <span class="brand">오프라인 리치 라이터</span>
+      <button class="toolbar-button" type="button" data-action="new" title="새 문서">새 문서</button>
+      <button class="toolbar-button" type="button" data-action="open" title="마크다운·HTML·텍스트 열기">파일 열기</button>
+      <button class="toolbar-button" type="button" data-action="save-html" title="HTML로 저장 (Ctrl+S)">HTML 저장</button>
+      <button class="toolbar-button" type="button" data-action="save-md" title="마크다운으로 저장">MD 저장</button>
       <span class="separator" aria-hidden="true"></span>
-      <button class="toolbar-button primary" type="button" data-action="copy-all" title="臾몄꽌 ?꾩껜瑜??쒖떇 ?덇쾶 蹂듭궗">?꾩껜 ?쒖떇 蹂듭궗</button>
-      <button class="toolbar-button" type="button" data-action="print" title="?몄뇙 ?먮뒗 PDF ???>?몄뇙</button>
+      <button class="toolbar-button primary" type="button" data-action="copy-all" title="문서 전체를 서식 있게 복사">전체 서식 복사</button>
+      <button class="toolbar-button" type="button" data-action="print" title="인쇄 또는 PDF 저장">인쇄</button>
       <input id="fileInput" class="sr-only" type="file" accept=".md,.markdown,.txt,.html,.htm,text/markdown,text/plain,text/html">
     </div>
-    <div class="formatbar" aria-label="?쒖떇 ?꾧뎄">
-      <button class="toolbar-button" type="button" data-command="undo" title="?ㅽ뻾 痍⑥냼 (Ctrl+Z)">??/button>
-      <button class="toolbar-button" type="button" data-command="redo" title="?ㅼ떆 ?ㅽ뻾 (Ctrl+Y)">??/button>
+    <div class="formatbar" aria-label="서식 도구">
+      <button class="toolbar-button" type="button" data-command="undo" title="실행 취소 (Ctrl+Z)">↶</button>
+      <button class="toolbar-button" type="button" data-command="redo" title="다시 실행 (Ctrl+Y)">↷</button>
       <span class="separator" aria-hidden="true"></span>
-      <select id="blockFormat" class="toolbar-select" title="臾몃떒 醫낅쪟">
-        <option value="P">蹂몃Ц</option>
-        <option value="H1">?쒕ぉ 1</option>
-        <option value="H2">?쒕ぉ 2</option>
-        <option value="H3">?쒕ぉ 3</option>
-        <option value="BLOCKQUOTE">?몄슜臾?/option>
-        <option value="PRE">肄붾뱶 釉붾줉</option>
+      <select id="blockFormat" class="toolbar-select" title="문단 종류">
+        <option value="P">본문</option>
+        <option value="H1">제목 1</option>
+        <option value="H2">제목 2</option>
+        <option value="H3">제목 3</option>
+        <option value="BLOCKQUOTE">인용문</option>
+        <option value="PRE">코드 블록</option>
       </select>
-      <button class="toolbar-button" type="button" data-command="bold" title="援듦쾶 (Ctrl+B)"><b>B</b></button>
-      <button class="toolbar-button" type="button" data-command="italic" title="湲곗슱??(Ctrl+I)"><i>I</i></button>
-      <button class="toolbar-button" type="button" data-command="underline" title="諛묒쨪 (Ctrl+U)"><u>U</u></button>
-      <button class="toolbar-button" type="button" data-command="strikeThrough" title="痍⑥냼??><s>S</s></button>
+      <button class="toolbar-button" type="button" data-command="bold" title="굵게 (Ctrl+B)"><b>B</b></button>
+      <button class="toolbar-button" type="button" data-command="italic" title="기울임 (Ctrl+I)"><i>I</i></button>
+      <button class="toolbar-button" type="button" data-command="underline" title="밑줄 (Ctrl+U)"><u>U</u></button>
+      <button class="toolbar-button" type="button" data-command="strikeThrough" title="취소선"><s>S</s></button>
       <span class="separator" aria-hidden="true"></span>
-      <button class="toolbar-button" type="button" data-command="insertUnorderedList" title="湲癒몃━ 湲고샇 紐⑸줉">??紐⑸줉</button>
-      <button class="toolbar-button" type="button" data-command="insertOrderedList" title="踰덊샇 紐⑸줉">1. 紐⑸줉</button>
-      <button class="toolbar-button" type="button" data-action="link" title="?섏씠?쇰쭅??(Ctrl+K)">?뵕</button>
-      <button class="toolbar-button" type="button" data-command="unlink" title="留곹겕 ?쒓굅">留곹겕 ?댁젣</button>
-      <button class="toolbar-button" type="button" data-command="removeFormat" title="湲???쒖떇 ?쒓굅">?쒖떇 ?쒓굅</button>
-      <button class="toolbar-button" type="button" data-command="insertHorizontalRule" title="援щ텇??>??/button>
+      <button class="toolbar-button" type="button" data-command="insertUnorderedList" title="글머리 기호 목록">• 목록</button>
+      <button class="toolbar-button" type="button" data-command="insertOrderedList" title="번호 목록">1. 목록</button>
+      <button class="toolbar-button" type="button" data-action="link" title="하이퍼링크 (Ctrl+K)">🔗</button>
+      <button class="toolbar-button" type="button" data-command="unlink" title="링크 제거">링크 해제</button>
+      <button class="toolbar-button" type="button" data-command="removeFormat" title="글자 서식 제거">서식 제거</button>
+      <button class="toolbar-button" type="button" data-command="insertHorizontalRule" title="구분선">―</button>
       <span class="separator" aria-hidden="true"></span>
-      <button class="toolbar-button" type="button" data-action="find" title="李얘린 (Ctrl+F)">李얘린</button>
-      <button class="toolbar-button" type="button" data-action="replace" title="李얠븘 諛붽씀湲?(Ctrl+H)">諛붽씀湲?/button>
+      <button class="toolbar-button" type="button" data-action="find" title="찾기 (Ctrl+F)">찾기</button>
+      <button class="toolbar-button" type="button" data-action="replace" title="찾아 바꾸기 (Ctrl+H)">바꾸기</button>
     </div>
   </header>
 
   <main class="workspace">
     <article class="page">
-      <div id="editor" contenteditable="true" spellcheck="true" aria-label="臾몄꽌 ?몄쭛 ?곸뿭"><h1>?ㅽ봽?쇱씤 由ъ튂 ?쇱씠??/h1><p>Word泥섎읆 湲???몄쭛?섍퀬, ?ㅼ씠踰?移댄럹???쒖떇???곸슜???곹깭濡?蹂듭궗?섍린 ?꾪븳 濡쒖뺄 ?몄쭛湲곗엯?덈떎.</p><p class="blank-line"><br></p><p><strong>鍮좊Ⅸ ?ъ슜踰?/strong></p><ul><li>釉뚮씪?곗??먯꽌 URL??蹂듭궗????湲?먮? ?좏깮?섍퀬 <strong>Ctrl+V</strong>?섎㈃ 留곹겕媛 嫄몃┰?덈떎.</li><li><strong>?꾩껜 ?쒖떇 蹂듭궗</strong>瑜??꾨Ⅴ怨??ㅼ씠踰?移댄럹??遺숈뿬 ?ｌ쑝?몄슂.</li><li>留덊겕?ㅼ슫 ?뚯씪???대㈃ 鍮?以꾩쓣 ?몄쭛 媛?ν븳 鍮?臾몃떒?쇰줈 蹂댁〈?⑸땲??</li></ul></div>
+      <div id="editor" contenteditable="true" spellcheck="true" aria-label="문서 편집 영역"><h1>오프라인 리치 라이터</h1><p>Word처럼 글을 편집하고, 네이버 카페에 서식이 적용된 상태로 복사하기 위한 로컬 편집기입니다.</p><p class="blank-line"><br></p><p><strong>빠른 사용법</strong></p><ul><li>브라우저에서 URL을 복사한 뒤 글자를 선택하고 <strong>Ctrl+V</strong>하면 링크가 걸립니다.</li><li><strong>전체 서식 복사</strong>를 누르고 네이버 카페에 붙여 넣으세요.</li><li>마크다운 파일을 열면 빈 줄을 편집 가능한 빈 문단으로 보존합니다.</li></ul></div>
     </article>
   </main>
 
-  <section id="findbar" class="findbar" aria-label="李얘린 諛?諛붽씀湲?>
+  <section id="findbar" class="findbar" aria-label="찾기 및 바꾸기">
     <div class="find-row">
-      <input id="findText" class="find-input" type="text" placeholder="李얠쓣 ?댁슜" autocomplete="off">
-      <button class="toolbar-button" type="button" data-find="close" title="?リ린">??/button>
+      <input id="findText" class="find-input" type="text" placeholder="찾을 내용" autocomplete="off">
+      <button class="toolbar-button" type="button" data-find="close" title="닫기">✕</button>
     </div>
     <div id="replaceRow" class="find-row">
-      <input id="replaceText" class="find-input" type="text" placeholder="諛붽? ?댁슜" autocomplete="off">
+      <input id="replaceText" class="find-input" type="text" placeholder="바꿀 내용" autocomplete="off">
       <span></span>
     </div>
     <div class="find-actions">
-      <button class="toolbar-button" type="button" data-find="next">?ㅼ쓬 李얘린</button>
-      <button class="toolbar-button" type="button" data-find="replace">諛붽씀湲?/button>
-      <button class="toolbar-button" type="button" data-find="replace-all">紐⑤몢 諛붽씀湲?/button>
+      <button class="toolbar-button" type="button" data-find="next">다음 찾기</button>
+      <button class="toolbar-button" type="button" data-find="replace">바꾸기</button>
+      <button class="toolbar-button" type="button" data-find="replace-all">모두 바꾸기</button>
     </div>
   </section>
 
   <div class="statusbar" aria-live="polite">
-    <span id="fileName">??臾몄꽌</span>
-    <span id="count">0??쨌 0?⑥뼱</span>
+    <span id="fileName">새 문서</span>
+    <span id="count">0자 · 0단어</span>
   </div>
   <div id="linkPreview" class="link-preview" role="tooltip">
     <span id="linkPreviewUrl" class="link-preview-url"></span>
-    <span class="link-preview-hint">Ctrl+?대┃?섏뿬 留곹겕 ?닿린</span>
+    <span class="link-preview-hint">Ctrl+클릭하여 링크 열기</span>
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
@@ -418,7 +418,7 @@
       const blockFormat = document.getElementById('blockFormat');
       const linkPreview = document.getElementById('linkPreview');
       const linkPreviewUrl = document.getElementById('linkPreviewUrl');
-      let currentFileName = '??臾몄꽌';
+      let currentFileName = '새 문서';
       let toastTimer = null;
       let savedRange = null;
       let hoveredLink = null;
@@ -434,7 +434,7 @@
         const text = editor.innerText.replace(/\u200B/g, '').trim();
         const characters = text.length;
         const words = text ? text.split(/\s+/).filter(Boolean).length : 0;
-        countLabel.textContent = `${characters.toLocaleString()}??쨌 ${words.toLocaleString()}?⑥뼱`;
+        countLabel.textContent = `${characters.toLocaleString()}자 · ${words.toLocaleString()}단어`;
         fileNameLabel.textContent = currentFileName;
       };
 
@@ -502,7 +502,7 @@
         const selection = window.getSelection();
         const selectedText = selection ? selection.toString() : '';
         const initial = urlOverride || (isUrl(selectedText) ? selectedText : 'https://');
-        const url = window.prompt('?곌껐??二쇱냼瑜??낅젰?섏꽭??', initial);
+        const url = window.prompt('연결할 주소를 입력하세요.', initial);
         if (!url) return;
 
         restoreSelection();
@@ -712,9 +712,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${escapeHtml(currentFileName.replace(/\.[^.]+$/, '') || '臾몄꽌')}</title>
+<title>${escapeHtml(currentFileName.replace(/\.[^.]+$/, '') || '문서')}</title>
 <style>
-body{max-width:780px;margin:40px auto;padding:0 24px;color:#202124;font-family:"Malgun Gothic","留묒? 怨좊뵓",Arial,sans-serif;font-size:16px;line-height:1.75;word-break:break-word}
+body{max-width:780px;margin:40px auto;padding:0 24px;color:#202124;font-family:"Malgun Gothic","맑은 고딕",Arial,sans-serif;font-size:16px;line-height:1.75;word-break:break-word}
 p{margin:0 0 1em}p.blank-line{min-height:1.75em;margin:0}h1{font-size:2em}h2{font-size:1.55em}h3{font-size:1.25em}blockquote{margin:1em 0;padding:.5em 1em;border-left:4px solid #94a3b8;background:#f8fafc;color:#475569}pre{overflow:auto;padding:14px 16px;border-radius:8px;background:#f4f5f7}code{font-family:Consolas,monospace}a{color:#1558d6}img{max-width:100%;height:auto}hr{border:0;border-top:1px solid #cdd2d9;margin:2em 0}
 </style>
 </head>
@@ -736,7 +736,7 @@ ${sanitizeHtml(editor.innerHTML)}
       };
 
       const suggestedName = (extension) => {
-        const base = (currentFileName || '臾몄꽌').replace(/\.(md|markdown|txt|html?|docx?)$/i, '') || '臾몄꽌';
+        const base = (currentFileName || '문서').replace(/\.(md|markdown|txt|html?|docx?)$/i, '') || '문서';
         return `${base}.${extension}`;
       };
 
@@ -749,7 +749,7 @@ ${sanitizeHtml(editor.innerHTML)}
         selection.addRange(range);
         const success = document.execCommand('copy');
         selection.removeAllRanges();
-        showToast(success ? '臾몄꽌 ?꾩껜瑜??쒖떇 ?덇쾶 蹂듭궗?덉뒿?덈떎.' : '蹂듭궗?섏? 紐삵뻽?듬땲?? ?몄쭛 ?곸뿭?먯꽌 Ctrl+A, Ctrl+C瑜??ъ슜?섏꽭??');
+        showToast(success ? '문서 전체를 서식 있게 복사했습니다.' : '복사하지 못했습니다. 편집 영역에서 Ctrl+A, Ctrl+C를 사용하세요.');
       };
 
       const openFindbar = (withReplace) => {
@@ -805,7 +805,7 @@ ${sanitizeHtml(editor.innerHTML)}
           }
         });
         updateCount();
-        showToast(`${count}媛???ぉ??諛붽엥?듬땲??`);
+        showToast(`${count}개 항목을 바꿨습니다.`);
       };
 
       document.querySelectorAll('[data-command]').forEach((button) => {
@@ -818,19 +818,19 @@ ${sanitizeHtml(editor.innerHTML)}
         button.addEventListener('click', () => {
           const action = button.dataset.action;
           if (action === 'new') {
-            if (editor.innerText.trim() && !window.confirm('?꾩옱 臾몄꽌瑜?吏?곌퀬 ??臾몄꽌瑜?留뚮뱾源뚯슂?')) return;
+            if (editor.innerText.trim() && !window.confirm('현재 문서를 지우고 새 문서를 만들까요?')) return;
             editor.innerHTML = '<p><br></p>';
-            currentFileName = '??臾몄꽌';
+            currentFileName = '새 문서';
             updateCount();
             focusEditor();
           } else if (action === 'open') {
             fileInput.click();
           } else if (action === 'save-html') {
             downloadText(buildStandaloneHtml(), suggestedName('html'), 'text/html');
-            showToast('HTML ?뚯씪濡???ν뻽?듬땲??');
+            showToast('HTML 파일로 저장했습니다.');
           } else if (action === 'save-md') {
             downloadText(htmlToMarkdown(), suggestedName('md'), 'text/markdown');
-            showToast('留덊겕?ㅼ슫 ?뚯씪濡???ν뻽?듬땲??');
+            showToast('마크다운 파일로 저장했습니다.');
           } else if (action === 'copy-all') {
             copyAllRich();
           } else if (action === 'print') {
@@ -866,9 +866,9 @@ ${sanitizeHtml(editor.innerHTML)}
           currentFileName = file.name;
           updateCount();
           focusEditor();
-          showToast(`${file.name} ?뚯씪???댁뿀?듬땲??`);
+          showToast(`${file.name} 파일을 열었습니다.`);
         } catch (error) {
-          showToast('?뚯씪???댁? 紐삵뻽?듬땲??');
+          showToast('파일을 열지 못했습니다.');
         } finally {
           fileInput.value = '';
         }
@@ -910,7 +910,7 @@ ${sanitizeHtml(editor.innerHTML)}
         if (selection && !selection.isCollapsed && isUrl(plain) && selectionIsInsideEditor()) {
           event.preventDefault();
           document.execCommand('createLink', false, plain);
-          showToast('?좏깮??湲?먯뿉 留곹겕瑜?嫄몄뿀?듬땲??');
+          showToast('선택한 글자에 링크를 걸었습니다.');
           updateCount();
           return;
         }
@@ -966,7 +966,7 @@ ${sanitizeHtml(editor.innerHTML)}
         } else if (key === 's' && !event.shiftKey) {
           event.preventDefault();
           downloadText(buildStandaloneHtml(), suggestedName('html'), 'text/html');
-          showToast('HTML ?뚯씪濡???ν뻽?듬땲??');
+          showToast('HTML 파일로 저장했습니다.');
         }
       });
 
