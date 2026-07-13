@@ -362,7 +362,7 @@
       <button class="toolbar-button" type="button" data-command="insertOrderedList" title="번호 목록">1. 목록</button>
       <button class="toolbar-button" type="button" data-action="link" title="하이퍼링크 (Ctrl+K)">🔗</button>
       <button class="toolbar-button" type="button" data-command="unlink" title="링크 제거">링크 해제</button>
-      <button class="toolbar-button" type="button" data-command="removeFormat" title="글자 서식 제거">서식 제거</button>
+      <button class="toolbar-button" type="button" data-action="clear-format" title="글자 및 문단 서식 제거">서식 제거</button>
       <button class="toolbar-button" type="button" data-command="insertHorizontalRule" title="구분선">―</button>
       <span class="separator" aria-hidden="true"></span>
       <button class="toolbar-button" type="button" data-action="find" title="찾기 (Ctrl+F)">찾기</button>
@@ -372,7 +372,7 @@
 
   <main class="workspace">
     <article class="page">
-      <div id="editor" contenteditable="true" spellcheck="true" aria-label="문서 편집 영역"><h1>오프라인 리치 라이터</h1><p>Word처럼 글을 편집하고, 네이버 카페에 서식이 적용된 상태로 복사하기 위한 로컬 편집기입니다.</p><p class="blank-line"><br></p><p><strong>빠른 사용법</strong></p><ul><li>브라우저에서 URL을 복사한 뒤 글자를 선택하고 <strong>Ctrl+V</strong>하면 링크가 걸립니다.</li><li><strong>전체 서식 복사</strong>를 누르고 네이버 카페에 붙여 넣으세요.</li><li>마크다운 파일을 열면 빈 줄을 편집 가능한 빈 문단으로 보존합니다.</li></ul></div>
+      <div id="editor" contenteditable="true" spellcheck="true" aria-label="문서 편집 영역"><p><br></p></div>
     </article>
   </main>
 
@@ -467,6 +467,46 @@
         const selection = window.getSelection();
         selection.removeAllRanges();
         selection.addRange(savedRange);
+      };
+
+      const placeCaretAtStart = (element) => {
+        const range = document.createRange();
+        range.setStart(element, 0);
+        range.collapse(true);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        savedRange = range.cloneRange();
+      };
+
+      const normalizeEmptyDocument = (force = false) => {
+        const text = editor.textContent.replace(/\u200B/g, '').trim();
+        const hasNonTextContent = Boolean(editor.querySelector('img, hr, table, iframe, video, audio, canvas, svg'));
+        if (!force && (text || hasNonTextContent)) return false;
+
+        const first = editor.firstElementChild;
+        const alreadyNormal = editor.childElementCount === 1
+          && first?.tagName === 'P'
+          && !first.textContent.replace(/\u200B/g, '').trim()
+          && !first.querySelector('img, hr, table, iframe, video, audio, canvas, svg');
+        if (alreadyNormal && !force) return false;
+
+        editor.innerHTML = '<p><br></p>';
+        placeCaretAtStart(editor.firstElementChild);
+        return true;
+      };
+
+      const clearFormatting = () => {
+        focusEditor();
+        restoreSelection();
+        document.execCommand('removeFormat', false, null);
+        document.execCommand('unlink', false, null);
+        document.execCommand('formatBlock', false, 'P');
+        normalizeEmptyDocument();
+        blockFormat.value = 'P';
+        updateCount();
+        saveSelection();
+        showToast('글자와 문단 서식을 제거했습니다.');
       };
 
       const isUrl = (value) => /^(https?:\/\/|mailto:|tel:)[^\s]+$/i.test(value.trim());
@@ -819,7 +859,7 @@ ${sanitizeHtml(editor.innerHTML)}
           const action = button.dataset.action;
           if (action === 'new') {
             if (editor.innerText.trim() && !window.confirm('현재 문서를 지우고 새 문서를 만들까요?')) return;
-            editor.innerHTML = '<p><br></p>';
+            normalizeEmptyDocument(true);
             currentFileName = '새 문서';
             updateCount();
             focusEditor();
@@ -837,6 +877,8 @@ ${sanitizeHtml(editor.innerHTML)}
             window.print();
           } else if (action === 'link') {
             insertLink();
+          } else if (action === 'clear-format') {
+            clearFormatting();
           } else if (action === 'find') {
             openFindbar(false);
           } else if (action === 'replace') {
@@ -863,6 +905,7 @@ ${sanitizeHtml(editor.innerHTML)}
           } else {
             editor.innerHTML = text.split(/\r?\n/).map((line) => line ? `<p>${escapeHtml(line)}</p>` : '<p class="blank-line"><br></p>').join('');
           }
+          normalizeEmptyDocument();
           currentFileName = file.name;
           updateCount();
           focusEditor();
@@ -874,7 +917,10 @@ ${sanitizeHtml(editor.innerHTML)}
         }
       });
 
-      editor.addEventListener('input', updateCount);
+      editor.addEventListener('input', () => {
+        normalizeEmptyDocument();
+        updateCount();
+      });
       editor.addEventListener('mouseup', saveSelection);
       editor.addEventListener('keyup', saveSelection);
 
