@@ -1175,60 +1175,6 @@ ${sanitizeHtml(editor.innerHTML)}
         updateCount();
       };
 
-      const clipboardBlockTags = new Set([
-        'P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
-        'LI', 'UL', 'OL', 'BLOCKQUOTE', 'PRE', 'TR', 'TABLE',
-        'SECTION', 'ARTICLE', 'HEADER', 'FOOTER'
-      ]);
-
-      const clipboardHtmlToPlainText = (html) => {
-        const doc = new DOMParser().parseFromString(html, 'text/html');
-        let output = '';
-
-        const containsBlockChild = (element) => [...element.children]
-          .some((child) => clipboardBlockTags.has(child.tagName));
-
-        const walk = (node) => {
-          if (node.nodeType === Node.TEXT_NODE) {
-            const value = normalizeClipboardText(node.nodeValue || '');
-            if (!value.trim() && node.parentElement && containsBlockChild(node.parentElement)) return;
-            output += value;
-            return;
-          }
-          if (node.nodeType !== Node.ELEMENT_NODE) return;
-          if (node.tagName === 'BR') {
-            output += '\n';
-            return;
-          }
-
-          const isBlock = clipboardBlockTags.has(node.tagName);
-          const startLength = output.length;
-          [...node.childNodes].forEach(walk);
-          if (isBlock && (output.length === startLength || !output.endsWith('\n'))) output += '\n';
-        };
-
-        [...doc.body.childNodes].forEach(walk);
-        return output;
-      };
-
-      const getLineSignature = (text) => {
-        const lines = normalizeClipboardText(text)
-          .replace(/\u00A0/g, ' ')
-          .split('\n')
-          .map((line) => line.replace(/[ \t]+/g, ' ').trim());
-        while (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
-        return lines;
-      };
-
-      const htmlMatchesPlainLineStructure = (html, plainText) => {
-        const normalizedPlain = normalizeClipboardText(plainText);
-        if (!normalizedPlain.includes('\n')) return true;
-        const fromHtml = getLineSignature(clipboardHtmlToPlainText(html));
-        const fromPlain = getLineSignature(normalizedPlain);
-        return fromHtml.length === fromPlain.length
-          && fromHtml.every((line, index) => line === fromPlain[index]);
-      };
-
       const replaceAllSpecial = (parsedQuery, parsedReplacement) => {
         if (!parsedQuery.text) return 0;
         let beforeIndex = Number.POSITIVE_INFINITY;
@@ -1451,7 +1397,6 @@ ${sanitizeHtml(editor.innerHTML)}
       editor.addEventListener('paste', (event) => {
         const selection = window.getSelection();
         const plain = event.clipboardData?.getData('text/plain') || '';
-        const html = event.clipboardData?.getData('text/html') || '';
         const explicitPlainPaste = pastePlainRequested;
         const linkCandidate = plain.trim();
         pastePlainRequested = false;
@@ -1468,28 +1413,15 @@ ${sanitizeHtml(editor.innerHTML)}
           return;
         }
 
-        if (explicitPlainPaste || !html) {
-          if (!plain) return;
-          event.preventDefault();
-          insertPlainTextPreservingBreaks(plain);
-          showToast(explicitPlainPaste
-            ? '서식을 빼고 원문의 줄바꿈대로 붙여넣었습니다.'
-            : '원문의 줄바꿈대로 붙여넣었습니다.');
-          return;
-        }
-
-        const sanitized = sanitizeHtml(html);
-        if (plain && !htmlMatchesPlainLineStructure(sanitized, plain)) {
-          event.preventDefault();
-          insertPlainTextPreservingBreaks(plain);
-          showToast('줄바꿈 차이를 감지해 원문 줄 구조를 우선했습니다.');
-          return;
-        }
-
         event.preventDefault();
-        document.execCommand('insertHTML', false, sanitized);
-        normalizeEmptyDocument();
-        updateCount();
+        if (!plain) {
+          showToast('붙여넣을 일반 텍스트를 찾지 못했습니다.');
+          return;
+        }
+        insertPlainTextPreservingBreaks(plain);
+        showToast(explicitPlainPaste
+          ? 'URL 자동 링크 없이 원문의 줄 구조대로 붙여넣었습니다.'
+          : '외부 서식을 빼고 원문의 줄 구조대로 붙여넣었습니다.');
       });
 
       document.querySelectorAll('[data-find]').forEach((button) => {
