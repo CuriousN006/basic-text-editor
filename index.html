@@ -1,0 +1,978 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>?ㅽ봽?쇱씤 由ъ튂 ?쇱씠??/title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #eef1f5;
+      --panel: #ffffff;
+      --line: #d7dce3;
+      --text: #202124;
+      --muted: #69707a;
+      --accent: #2563eb;
+      --accent-soft: #dbeafe;
+      --danger: #b42318;
+      --shadow: 0 12px 40px rgba(32, 33, 36, .12);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Malgun Gothic", "留묒? 怨좊뵓", system-ui, sans-serif;
+    }
+
+    button, select, input {
+      font: inherit;
+    }
+
+    .topbar {
+      flex: 0 0 auto;
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+      box-shadow: 0 2px 8px rgba(32, 33, 36, .06);
+      z-index: 10;
+    }
+
+    .filebar,
+    .formatbar {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 7px 12px;
+    }
+
+    .filebar {
+      border-bottom: 1px solid #edf0f3;
+    }
+
+    .brand {
+      margin-right: 8px;
+      font-weight: 800;
+      letter-spacing: -.02em;
+    }
+
+    .toolbar-button,
+    .toolbar-select {
+      min-height: 34px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--text);
+    }
+
+    .toolbar-button {
+      min-width: 36px;
+      padding: 6px 9px;
+      cursor: pointer;
+    }
+
+    .toolbar-button:hover,
+    .toolbar-button:focus-visible,
+    .toolbar-select:hover,
+    .toolbar-select:focus-visible {
+      border-color: var(--line);
+      background: #f5f7fa;
+      outline: none;
+    }
+
+    .toolbar-button:active {
+      background: var(--accent-soft);
+    }
+
+    .toolbar-button.primary {
+      background: var(--accent);
+      color: white;
+    }
+
+    .toolbar-button.primary:hover,
+    .toolbar-button.primary:focus-visible {
+      background: #1d4ed8;
+    }
+
+    .toolbar-select {
+      padding: 5px 28px 5px 9px;
+      cursor: pointer;
+    }
+
+    .separator {
+      width: 1px;
+      height: 25px;
+      margin: 0 2px;
+      background: var(--line);
+    }
+
+    .workspace {
+      flex: 1 1 auto;
+      overflow: auto;
+      padding: 28px 16px 80px;
+    }
+
+    .page {
+      width: min(820px, 100%);
+      min-height: 1050px;
+      margin: 0 auto;
+      padding: 72px 78px 110px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    #editor {
+      min-height: 850px;
+      outline: none;
+      font-family: "Malgun Gothic", "留묒? 怨좊뵓", Arial, sans-serif;
+      font-size: 16px;
+      line-height: 1.75;
+      word-break: break-word;
+    }
+
+    #editor:empty::before {
+      color: #9aa0a6;
+      content: "?ш린??湲???낅젰?섍굅??留덊겕?ㅼ슫 ?뚯씪???ъ꽭?붴?;
+      pointer-events: none;
+    }
+
+    #editor p {
+      margin: 0 0 1em;
+    }
+
+    #editor p.blank-line {
+      min-height: 1.75em;
+      margin: 0;
+    }
+
+    #editor h1 { font-size: 2em; margin: 1.1em 0 .55em; }
+    #editor h2 { font-size: 1.55em; margin: 1.15em 0 .55em; }
+    #editor h3 { font-size: 1.25em; margin: 1.1em 0 .5em; }
+    #editor ul, #editor ol { margin: .4em 0 1em; padding-left: 1.8em; }
+    #editor blockquote {
+      margin: 1em 0;
+      padding: .5em 1em;
+      border-left: 4px solid #94a3b8;
+      background: #f8fafc;
+      color: #475569;
+    }
+    #editor pre {
+      overflow-x: auto;
+      padding: 14px 16px;
+      border-radius: 8px;
+      background: #f4f5f7;
+      font: 14px/1.55 Consolas, monospace;
+    }
+    #editor code {
+      padding: .1em .3em;
+      border-radius: 4px;
+      background: #f1f3f4;
+      font-family: Consolas, monospace;
+    }
+    #editor pre code { padding: 0; background: transparent; }
+    #editor a { color: #1558d6; text-decoration: underline; }
+    #editor hr { margin: 2em 0; border: 0; border-top: 1px solid #cdd2d9; }
+    #editor img { max-width: 100%; height: auto; }
+
+    .link-preview {
+      display: none;
+      position: fixed;
+      max-width: min(520px, calc(100vw - 24px));
+      padding: 9px 11px;
+      border: 1px solid #c9d1dc;
+      border-radius: 8px;
+      background: #ffffff;
+      color: var(--text);
+      box-shadow: 0 7px 24px rgba(32, 33, 36, .18);
+      font-size: 12px;
+      line-height: 1.45;
+      pointer-events: none;
+      z-index: 40;
+    }
+
+    .link-preview.visible { display: block; }
+
+    .link-preview-url {
+      display: block;
+      overflow: hidden;
+      color: #1558d6;
+      font-weight: 600;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .link-preview-hint {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+    }
+
+    .findbar {
+      display: none;
+      position: fixed;
+      top: 104px;
+      right: 22px;
+      width: min(390px, calc(100vw - 32px));
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      z-index: 20;
+    }
+
+    .findbar.open { display: block; }
+
+    .find-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 6px;
+      margin-bottom: 7px;
+    }
+
+    .find-row:last-child { margin-bottom: 0; }
+
+    .find-input {
+      width: 100%;
+      min-height: 34px;
+      padding: 6px 9px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      outline: none;
+    }
+
+    .find-input:focus { border-color: var(--accent); }
+
+    .find-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 6px;
+    }
+
+    .statusbar {
+      position: fixed;
+      right: 16px;
+      bottom: 12px;
+      display: flex;
+      gap: 10px;
+      padding: 6px 10px;
+      border: 1px solid rgba(215, 220, 227, .8);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, .92);
+      color: var(--muted);
+      font-size: 12px;
+      box-shadow: 0 4px 18px rgba(32, 33, 36, .08);
+      backdrop-filter: blur(8px);
+      z-index: 12;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 34px;
+      transform: translate(-50%, 20px);
+      padding: 10px 15px;
+      border-radius: 8px;
+      background: #202124;
+      color: white;
+      opacity: 0;
+      pointer-events: none;
+      transition: .18s ease;
+      z-index: 30;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translate(-50%, 0);
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    @media (max-width: 720px) {
+      .brand { width: 100%; }
+      .workspace { padding: 0 0 70px; }
+      .page {
+        min-height: 100%;
+        padding: 40px 24px 90px;
+        box-shadow: none;
+      }
+      .findbar { top: 150px; }
+    }
+
+    @media print {
+      body { display: block; overflow: visible; background: white; }
+      .topbar, .findbar, .statusbar, .toast { display: none !important; }
+      .workspace { overflow: visible; padding: 0; }
+      .page { width: auto; min-height: auto; padding: 0; box-shadow: none; }
+      #editor { min-height: auto; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="filebar">
+      <span class="brand">?ㅽ봽?쇱씤 由ъ튂 ?쇱씠??/span>
+      <button class="toolbar-button" type="button" data-action="new" title="??臾몄꽌">??臾몄꽌</button>
+      <button class="toolbar-button" type="button" data-action="open" title="留덊겕?ㅼ슫쨌HTML쨌?띿뒪???닿린">?뚯씪 ?닿린</button>
+      <button class="toolbar-button" type="button" data-action="save-html" title="HTML濡????(Ctrl+S)">HTML ???/button>
+      <button class="toolbar-button" type="button" data-action="save-md" title="留덊겕?ㅼ슫?쇰줈 ???>MD ???/button>
+      <span class="separator" aria-hidden="true"></span>
+      <button class="toolbar-button primary" type="button" data-action="copy-all" title="臾몄꽌 ?꾩껜瑜??쒖떇 ?덇쾶 蹂듭궗">?꾩껜 ?쒖떇 蹂듭궗</button>
+      <button class="toolbar-button" type="button" data-action="print" title="?몄뇙 ?먮뒗 PDF ???>?몄뇙</button>
+      <input id="fileInput" class="sr-only" type="file" accept=".md,.markdown,.txt,.html,.htm,text/markdown,text/plain,text/html">
+    </div>
+    <div class="formatbar" aria-label="?쒖떇 ?꾧뎄">
+      <button class="toolbar-button" type="button" data-command="undo" title="?ㅽ뻾 痍⑥냼 (Ctrl+Z)">??/button>
+      <button class="toolbar-button" type="button" data-command="redo" title="?ㅼ떆 ?ㅽ뻾 (Ctrl+Y)">??/button>
+      <span class="separator" aria-hidden="true"></span>
+      <select id="blockFormat" class="toolbar-select" title="臾몃떒 醫낅쪟">
+        <option value="P">蹂몃Ц</option>
+        <option value="H1">?쒕ぉ 1</option>
+        <option value="H2">?쒕ぉ 2</option>
+        <option value="H3">?쒕ぉ 3</option>
+        <option value="BLOCKQUOTE">?몄슜臾?/option>
+        <option value="PRE">肄붾뱶 釉붾줉</option>
+      </select>
+      <button class="toolbar-button" type="button" data-command="bold" title="援듦쾶 (Ctrl+B)"><b>B</b></button>
+      <button class="toolbar-button" type="button" data-command="italic" title="湲곗슱??(Ctrl+I)"><i>I</i></button>
+      <button class="toolbar-button" type="button" data-command="underline" title="諛묒쨪 (Ctrl+U)"><u>U</u></button>
+      <button class="toolbar-button" type="button" data-command="strikeThrough" title="痍⑥냼??><s>S</s></button>
+      <span class="separator" aria-hidden="true"></span>
+      <button class="toolbar-button" type="button" data-command="insertUnorderedList" title="湲癒몃━ 湲고샇 紐⑸줉">??紐⑸줉</button>
+      <button class="toolbar-button" type="button" data-command="insertOrderedList" title="踰덊샇 紐⑸줉">1. 紐⑸줉</button>
+      <button class="toolbar-button" type="button" data-action="link" title="?섏씠?쇰쭅??(Ctrl+K)">?뵕</button>
+      <button class="toolbar-button" type="button" data-command="unlink" title="留곹겕 ?쒓굅">留곹겕 ?댁젣</button>
+      <button class="toolbar-button" type="button" data-command="removeFormat" title="湲???쒖떇 ?쒓굅">?쒖떇 ?쒓굅</button>
+      <button class="toolbar-button" type="button" data-command="insertHorizontalRule" title="援щ텇??>??/button>
+      <span class="separator" aria-hidden="true"></span>
+      <button class="toolbar-button" type="button" data-action="find" title="李얘린 (Ctrl+F)">李얘린</button>
+      <button class="toolbar-button" type="button" data-action="replace" title="李얠븘 諛붽씀湲?(Ctrl+H)">諛붽씀湲?/button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <article class="page">
+      <div id="editor" contenteditable="true" spellcheck="true" aria-label="臾몄꽌 ?몄쭛 ?곸뿭"><h1>?ㅽ봽?쇱씤 由ъ튂 ?쇱씠??/h1><p>Word泥섎읆 湲???몄쭛?섍퀬, ?ㅼ씠踰?移댄럹???쒖떇???곸슜???곹깭濡?蹂듭궗?섍린 ?꾪븳 濡쒖뺄 ?몄쭛湲곗엯?덈떎.</p><p class="blank-line"><br></p><p><strong>鍮좊Ⅸ ?ъ슜踰?/strong></p><ul><li>釉뚮씪?곗??먯꽌 URL??蹂듭궗????湲?먮? ?좏깮?섍퀬 <strong>Ctrl+V</strong>?섎㈃ 留곹겕媛 嫄몃┰?덈떎.</li><li><strong>?꾩껜 ?쒖떇 蹂듭궗</strong>瑜??꾨Ⅴ怨??ㅼ씠踰?移댄럹??遺숈뿬 ?ｌ쑝?몄슂.</li><li>留덊겕?ㅼ슫 ?뚯씪???대㈃ 鍮?以꾩쓣 ?몄쭛 媛?ν븳 鍮?臾몃떒?쇰줈 蹂댁〈?⑸땲??</li></ul></div>
+    </article>
+  </main>
+
+  <section id="findbar" class="findbar" aria-label="李얘린 諛?諛붽씀湲?>
+    <div class="find-row">
+      <input id="findText" class="find-input" type="text" placeholder="李얠쓣 ?댁슜" autocomplete="off">
+      <button class="toolbar-button" type="button" data-find="close" title="?リ린">??/button>
+    </div>
+    <div id="replaceRow" class="find-row">
+      <input id="replaceText" class="find-input" type="text" placeholder="諛붽? ?댁슜" autocomplete="off">
+      <span></span>
+    </div>
+    <div class="find-actions">
+      <button class="toolbar-button" type="button" data-find="next">?ㅼ쓬 李얘린</button>
+      <button class="toolbar-button" type="button" data-find="replace">諛붽씀湲?/button>
+      <button class="toolbar-button" type="button" data-find="replace-all">紐⑤몢 諛붽씀湲?/button>
+    </div>
+  </section>
+
+  <div class="statusbar" aria-live="polite">
+    <span id="fileName">??臾몄꽌</span>
+    <span id="count">0??쨌 0?⑥뼱</span>
+  </div>
+  <div id="linkPreview" class="link-preview" role="tooltip">
+    <span id="linkPreviewUrl" class="link-preview-url"></span>
+    <span class="link-preview-hint">Ctrl+?대┃?섏뿬 留곹겕 ?닿린</span>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      'use strict';
+
+      const editor = document.getElementById('editor');
+      const fileInput = document.getElementById('fileInput');
+      const fileNameLabel = document.getElementById('fileName');
+      const countLabel = document.getElementById('count');
+      const toast = document.getElementById('toast');
+      const findbar = document.getElementById('findbar');
+      const findText = document.getElementById('findText');
+      const replaceText = document.getElementById('replaceText');
+      const replaceRow = document.getElementById('replaceRow');
+      const blockFormat = document.getElementById('blockFormat');
+      const linkPreview = document.getElementById('linkPreview');
+      const linkPreviewUrl = document.getElementById('linkPreviewUrl');
+      let currentFileName = '??臾몄꽌';
+      let toastTimer = null;
+      let savedRange = null;
+      let hoveredLink = null;
+
+      const showToast = (message) => {
+        toast.textContent = message;
+        toast.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => toast.classList.remove('show'), 2200);
+      };
+
+      const updateCount = () => {
+        const text = editor.innerText.replace(/\u200B/g, '').trim();
+        const characters = text.length;
+        const words = text ? text.split(/\s+/).filter(Boolean).length : 0;
+        countLabel.textContent = `${characters.toLocaleString()}??쨌 ${words.toLocaleString()}?⑥뼱`;
+        fileNameLabel.textContent = currentFileName;
+      };
+
+      const focusEditor = () => {
+        editor.focus({ preventScroll: true });
+      };
+
+      const runCommand = (command, value = null) => {
+        focusEditor();
+        document.execCommand(command, false, value);
+        updateCount();
+      };
+
+      const selectionIsInsideEditor = () => {
+        const selection = window.getSelection();
+        if (!selection || selection.rangeCount === 0) return false;
+        const node = selection.getRangeAt(0).commonAncestorContainer;
+        return node === editor || editor.contains(node.nodeType === Node.TEXT_NODE ? node.parentNode : node);
+      };
+
+      const saveSelection = () => {
+        const selection = window.getSelection();
+        if (selection && selection.rangeCount && selectionIsInsideEditor()) {
+          savedRange = selection.getRangeAt(0).cloneRange();
+        }
+      };
+
+      const restoreSelection = () => {
+        if (!savedRange) return;
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(savedRange);
+      };
+
+      const isUrl = (value) => /^(https?:\/\/|mailto:|tel:)[^\s]+$/i.test(value.trim());
+
+      const showLinkPreview = (anchor) => {
+        const href = anchor.getAttribute('href') || anchor.href || '';
+        if (!href) return;
+        hoveredLink = anchor;
+        linkPreviewUrl.textContent = href;
+        linkPreview.classList.add('visible');
+
+        const anchorRect = anchor.getBoundingClientRect();
+        const tooltipRect = linkPreview.getBoundingClientRect();
+        const margin = 8;
+        let left = Math.min(anchorRect.left, window.innerWidth - tooltipRect.width - 12);
+        left = Math.max(12, left);
+        let top = anchorRect.bottom + margin;
+        if (top + tooltipRect.height > window.innerHeight - 12) {
+          top = Math.max(12, anchorRect.top - tooltipRect.height - margin);
+        }
+        linkPreview.style.left = `${left}px`;
+        linkPreview.style.top = `${top}px`;
+      };
+
+      const hideLinkPreview = () => {
+        hoveredLink = null;
+        linkPreview.classList.remove('visible');
+      };
+
+      const insertLink = (urlOverride = '') => {
+        restoreSelection();
+        focusEditor();
+        const selection = window.getSelection();
+        const selectedText = selection ? selection.toString() : '';
+        const initial = urlOverride || (isUrl(selectedText) ? selectedText : 'https://');
+        const url = window.prompt('?곌껐??二쇱냼瑜??낅젰?섏꽭??', initial);
+        if (!url) return;
+
+        restoreSelection();
+        if (selection && !selection.isCollapsed) {
+          document.execCommand('createLink', false, url.trim());
+        } else {
+          const label = url.trim();
+          document.execCommand('insertHTML', false, `<a href="${escapeAttribute(label)}">${escapeHtml(label)}</a>`);
+        }
+        updateCount();
+      };
+
+      const escapeHtml = (value) => String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+
+      const escapeAttribute = (value) => escapeHtml(value).replace(/`/g, '&#096;');
+
+      const sanitizeHtml = (html) => {
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        doc.querySelectorAll('script, style, iframe, object, embed, link, meta').forEach((node) => node.remove());
+        doc.querySelectorAll('*').forEach((node) => {
+          [...node.attributes].forEach((attribute) => {
+            const name = attribute.name.toLowerCase();
+            const value = attribute.value.trim().toLowerCase();
+            if (name.startsWith('on') || ((name === 'href' || name === 'src') && value.startsWith('javascript:'))) {
+              node.removeAttribute(attribute.name);
+            }
+          });
+        });
+        return doc.body.innerHTML;
+      };
+
+      const parseInlineMarkdown = (source) => {
+        const codeTokens = [];
+        let value = String(source).replace(/`([^`]+)`/g, (_, code) => {
+          const token = `\u0000CODE${codeTokens.length}\u0000`;
+          codeTokens.push(`<code>${escapeHtml(code)}</code>`);
+          return token;
+        });
+        value = escapeHtml(value);
+        value = value
+          .replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, '<img src="$2" alt="$1">')
+          .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2">$1</a>')
+          .replace(/&lt;(https?:\/\/[^&]+)&gt;/g, '<a href="$1">$1</a>')
+          .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+          .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+          .replace(/~~([^~]+)~~/g, '<s>$1</s>')
+          .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>')
+          .replace(/(^|[^_])_([^_\n]+)_(?!_)/g, '$1<em>$2</em>')
+          .replace(/  $/, '<br>');
+        codeTokens.forEach((html, index) => {
+          value = value.replace(`\u0000CODE${index}\u0000`, html);
+        });
+        return value;
+      };
+
+      const markdownToHtml = (markdown) => {
+        const lines = String(markdown).replace(/\r\n?/g, '\n').split('\n');
+        const output = [];
+        let paragraph = [];
+        let listType = null;
+        let inCode = false;
+        let codeLines = [];
+        let pendingBlankLines = 0;
+
+        const flushParagraph = () => {
+          if (!paragraph.length) return;
+          output.push(`<p>${paragraph.map(parseInlineMarkdown).join('<br>')}</p>`);
+          paragraph = [];
+        };
+
+        const closeList = () => {
+          if (!listType) return;
+          output.push(`</${listType}>`);
+          listType = null;
+        };
+
+        const emitBlanks = () => {
+          for (let i = 0; i < pendingBlankLines; i += 1) {
+            output.push('<p class="blank-line"><br></p>');
+          }
+          pendingBlankLines = 0;
+        };
+
+        lines.forEach((line) => {
+          if (/^```/.test(line)) {
+            flushParagraph();
+            closeList();
+            if (inCode) {
+              output.push(`<pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`);
+              codeLines = [];
+              inCode = false;
+            } else {
+              emitBlanks();
+              inCode = true;
+            }
+            return;
+          }
+
+          if (inCode) {
+            codeLines.push(line);
+            return;
+          }
+
+          if (!line.trim()) {
+            flushParagraph();
+            closeList();
+            pendingBlankLines += 1;
+            return;
+          }
+
+          const heading = line.match(/^(#{1,3})\s+(.+)$/);
+          const unordered = line.match(/^\s*[-+*]\s+(?:\[([ xX])\]\s+)?(.+)$/);
+          const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+          const quote = line.match(/^>\s?(.*)$/);
+
+          flushParagraph();
+          emitBlanks();
+
+          if (heading) {
+            closeList();
+            const level = heading[1].length;
+            output.push(`<h${level}>${parseInlineMarkdown(heading[2])}</h${level}>`);
+          } else if (/^\s*(---+|___+|\*\*\*+)\s*$/.test(line)) {
+            closeList();
+            output.push('<hr>');
+          } else if (unordered) {
+            if (listType !== 'ul') {
+              closeList();
+              listType = 'ul';
+              output.push('<ul>');
+            }
+            const checked = unordered[1] ? `<input type="checkbox" disabled${unordered[1].toLowerCase() === 'x' ? ' checked' : ''}> ` : '';
+            output.push(`<li>${checked}${parseInlineMarkdown(unordered[2])}</li>`);
+          } else if (ordered) {
+            if (listType !== 'ol') {
+              closeList();
+              listType = 'ol';
+              output.push('<ol>');
+            }
+            output.push(`<li>${parseInlineMarkdown(ordered[1])}</li>`);
+          } else if (quote) {
+            closeList();
+            output.push(`<blockquote>${parseInlineMarkdown(quote[1])}</blockquote>`);
+          } else {
+            closeList();
+            paragraph.push(line);
+          }
+        });
+
+        if (inCode) output.push(`<pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`);
+        flushParagraph();
+        closeList();
+        emitBlanks();
+        return output.join('');
+      };
+
+      const inlineHtmlToMarkdown = (node) => {
+        if (node.nodeType === Node.TEXT_NODE) return node.nodeValue || '';
+        if (node.nodeType !== Node.ELEMENT_NODE) return '';
+        const children = [...node.childNodes].map(inlineHtmlToMarkdown).join('');
+        const tag = node.tagName.toLowerCase();
+        if (tag === 'strong' || tag === 'b') return `**${children}**`;
+        if (tag === 'em' || tag === 'i') return `*${children}*`;
+        if (tag === 's' || tag === 'strike' || tag === 'del') return `~~${children}~~`;
+        if (tag === 'u') return `<u>${children}</u>`;
+        if (tag === 'code' && node.parentElement?.tagName.toLowerCase() !== 'pre') return `\`${children}\``;
+        if (tag === 'a') return `[${children}](${node.getAttribute('href') || ''})`;
+        if (tag === 'img') return `![${node.getAttribute('alt') || ''}](${node.getAttribute('src') || ''})`;
+        if (tag === 'br') return '\n';
+        return children;
+      };
+
+      const htmlToMarkdown = () => {
+        const convertBlock = (node, depth = 0) => {
+          if (node.nodeType === Node.TEXT_NODE) return node.nodeValue || '';
+          if (node.nodeType !== Node.ELEMENT_NODE) return '';
+          const tag = node.tagName.toLowerCase();
+          const inline = () => [...node.childNodes].map(inlineHtmlToMarkdown).join('').trimEnd();
+          if (tag === 'h1') return `# ${inline()}\n\n`;
+          if (tag === 'h2') return `## ${inline()}\n\n`;
+          if (tag === 'h3') return `### ${inline()}\n\n`;
+          if (tag === 'p' || tag === 'div') {
+            const value = inline();
+            return value ? `${value}\n\n` : '\n';
+          }
+          if (tag === 'blockquote') return inline().split('\n').map((line) => `> ${line}`).join('\n') + '\n\n';
+          if (tag === 'pre') return `\`\`\`\n${node.innerText.replace(/\n$/, '')}\n\`\`\`\n\n`;
+          if (tag === 'hr') return '---\n\n';
+          if (tag === 'ul' || tag === 'ol') {
+            return [...node.children].map((li, index) => {
+              const marker = tag === 'ol' ? `${index + 1}. ` : '- ';
+              return `${'  '.repeat(depth)}${marker}${[...li.childNodes].map(inlineHtmlToMarkdown).join('').trim()}`;
+            }).join('\n') + '\n\n';
+          }
+          return [...node.childNodes].map((child) => convertBlock(child, depth)).join('');
+        };
+        return [...editor.childNodes].map((node) => convertBlock(node)).join('').replace(/\n{4,}/g, '\n\n\n').trimEnd() + '\n';
+      };
+
+      const buildStandaloneHtml = () => `<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHtml(currentFileName.replace(/\.[^.]+$/, '') || '臾몄꽌')}</title>
+<style>
+body{max-width:780px;margin:40px auto;padding:0 24px;color:#202124;font-family:"Malgun Gothic","留묒? 怨좊뵓",Arial,sans-serif;font-size:16px;line-height:1.75;word-break:break-word}
+p{margin:0 0 1em}p.blank-line{min-height:1.75em;margin:0}h1{font-size:2em}h2{font-size:1.55em}h3{font-size:1.25em}blockquote{margin:1em 0;padding:.5em 1em;border-left:4px solid #94a3b8;background:#f8fafc;color:#475569}pre{overflow:auto;padding:14px 16px;border-radius:8px;background:#f4f5f7}code{font-family:Consolas,monospace}a{color:#1558d6}img{max-width:100%;height:auto}hr{border:0;border-top:1px solid #cdd2d9;margin:2em 0}
+</style>
+</head>
+<body>
+${sanitizeHtml(editor.innerHTML)}
+</body>
+</html>`;
+
+      const downloadText = (content, fileName, mime) => {
+        const blob = new Blob([content], { type: `${mime};charset=utf-8` });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = fileName;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      };
+
+      const suggestedName = (extension) => {
+        const base = (currentFileName || '臾몄꽌').replace(/\.(md|markdown|txt|html?|docx?)$/i, '') || '臾몄꽌';
+        return `${base}.${extension}`;
+      };
+
+      const copyAllRich = () => {
+        focusEditor();
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(editor);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        const success = document.execCommand('copy');
+        selection.removeAllRanges();
+        showToast(success ? '臾몄꽌 ?꾩껜瑜??쒖떇 ?덇쾶 蹂듭궗?덉뒿?덈떎.' : '蹂듭궗?섏? 紐삵뻽?듬땲?? ?몄쭛 ?곸뿭?먯꽌 Ctrl+A, Ctrl+C瑜??ъ슜?섏꽭??');
+      };
+
+      const openFindbar = (withReplace) => {
+        findbar.classList.add('open');
+        replaceRow.style.display = withReplace ? 'grid' : 'none';
+        findText.focus();
+        findText.select();
+      };
+
+      const closeFindbar = () => {
+        findbar.classList.remove('open');
+        focusEditor();
+      };
+
+      const findNext = () => {
+        const query = findText.value;
+        if (!query) return false;
+        focusEditor();
+        const found = window.find(query, false, false, true, false, false, false);
+        if (!found) {
+          const range = document.createRange();
+          range.setStart(editor, 0);
+          range.collapse(true);
+          const selection = window.getSelection();
+          selection.removeAllRanges();
+          selection.addRange(range);
+          return window.find(query, false, false, true, false, false, false);
+        }
+        return true;
+      };
+
+      const replaceCurrent = () => {
+        const selection = window.getSelection();
+        if (selection && selection.toString() === findText.value && selectionIsInsideEditor()) {
+          document.execCommand('insertText', false, replaceText.value);
+          updateCount();
+        }
+        findNext();
+      };
+
+      const replaceAll = () => {
+        const query = findText.value;
+        if (!query) return;
+        let count = 0;
+        const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+        const nodes = [];
+        while (walker.nextNode()) nodes.push(walker.currentNode);
+        nodes.forEach((node) => {
+          const parts = node.nodeValue.split(query);
+          if (parts.length > 1) {
+            count += parts.length - 1;
+            node.nodeValue = parts.join(replaceText.value);
+          }
+        });
+        updateCount();
+        showToast(`${count}媛???ぉ??諛붽엥?듬땲??`);
+      };
+
+      document.querySelectorAll('[data-command]').forEach((button) => {
+        button.addEventListener('mousedown', (event) => event.preventDefault());
+        button.addEventListener('click', () => runCommand(button.dataset.command));
+      });
+
+      document.querySelectorAll('[data-action]').forEach((button) => {
+        button.addEventListener('mousedown', () => saveSelection());
+        button.addEventListener('click', () => {
+          const action = button.dataset.action;
+          if (action === 'new') {
+            if (editor.innerText.trim() && !window.confirm('?꾩옱 臾몄꽌瑜?吏?곌퀬 ??臾몄꽌瑜?留뚮뱾源뚯슂?')) return;
+            editor.innerHTML = '<p><br></p>';
+            currentFileName = '??臾몄꽌';
+            updateCount();
+            focusEditor();
+          } else if (action === 'open') {
+            fileInput.click();
+          } else if (action === 'save-html') {
+            downloadText(buildStandaloneHtml(), suggestedName('html'), 'text/html');
+            showToast('HTML ?뚯씪濡???ν뻽?듬땲??');
+          } else if (action === 'save-md') {
+            downloadText(htmlToMarkdown(), suggestedName('md'), 'text/markdown');
+            showToast('留덊겕?ㅼ슫 ?뚯씪濡???ν뻽?듬땲??');
+          } else if (action === 'copy-all') {
+            copyAllRich();
+          } else if (action === 'print') {
+            window.print();
+          } else if (action === 'link') {
+            insertLink();
+          } else if (action === 'find') {
+            openFindbar(false);
+          } else if (action === 'replace') {
+            openFindbar(true);
+          }
+        });
+      });
+
+      blockFormat.addEventListener('change', () => {
+        runCommand('formatBlock', blockFormat.value);
+        blockFormat.value = 'P';
+      });
+
+      fileInput.addEventListener('change', async () => {
+        const file = fileInput.files?.[0];
+        if (!file) return;
+        try {
+          const text = await file.text();
+          if (/\.html?$/i.test(file.name)) {
+            const parsed = new DOMParser().parseFromString(text, 'text/html');
+            editor.innerHTML = sanitizeHtml(parsed.body.innerHTML);
+          } else if (/\.(md|markdown)$/i.test(file.name)) {
+            editor.innerHTML = markdownToHtml(text);
+          } else {
+            editor.innerHTML = text.split(/\r?\n/).map((line) => line ? `<p>${escapeHtml(line)}</p>` : '<p class="blank-line"><br></p>').join('');
+          }
+          currentFileName = file.name;
+          updateCount();
+          focusEditor();
+          showToast(`${file.name} ?뚯씪???댁뿀?듬땲??`);
+        } catch (error) {
+          showToast('?뚯씪???댁? 紐삵뻽?듬땲??');
+        } finally {
+          fileInput.value = '';
+        }
+      });
+
+      editor.addEventListener('input', updateCount);
+      editor.addEventListener('mouseup', saveSelection);
+      editor.addEventListener('keyup', saveSelection);
+
+      editor.addEventListener('mouseover', (event) => {
+        const anchor = event.target.closest?.('a');
+        if (anchor && editor.contains(anchor) && anchor !== hoveredLink) showLinkPreview(anchor);
+      });
+
+      editor.addEventListener('mouseout', (event) => {
+        const anchor = event.target.closest?.('a');
+        if (!anchor) return;
+        const next = event.relatedTarget;
+        if (!next || !anchor.contains(next)) hideLinkPreview();
+      });
+
+      editor.addEventListener('scroll', hideLinkPreview);
+      window.addEventListener('scroll', hideLinkPreview, true);
+      window.addEventListener('resize', hideLinkPreview);
+
+      editor.addEventListener('click', (event) => {
+        const anchor = event.target.closest?.('a');
+        if (!anchor || !editor.contains(anchor)) return;
+        if (event.ctrlKey || event.metaKey) {
+          event.preventDefault();
+          window.open(anchor.href, '_blank', 'noopener,noreferrer');
+          hideLinkPreview();
+        }
+      });
+
+      editor.addEventListener('paste', (event) => {
+        const selection = window.getSelection();
+        const plain = event.clipboardData?.getData('text/plain')?.trim() || '';
+        if (selection && !selection.isCollapsed && isUrl(plain) && selectionIsInsideEditor()) {
+          event.preventDefault();
+          document.execCommand('createLink', false, plain);
+          showToast('?좏깮??湲?먯뿉 留곹겕瑜?嫄몄뿀?듬땲??');
+          updateCount();
+          return;
+        }
+
+        const html = event.clipboardData?.getData('text/html');
+        if (html) {
+          event.preventDefault();
+          document.execCommand('insertHTML', false, sanitizeHtml(html));
+          updateCount();
+        }
+      });
+
+      document.querySelectorAll('[data-find]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const action = button.dataset.find;
+          if (action === 'close') closeFindbar();
+          if (action === 'next') findNext();
+          if (action === 'replace') replaceCurrent();
+          if (action === 'replace-all') replaceAll();
+        });
+      });
+
+      findText.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          findNext();
+        }
+        if (event.key === 'Escape') closeFindbar();
+      });
+
+      replaceText.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          replaceCurrent();
+        }
+        if (event.key === 'Escape') closeFindbar();
+      });
+
+      document.addEventListener('keydown', (event) => {
+        const ctrl = event.ctrlKey || event.metaKey;
+        if (!ctrl) return;
+        const key = event.key.toLowerCase();
+        if (key === 'k') {
+          event.preventDefault();
+          saveSelection();
+          insertLink();
+        } else if (key === 'h') {
+          event.preventDefault();
+          openFindbar(true);
+        } else if (key === 'f') {
+          event.preventDefault();
+          openFindbar(false);
+        } else if (key === 's' && !event.shiftKey) {
+          event.preventDefault();
+          downloadText(buildStandaloneHtml(), suggestedName('html'), 'text/html');
+          showToast('HTML ?뚯씪濡???ν뻽?듬땲??');
+        }
+      });
+
+      updateCount();
+    })();
+  </script>
+</body>
+</html>
+
