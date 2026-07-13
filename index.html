@@ -93,6 +93,13 @@
       background: var(--accent-soft);
     }
 
+    .toolbar-button.is-active,
+    .toolbar-button[aria-pressed="true"] {
+      border-color: #93c5fd;
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
     .toolbar-button.primary {
       background: var(--accent);
       color: white;
@@ -385,7 +392,7 @@
         <option value="BLOCKQUOTE">인용문</option>
         <option value="PRE">코드 블록</option>
       </select>
-      <button class="toolbar-button" type="button" data-command="bold" title="굵게 (Ctrl+B)"><b>B</b></button>
+      <button class="toolbar-button" type="button" data-command="bold" aria-pressed="false" title="굵게 (Ctrl+B)"><b>B</b></button>
       <button class="toolbar-button" type="button" data-command="italic" title="기울임 (Ctrl+I)"><i>I</i></button>
       <button class="toolbar-button" type="button" data-command="underline" title="밑줄 (Ctrl+U)"><u>U</u></button>
       <button class="toolbar-button" type="button" data-command="strikeThrough" title="취소선"><s>S</s></button>
@@ -455,6 +462,7 @@
       const replaceRow = document.getElementById('replaceRow');
       const adjustParticles = document.getElementById('adjustParticles');
       const blockFormat = document.getElementById('blockFormat');
+      const boldButton = document.querySelector('[data-command="bold"]');
       const linkPreview = document.getElementById('linkPreview');
       const linkPreviewUrl = document.getElementById('linkPreviewUrl');
       let currentFileName = '새 문서';
@@ -487,6 +495,7 @@
         focusEditor();
         document.execCommand(command, false, value);
         updateCount();
+        updateBoldButtonState();
       };
 
       const selectionIsInsideEditor = () => {
@@ -494,6 +503,19 @@
         if (!selection || selection.rangeCount === 0) return false;
         const node = selection.getRangeAt(0).commonAncestorContainer;
         return node === editor || editor.contains(node.nodeType === Node.TEXT_NODE ? node.parentNode : node);
+      };
+
+      const updateBoldButtonState = () => {
+        let isBold = false;
+        if (selectionIsInsideEditor()) {
+          try {
+            isBold = document.queryCommandState('bold');
+          } catch (error) {
+            isBold = false;
+          }
+        }
+        boldButton.classList.toggle('is-active', isBold);
+        boldButton.setAttribute('aria-pressed', String(isBold));
       };
 
       const saveSelection = () => {
@@ -547,6 +569,7 @@
         blockFormat.value = 'P';
         updateCount();
         saveSelection();
+        updateBoldButtonState();
         showToast('글자와 문단 서식을 제거했습니다.');
       };
 
@@ -1364,9 +1387,17 @@ ${sanitizeHtml(editor.innerHTML)}
       editor.addEventListener('input', () => {
         normalizeEmptyDocument();
         updateCount();
+        updateBoldButtonState();
       });
-      editor.addEventListener('mouseup', saveSelection);
-      editor.addEventListener('keyup', saveSelection);
+      editor.addEventListener('mouseup', () => {
+        saveSelection();
+        updateBoldButtonState();
+      });
+      editor.addEventListener('keyup', () => {
+        saveSelection();
+        updateBoldButtonState();
+      });
+      document.addEventListener('selectionchange', updateBoldButtonState);
 
       editor.addEventListener('mouseover', (event) => {
         const anchor = event.target.closest?.('a');
@@ -1478,6 +1509,7 @@ ${sanitizeHtml(editor.innerHTML)}
       window.addEventListener('blur', () => { pastePlainRequested = false; });
 
       updateCount();
+      updateBoldButtonState();
     })();
   </script>
 </body>
