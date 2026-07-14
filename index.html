@@ -1454,7 +1454,6 @@ ${sanitizeHtml(editor.innerHTML)}
           && selectionIsInsideEditor()) {
           event.preventDefault();
           document.execCommand('createLink', false, linkCandidate);
-          showToast('선택한 글자에 링크를 걸었습니다.');
           updateCount();
           return;
         }
