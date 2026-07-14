@@ -860,6 +860,44 @@ ${sanitizeHtml(editor.innerHTML)}
         return `${base}.${extension}`;
       };
 
+      const clipboardHtmlWithExplicitBreaks = (range) => {
+        const container = document.createElement('div');
+        container.appendChild(range.cloneContents());
+        const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+        const newlineNodes = [];
+        while (walker.nextNode()) {
+          if (/\r|\n/.test(walker.currentNode.nodeValue || '')) newlineNodes.push(walker.currentNode);
+        }
+
+        newlineNodes.forEach((node) => {
+          const parts = String(node.nodeValue || '').replace(/\r\n?/g, '\n').split('\n');
+          const fragment = document.createDocumentFragment();
+          parts.forEach((part, index) => {
+            if (part) fragment.appendChild(document.createTextNode(part));
+            if (index < parts.length - 1) fragment.appendChild(document.createElement('br'));
+          });
+          node.replaceWith(fragment);
+        });
+
+        return sanitizeHtml(container.innerHTML);
+      };
+
+      const handleEditorCopy = (event) => {
+        const selection = window.getSelection();
+        if (!event.clipboardData || !selection || selection.isCollapsed || !selectionIsInsideEditor()) return;
+        const range = selection.getRangeAt(0);
+        const coversWholeEditor = range.startContainer === editor
+          && range.startOffset === 0
+          && range.endContainer === editor
+          && range.endOffset === editor.childNodes.length;
+        const plain = coversWholeEditor ? editor.innerText : selection.toString();
+        const html = clipboardHtmlWithExplicitBreaks(range);
+
+        event.preventDefault();
+        event.clipboardData.setData('text/plain', String(plain).replace(/\r\n?/g, '\n'));
+        event.clipboardData.setData('text/html', html);
+      };
+
       const copyAllRich = () => {
         focusEditor();
         const selection = window.getSelection();
@@ -1429,6 +1467,7 @@ ${sanitizeHtml(editor.innerHTML)}
       editor.addEventListener('scroll', hideLinkPreview);
       window.addEventListener('scroll', hideLinkPreview, true);
       window.addEventListener('resize', hideLinkPreview);
+      document.addEventListener('copy', handleEditorCopy);
 
       editor.addEventListener('click', (event) => {
         const anchor = event.target.closest?.('a');
