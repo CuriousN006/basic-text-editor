@@ -1465,9 +1465,6 @@ ${sanitizeHtml(editor.innerHTML)}
           return;
         }
         insertPlainTextPreservingBreaks(plain);
-        showToast(explicitPlainPaste
-          ? 'URL 자동 링크 없이 원문의 줄 구조대로 붙여넣었습니다.'
-          : '외부 서식을 빼고 원문의 줄 구조대로 붙여넣었습니다.');
       });
 
       document.querySelectorAll('[data-find]').forEach((button) => {
