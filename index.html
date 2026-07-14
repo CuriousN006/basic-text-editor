@@ -863,6 +863,10 @@ ${sanitizeHtml(editor.innerHTML)}
       const clipboardHtmlWithExplicitBreaks = (range) => {
         const container = document.createElement('div');
         container.appendChild(range.cloneContents());
+        const clipboardBlockTags = new Set([
+          'P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'PRE',
+          'UL', 'OL', 'LI', 'TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TD', 'TH', 'HR'
+        ]);
         const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
         const newlineNodes = [];
         while (walker.nextNode()) {
@@ -877,6 +881,85 @@ ${sanitizeHtml(editor.innerHTML)}
             if (index < parts.length - 1) fragment.appendChild(document.createElement('br'));
           });
           node.replaceWith(fragment);
+        });
+
+        const wrapped = document.createDocumentFragment();
+        let inlineRun = null;
+        [...container.childNodes].forEach((node) => {
+          const isBlock = node.nodeType === Node.ELEMENT_NODE && clipboardBlockTags.has(node.tagName);
+          if (isBlock) {
+            inlineRun = null;
+            wrapped.appendChild(node);
+            return;
+          }
+          if (!inlineRun) {
+            inlineRun = document.createElement('div');
+            wrapped.appendChild(inlineRun);
+          }
+          inlineRun.appendChild(node);
+        });
+        container.replaceChildren(wrapped);
+
+        const breakParts = (element) => {
+          const breaks = [...element.querySelectorAll('br')];
+          if (!breaks.length) return [];
+          const parts = [];
+          let startContainer = element;
+          let startOffset = 0;
+          breaks.forEach((lineBreak) => {
+            const partRange = document.createRange();
+            partRange.setStart(startContainer, startOffset);
+            partRange.setEndBefore(lineBreak);
+            parts.push(partRange.cloneContents());
+            startContainer = lineBreak.parentNode;
+            startOffset = [...startContainer.childNodes].indexOf(lineBreak) + 1;
+          });
+          const lastRange = document.createRange();
+          lastRange.setStart(startContainer, startOffset);
+          lastRange.setEnd(element, element.childNodes.length);
+          parts.push(lastRange.cloneContents());
+          return parts;
+        };
+
+        const appendPart = (line, part) => {
+          const hasContent = Boolean(part.textContent)
+            || Boolean(part.querySelector?.('img,hr,table,iframe,video,audio,canvas,svg'));
+          if (hasContent) line.appendChild(part);
+          else line.appendChild(document.createTextNode('\u00A0'));
+        };
+
+        const splitCandidates = [...container.querySelectorAll('p,div,h1,h2,h3,h4,h5,h6,blockquote,pre')]
+          .filter((element) => ![...element.children].some((child) => clipboardBlockTags.has(child.tagName)));
+        splitCandidates.forEach((element) => {
+          const parts = breakParts(element);
+          if (!parts.length) return;
+          const replacement = document.createDocumentFragment();
+          if (!element.textContent && parts.every((part) => !part.textContent)) {
+            const blankLine = document.createElement('div');
+            blankLine.appendChild(document.createTextNode('\u00A0'));
+            replacement.appendChild(blankLine);
+          } else {
+            parts.forEach((part) => {
+              const lineTag = ['P', 'DIV'].includes(element.tagName) ? 'div' : element.tagName.toLowerCase();
+              const line = document.createElement(lineTag);
+              [...element.attributes].forEach((attribute) => line.setAttribute(attribute.name, attribute.value));
+              appendPart(line, part);
+              replacement.appendChild(line);
+            });
+          }
+          element.replaceWith(replacement);
+        });
+
+        [...container.querySelectorAll('li,td,th')].forEach((element) => {
+          if (element.querySelector('ul,ol,table')) return;
+          const parts = breakParts(element);
+          if (!parts.length) return;
+          element.replaceChildren();
+          parts.forEach((part) => {
+            const line = document.createElement('div');
+            appendPart(line, part);
+            element.appendChild(line);
+          });
         });
 
         return sanitizeHtml(container.innerHTML);
