@@ -204,19 +204,62 @@
       box-shadow: 0 7px 24px rgba(32, 33, 36, .18);
       font-size: 12px;
       line-height: 1.45;
-      pointer-events: none;
+      pointer-events: auto;
+      user-select: text;
       z-index: 40;
     }
 
     .link-preview.visible { display: block; }
 
+    .link-preview::before {
+      position: absolute;
+      top: -14px;
+      right: -10px;
+      left: -10px;
+      height: 14px;
+      background: transparent;
+      content: "";
+    }
+
+    .link-preview.above::before {
+      top: auto;
+      bottom: -14px;
+    }
+
+    .link-preview-main {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
     .link-preview-url {
       display: block;
+      min-width: 0;
+      flex: 1;
       overflow: hidden;
       color: #1558d6;
       font-weight: 600;
       text-overflow: ellipsis;
+      text-decoration: underline;
       white-space: nowrap;
+    }
+
+    .link-preview-copy {
+      flex: none;
+      padding: 3px 7px;
+      border: 1px solid #c9d1dc;
+      border-radius: 5px;
+      background: #f8fafc;
+      color: var(--text);
+      cursor: pointer;
+      font: inherit;
+    }
+
+    .link-preview-copy:hover,
+    .link-preview-copy:focus-visible {
+      border-color: #93c5fd;
+      background: var(--accent-soft);
+      outline: none;
     }
 
     .link-preview-hint {
@@ -441,9 +484,12 @@
     <span id="fileName">새 문서</span>
     <span id="count">0자 · 0단어</span>
   </div>
-  <div id="linkPreview" class="link-preview" role="tooltip">
-    <span id="linkPreviewUrl" class="link-preview-url"></span>
-    <span class="link-preview-hint">Ctrl+클릭하여 링크 열기</span>
+  <div id="linkPreview" class="link-preview" role="dialog" aria-label="링크 정보">
+    <div class="link-preview-main">
+      <a id="linkPreviewUrl" class="link-preview-url" target="_blank" rel="noopener noreferrer"></a>
+      <button id="linkPreviewCopy" class="link-preview-copy" type="button">주소 복사</button>
+    </div>
+    <span class="link-preview-hint">링크 열기 또는 주소 복사</span>
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
@@ -466,6 +512,7 @@
       const supportedBlockFormats = new Set(['P', 'H1', 'H2', 'H3', 'BLOCKQUOTE', 'PRE']);
       const linkPreview = document.getElementById('linkPreview');
       const linkPreviewUrl = document.getElementById('linkPreviewUrl');
+      const linkPreviewCopy = document.getElementById('linkPreviewCopy');
       let currentFileName = '새 문서';
       let toastTimer = null;
       let savedRange = null;
@@ -595,7 +642,10 @@
         const href = anchor.getAttribute('href') || anchor.href || '';
         if (!href) return;
         hoveredLink = anchor;
+        linkPreviewUrl.href = href;
         linkPreviewUrl.textContent = href;
+        linkPreviewCopy.textContent = '주소 복사';
+        linkPreview.classList.remove('above');
         linkPreview.classList.add('visible');
 
         const anchorRect = anchor.getBoundingClientRect();
@@ -606,6 +656,7 @@
         let top = anchorRect.bottom + margin;
         if (top + tooltipRect.height > window.innerHeight - 12) {
           top = Math.max(12, anchorRect.top - tooltipRect.height - margin);
+          linkPreview.classList.add('above');
         }
         linkPreview.style.left = `${left}px`;
         linkPreview.style.top = `${top}px`;
@@ -614,6 +665,32 @@
       const hideLinkPreview = () => {
         hoveredLink = null;
         linkPreview.classList.remove('visible');
+      };
+
+      const copyPreviewUrl = async () => {
+        const url = linkPreviewUrl.getAttribute('href') || linkPreviewUrl.textContent || '';
+        if (!url) return;
+        let copied = false;
+        if (navigator.clipboard?.writeText) {
+          try {
+            await navigator.clipboard.writeText(url);
+            copied = true;
+          } catch (error) {
+            copied = false;
+          }
+        }
+        if (!copied) {
+          const textarea = document.createElement('textarea');
+          textarea.value = url;
+          textarea.setAttribute('readonly', '');
+          textarea.style.position = 'fixed';
+          textarea.style.opacity = '0';
+          document.body.appendChild(textarea);
+          textarea.select();
+          copied = document.execCommand('copy');
+          textarea.remove();
+        }
+        linkPreviewCopy.textContent = copied ? '복사됨' : '복사 실패';
       };
 
       const insertLink = (urlOverride = '') => {
@@ -1544,8 +1621,15 @@ ${sanitizeHtml(editor.innerHTML)}
         const anchor = event.target.closest?.('a');
         if (!anchor) return;
         const next = event.relatedTarget;
-        if (!next || !anchor.contains(next)) hideLinkPreview();
+        if (!next || (!anchor.contains(next) && !linkPreview.contains(next))) hideLinkPreview();
       });
+
+      linkPreview.addEventListener('mouseleave', (event) => {
+        const next = event.relatedTarget;
+        if (hoveredLink && next && (next === hoveredLink || hoveredLink.contains(next))) return;
+        hideLinkPreview();
+      });
+      linkPreviewCopy.addEventListener('click', copyPreviewUrl);
 
       editor.addEventListener('scroll', hideLinkPreview);
       window.addEventListener('scroll', hideLinkPreview, true);
