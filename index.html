@@ -1071,6 +1071,18 @@ ${sanitizeHtml(editor.innerHTML)}
       };
 
       const openFindbar = (withReplace) => {
+        const selection = window.getSelection();
+        const selectedText = withReplace
+          && selection
+          && !selection.isCollapsed
+          && selectionIsInsideEditor()
+            ? selection.toString()
+            : '';
+
+        if (selectedText) {
+          savedRange = selection.getRangeAt(0).cloneRange();
+          findText.value = selectedText;
+        }
         findbar.classList.add('open');
         replaceRow.style.display = withReplace ? 'grid' : 'none';
         findText.focus();
