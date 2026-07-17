@@ -303,6 +303,12 @@
       outline: none;
     }
 
+    .mini-format-button.is-remove[aria-pressed="true"] {
+      border-color: #fca5a5;
+      background: #fee2e2;
+      color: var(--danger);
+    }
+
     .findbar {
       display: none;
       position: fixed;
@@ -534,13 +540,19 @@
       </label>
     </div>
     <div id="replaceFormats" class="replace-formats" aria-label="바꿀 내용 서식">
-      <span class="replace-formats-label">바꿀 서식</span>
+      <span class="replace-formats-label">적용</span>
       <button class="mini-format-button" type="button" data-replace-format="bold" aria-pressed="false" title="바꿀 내용을 굵게"><b>B</b></button>
       <button class="mini-format-button" type="button" data-replace-format="italic" aria-pressed="false" title="바꿀 내용을 기울임"><i>I</i></button>
       <button class="mini-format-button" type="button" data-replace-format="underline" aria-pressed="false" title="바꿀 내용에 밑줄"><u>U</u></button>
       <button class="mini-format-button" type="button" data-replace-format="strikeThrough" aria-pressed="false" title="바꿀 내용에 취소선"><s>S</s></button>
-      <button id="replaceFormatClear" class="replace-format-clear" type="button">서식 해제</button>
+      <span class="replace-formats-label">제거</span>
+      <button class="mini-format-button is-remove" type="button" data-replace-remove-format="bold" aria-pressed="false" title="바꿀 내용에서 굵게 제거"><b>B</b></button>
+      <button class="mini-format-button is-remove" type="button" data-replace-remove-format="italic" aria-pressed="false" title="바꿀 내용에서 기울임 제거"><i>I</i></button>
+      <button class="mini-format-button is-remove" type="button" data-replace-remove-format="underline" aria-pressed="false" title="바꿀 내용에서 밑줄 제거"><u>U</u></button>
+      <button class="mini-format-button is-remove" type="button" data-replace-remove-format="strikeThrough" aria-pressed="false" title="바꿀 내용에서 취소선 제거"><s>S</s></button>
+      <button id="replaceFormatClear" class="replace-format-clear" type="button">설정 초기화</button>
     </div>
+    <div id="replaceFormatHint" class="find-specials">찾은 글자는 유지하고 서식만 바꾸려면 바꿀 내용을 비우세요. 찾을 내용도 비우고 제거 서식을 고른 뒤 모두 바꾸기를 누르면 문서 전체에서 제거합니다.</div>
     <div class="find-specials">
       특수기호: <code>^p</code> 문단 · <code>^l</code> 줄바꿈 · <code>^t</code> 탭 · <code>^^</code> ^ 문자
     </div>
@@ -585,7 +597,9 @@
       const replaceRow = document.getElementById('replaceRow');
       const replaceFormats = document.getElementById('replaceFormats');
       const replaceFormatButtons = [...document.querySelectorAll('[data-replace-format]')];
+      const replaceRemoveFormatButtons = [...document.querySelectorAll('[data-replace-remove-format]')];
       const replaceFormatClear = document.getElementById('replaceFormatClear');
+      const replaceFormatHint = document.getElementById('replaceFormatHint');
       const adjustParticles = document.getElementById('adjustParticles');
       const blockFormat = document.getElementById('blockFormat');
       const statefulCommandButtons = [...document.querySelectorAll('[data-command][aria-pressed]')];
@@ -851,26 +865,96 @@
 
       const escapeAttribute = (value) => escapeHtml(value).replace(/`/g, '&#096;');
 
-      const getReplacementFormats = () => replaceFormatButtons
-        .filter((button) => button.getAttribute('aria-pressed') === 'true')
-        .map((button) => button.dataset.replaceFormat);
+      const getReplacementFormatSettings = () => ({
+        apply: replaceFormatButtons
+          .filter((button) => button.getAttribute('aria-pressed') === 'true')
+          .map((button) => button.dataset.replaceFormat),
+        remove: replaceRemoveFormatButtons
+          .filter((button) => button.getAttribute('aria-pressed') === 'true')
+          .map((button) => button.dataset.replaceRemoveFormat)
+      });
 
-      const formattedReplacementHtml = (value, formats) => {
-        let html = escapeHtml(value);
-        if (formats.includes('strikeThrough')) html = `<s>${html}</s>`;
-        if (formats.includes('underline')) html = `<u>${html}</u>`;
-        if (formats.includes('italic')) html = `<em>${html}</em>`;
-        if (formats.includes('bold')) html = `<strong>${html}</strong>`;
-        return html;
+      const hasReplacementFormatSettings = (settings) => Boolean(settings.apply.length || settings.remove.length);
+
+      const setSelectionFormatState = (command, shouldBeActive) => {
+        let isActive = false;
+        try {
+          isActive = document.queryCommandState(command);
+        } catch (error) {
+          isActive = false;
+        }
+        if (isActive !== shouldBeActive) document.execCommand(command, false, null);
       };
 
-      const insertReplacementText = (value, formats = []) => {
+      const applyReplacementFormatSettings = (settings) => {
+        settings.remove.forEach((command) => setSelectionFormatState(command, false));
+        settings.apply.forEach((command) => setSelectionFormatState(command, true));
+      };
+
+      const insertReplacementText = (value, settings = { apply: [], remove: [] }) => {
         if (!value) return;
-        if (formats.length) {
-          document.execCommand('insertHTML', false, formattedReplacementHtml(value, formats));
-        } else {
-          document.execCommand('insertText', false, value);
-        }
+        applyReplacementFormatSettings(settings);
+        document.execCommand('insertText', false, value);
+      };
+
+      const applyFormattingToRange = (range, settings) => {
+        selectEditorRange(range);
+        applyReplacementFormatSettings(settings);
+        saveSelection();
+      };
+
+      const unwrapElement = (element) => {
+        const parent = element.parentNode;
+        if (!parent) return;
+        while (element.firstChild) parent.insertBefore(element.firstChild, element);
+        element.remove();
+      };
+
+      const removeFormatsFromDocument = (formats) => {
+        const selectors = {
+          bold: 'b,strong',
+          italic: 'i,em',
+          underline: 'u',
+          strikeThrough: 's,strike,del'
+        };
+        const affected = new Set();
+
+        formats.forEach((format) => {
+          editor.querySelectorAll(selectors[format]).forEach((element) => {
+            affected.add(element);
+            unwrapElement(element);
+          });
+        });
+
+        editor.querySelectorAll('[style]').forEach((element) => {
+          let changed = false;
+          if (formats.includes('bold') && element.style.fontWeight) {
+            element.style.fontWeight = '';
+            changed = true;
+          }
+          if (formats.includes('italic') && element.style.fontStyle) {
+            element.style.fontStyle = '';
+            changed = true;
+          }
+          const removedDecorations = [];
+          if (formats.includes('underline')) removedDecorations.push('underline');
+          if (formats.includes('strikeThrough')) removedDecorations.push('line-through');
+          if (removedDecorations.length) {
+            const decoration = String(element.style.textDecorationLine || element.style.textDecoration || '');
+            const nextDecoration = decoration.split(/\s+/).filter((value) => value && !removedDecorations.includes(value)).join(' ');
+            if (nextDecoration !== decoration) {
+              element.style.textDecoration = nextDecoration;
+              changed = true;
+            }
+          }
+          if (changed) affected.add(element);
+          if (!element.getAttribute('style')?.trim()) element.removeAttribute('style');
+        });
+
+        normalizeEmptyDocument();
+        updateCount();
+        updateFormattingControlsState();
+        return affected.size;
       };
 
       const sanitizeHtml = (html) => {
@@ -1239,6 +1323,7 @@ ${sanitizeHtml(editor.innerHTML)}
         findbar.classList.add('open');
         replaceRow.style.display = withReplace ? 'grid' : 'none';
         replaceFormats.style.display = withReplace ? 'flex' : 'none';
+        replaceFormatHint.style.display = withReplace ? 'block' : 'none';
         findText.focus();
         findText.select();
       };
@@ -1538,7 +1623,7 @@ ${sanitizeHtml(editor.innerHTML)}
         return { operations, particleCount };
       };
 
-      const replaceRangeWithSpecialTokens = (range, tokens, formats = []) => {
+      const replaceRangeWithSpecialTokens = (range, tokens, settings = { apply: [], remove: [] }) => {
         selectEditorRange(range);
         if (!range.collapsed) {
           const deleted = document.execCommand('delete', false, null);
@@ -1551,9 +1636,9 @@ ${sanitizeHtml(editor.innerHTML)}
 
         tokens.forEach((token) => {
           if (token.type === 'text' && token.value) {
-            insertReplacementText(token.value, formats);
+            insertReplacementText(token.value, settings);
           } else if (token.type === 'tab') {
-            insertReplacementText('\t', formats);
+            insertReplacementText('\t', settings);
           } else if (token.type === 'line') {
             const inserted = document.execCommand('insertLineBreak', false, null);
             if (!inserted) document.execCommand('insertHTML', false, '<br>');
@@ -1605,7 +1690,7 @@ ${sanitizeHtml(editor.innerHTML)}
         updateCount();
       };
 
-      const replaceAllSpecial = (parsedQuery, parsedReplacement, formats) => {
+      const replaceAllSpecial = (parsedQuery, parsedReplacement, settings, formattingOnly) => {
         if (!parsedQuery.text) return 0;
         let beforeIndex = Number.POSITIVE_INFINITY;
         let count = 0;
@@ -1617,7 +1702,11 @@ ${sanitizeHtml(editor.innerHTML)}
           if (index < 0) break;
           const range = createRangeFromModel(model, index, parsedQuery.text.length);
           if (!range) break;
-          replaceRangeWithSpecialTokens(range, parsedReplacement.tokens, formats);
+          if (formattingOnly) {
+            applyFormattingToRange(range, settings);
+          } else {
+            replaceRangeWithSpecialTokens(range, parsedReplacement.tokens, settings);
+          }
           beforeIndex = index;
           count += 1;
         }
@@ -1629,7 +1718,8 @@ ${sanitizeHtml(editor.innerHTML)}
         const selection = window.getSelection();
         const parsedQuery = parseSpecialCodes(findText.value);
         const parsedReplacement = parseSpecialCodes(replaceText.value);
-        const formats = getReplacementFormats();
+        const settings = getReplacementFormatSettings();
+        const formattingOnly = !replaceText.value && hasReplacementFormatSettings(settings);
         const usesSpecialCodes = parsedQuery.usesCodes || parsedReplacement.usesCodes;
         let particleCount = 0;
         let replaced = false;
@@ -1651,7 +1741,11 @@ ${sanitizeHtml(editor.innerHTML)}
           }
 
           if (range) {
-            replaceRangeWithSpecialTokens(range, parsedReplacement.tokens, formats);
+            if (formattingOnly) {
+              applyFormattingToRange(range, settings);
+            } else {
+              replaceRangeWithSpecialTokens(range, parsedReplacement.tokens, settings);
+            }
             replaced = true;
             if (parsedQuery.usesCodes) {
               specialSearchState = {
@@ -1669,6 +1763,15 @@ ${sanitizeHtml(editor.innerHTML)}
         }
 
         if (selection && selection.toString() === findText.value && selectionIsInsideEditor()) {
+          if (formattingOnly) {
+            applyFormattingToRange(selection.getRangeAt(0).cloneRange(), settings);
+            updateCount();
+            replaced = true;
+            findNext();
+            showToast('글자는 유지하고 선택한 서식만 변경했습니다.');
+            return;
+          }
+
           let insertion = replaceText.value;
           if (adjustParticles.checked && selection.rangeCount) {
             const range = selection.getRangeAt(0);
@@ -1686,7 +1789,7 @@ ${sanitizeHtml(editor.innerHTML)}
             }
           }
           const range = selection.getRangeAt(0).cloneRange();
-          replaceRangeWithSpecialTokens(range, [{ type: 'text', value: insertion }], formats);
+          replaceRangeWithSpecialTokens(range, [{ type: 'text', value: insertion }], settings);
           updateCount();
           replaced = true;
         }
@@ -1696,14 +1799,23 @@ ${sanitizeHtml(editor.innerHTML)}
 
       const replaceAll = () => {
         const query = findText.value;
-        if (!query) return;
+        const settings = getReplacementFormatSettings();
+        if (!query) {
+          if (settings.remove.length) {
+            const count = removeFormatsFromDocument(settings.remove);
+            showToast(`문서 전체에서 선택한 서식을 제거했습니다 · 요소 ${count}개 변경.`);
+          }
+          return;
+        }
         const parsedQuery = parseSpecialCodes(query);
         const parsedReplacement = parseSpecialCodes(replaceText.value);
-        const formats = getReplacementFormats();
+        const formattingOnly = !replaceText.value && hasReplacementFormatSettings(settings);
         if (parsedQuery.usesCodes || parsedReplacement.usesCodes) {
-          const count = replaceAllSpecial(parsedQuery, parsedReplacement, formats);
+          const count = replaceAllSpecial(parsedQuery, parsedReplacement, settings, formattingOnly);
           updateCount();
-          showToast(`${count}개 항목을 특수기호 규칙으로 바꿨습니다.`);
+          showToast(formattingOnly
+            ? `${count}개 항목의 서식을 변경했습니다.`
+            : `${count}개 항목을 특수기호 규칙으로 바꿨습니다.`);
           return;
         }
 
@@ -1712,16 +1824,21 @@ ${sanitizeHtml(editor.innerHTML)}
         const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
         const nodes = [];
         while (walker.nextNode()) nodes.push(walker.currentNode);
-        if (formats.length) {
+        if (hasReplacementFormatSettings(settings)) {
           nodes.reverse().forEach((node) => {
-            const result = getLiteralReplacementOperations(node.nodeValue, query, replaceText.value, adjustParticles.checked);
+            const replacement = formattingOnly ? query : replaceText.value;
+            const result = getLiteralReplacementOperations(node.nodeValue, query, replacement, !formattingOnly && adjustParticles.checked);
             particleCount += result.particleCount;
             count += result.operations.length;
             result.operations.reverse().forEach((operation) => {
               const range = document.createRange();
               range.setStart(node, operation.start);
               range.setEnd(node, operation.end);
-              replaceRangeWithSpecialTokens(range, [{ type: 'text', value: operation.insertion }], formats);
+              if (formattingOnly) {
+                applyFormattingToRange(range, settings);
+              } else {
+                replaceRangeWithSpecialTokens(range, [{ type: 'text', value: operation.insertion }], settings);
+              }
             });
           });
         } else {
@@ -1736,7 +1853,9 @@ ${sanitizeHtml(editor.innerHTML)}
         }
         updateCount();
         const particleMessage = particleCount ? ` · 조사 ${particleCount}개 자동 교정` : '';
-        showToast(`${count}개 항목을 바꿨습니다${particleMessage}.`);
+        showToast(formattingOnly
+          ? `${count}개 항목의 서식을 변경했습니다.`
+          : `${count}개 항목을 바꿨습니다${particleMessage}.`);
       };
 
       document.querySelectorAll('[data-command]').forEach((button) => {
@@ -1748,11 +1867,27 @@ ${sanitizeHtml(editor.innerHTML)}
         button.addEventListener('click', () => {
           const isActive = button.getAttribute('aria-pressed') === 'true';
           button.setAttribute('aria-pressed', String(!isActive));
+          if (!isActive) {
+            const opposite = replaceRemoveFormatButtons.find((candidate) => candidate.dataset.replaceRemoveFormat === button.dataset.replaceFormat);
+            opposite?.setAttribute('aria-pressed', 'false');
+          }
+        });
+      });
+
+      replaceRemoveFormatButtons.forEach((button) => {
+        button.addEventListener('click', () => {
+          const isActive = button.getAttribute('aria-pressed') === 'true';
+          button.setAttribute('aria-pressed', String(!isActive));
+          if (!isActive) {
+            const opposite = replaceFormatButtons.find((candidate) => candidate.dataset.replaceFormat === button.dataset.replaceRemoveFormat);
+            opposite?.setAttribute('aria-pressed', 'false');
+          }
         });
       });
 
       replaceFormatClear.addEventListener('click', () => {
-        replaceFormatButtons.forEach((button) => button.setAttribute('aria-pressed', 'false'));
+        [...replaceFormatButtons, ...replaceRemoveFormatButtons]
+          .forEach((button) => button.setAttribute('aria-pressed', 'false'));
         replaceText.focus();
       });
 
