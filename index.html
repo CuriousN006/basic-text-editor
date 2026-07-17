@@ -303,12 +303,6 @@
       outline: none;
     }
 
-    .mini-format-button.is-remove[aria-pressed="true"] {
-      border-color: #fca5a5;
-      background: #fee2e2;
-      color: var(--danger);
-    }
-
     .findbar {
       display: none;
       position: fixed;
@@ -386,22 +380,6 @@
     }
 
     .replace-formats-label { margin-right: 2px; }
-
-    .replace-format-clear {
-      padding: 4px 7px;
-      border: 0;
-      background: transparent;
-      color: var(--muted);
-      cursor: pointer;
-      font-size: 11px;
-    }
-
-    .replace-format-clear:hover,
-    .replace-format-clear:focus-visible {
-      color: var(--accent);
-      outline: none;
-      text-decoration: underline;
-    }
 
     .find-actions {
       display: flex;
@@ -540,19 +518,13 @@
       </label>
     </div>
     <div id="replaceFormats" class="replace-formats" aria-label="바꿀 내용 서식">
-      <span class="replace-formats-label">적용</span>
+      <span class="replace-formats-label">바꿀 서식</span>
       <button class="mini-format-button" type="button" data-replace-format="bold" aria-pressed="false" title="바꿀 내용을 굵게"><b>B</b></button>
       <button class="mini-format-button" type="button" data-replace-format="italic" aria-pressed="false" title="바꿀 내용을 기울임"><i>I</i></button>
       <button class="mini-format-button" type="button" data-replace-format="underline" aria-pressed="false" title="바꿀 내용에 밑줄"><u>U</u></button>
       <button class="mini-format-button" type="button" data-replace-format="strikeThrough" aria-pressed="false" title="바꿀 내용에 취소선"><s>S</s></button>
-      <span class="replace-formats-label">제거</span>
-      <button class="mini-format-button is-remove" type="button" data-replace-remove-format="bold" aria-pressed="false" title="바꿀 내용에서 굵게 제거"><b>B</b></button>
-      <button class="mini-format-button is-remove" type="button" data-replace-remove-format="italic" aria-pressed="false" title="바꿀 내용에서 기울임 제거"><i>I</i></button>
-      <button class="mini-format-button is-remove" type="button" data-replace-remove-format="underline" aria-pressed="false" title="바꿀 내용에서 밑줄 제거"><u>U</u></button>
-      <button class="mini-format-button is-remove" type="button" data-replace-remove-format="strikeThrough" aria-pressed="false" title="바꿀 내용에서 취소선 제거"><s>S</s></button>
-      <button id="replaceFormatClear" class="replace-format-clear" type="button">설정 초기화</button>
     </div>
-    <div id="replaceFormatHint" class="find-specials">찾은 글자는 유지하고 서식만 바꾸려면 바꿀 내용을 비우세요. 찾을 내용도 비우고 제거 서식을 고른 뒤 모두 바꾸기를 누르면 문서 전체에서 제거합니다.</div>
+    <div id="replaceFormatHint" class="find-specials">켜진 버튼의 서식은 적용하고 꺼진 버튼의 서식은 제거합니다. 바꿀 내용을 비우면 글자는 유지하고 서식만 변경합니다.</div>
     <div class="find-specials">
       특수기호: <code>^p</code> 문단 · <code>^l</code> 줄바꿈 · <code>^t</code> 탭 · <code>^^</code> ^ 문자
     </div>
@@ -597,8 +569,6 @@
       const replaceRow = document.getElementById('replaceRow');
       const replaceFormats = document.getElementById('replaceFormats');
       const replaceFormatButtons = [...document.querySelectorAll('[data-replace-format]')];
-      const replaceRemoveFormatButtons = [...document.querySelectorAll('[data-replace-remove-format]')];
-      const replaceFormatClear = document.getElementById('replaceFormatClear');
       const replaceFormatHint = document.getElementById('replaceFormatHint');
       const adjustParticles = document.getElementById('adjustParticles');
       const blockFormat = document.getElementById('blockFormat');
@@ -869,9 +839,9 @@
         apply: replaceFormatButtons
           .filter((button) => button.getAttribute('aria-pressed') === 'true')
           .map((button) => button.dataset.replaceFormat),
-        remove: replaceRemoveFormatButtons
-          .filter((button) => button.getAttribute('aria-pressed') === 'true')
-          .map((button) => button.dataset.replaceRemoveFormat)
+        remove: replaceFormatButtons
+          .filter((button) => button.getAttribute('aria-pressed') !== 'true')
+          .map((button) => button.dataset.replaceFormat)
       });
 
       const hasReplacementFormatSettings = (settings) => Boolean(settings.apply.length || settings.remove.length);
@@ -955,6 +925,17 @@
         updateCount();
         updateFormattingControlsState();
         return affected.size;
+      };
+
+      const applyFormatSettingsToDocument = (settings) => {
+        const removedCount = removeFormatsFromDocument(settings.remove);
+        if (settings.apply.length) {
+          const range = document.createRange();
+          range.selectNodeContents(editor);
+          applyFormattingToRange(range, { apply: settings.apply, remove: [] });
+        }
+        updateCount();
+        return removedCount;
       };
 
       const sanitizeHtml = (html) => {
@@ -1801,10 +1782,8 @@ ${sanitizeHtml(editor.innerHTML)}
         const query = findText.value;
         const settings = getReplacementFormatSettings();
         if (!query) {
-          if (settings.remove.length) {
-            const count = removeFormatsFromDocument(settings.remove);
-            showToast(`문서 전체에서 선택한 서식을 제거했습니다 · 요소 ${count}개 변경.`);
-          }
+          const count = applyFormatSettingsToDocument(settings);
+          showToast(`문서 전체의 서식을 버튼 상태대로 변경했습니다 · 요소 ${count}개 정리.`);
           return;
         }
         const parsedQuery = parseSpecialCodes(query);
@@ -1867,28 +1846,7 @@ ${sanitizeHtml(editor.innerHTML)}
         button.addEventListener('click', () => {
           const isActive = button.getAttribute('aria-pressed') === 'true';
           button.setAttribute('aria-pressed', String(!isActive));
-          if (!isActive) {
-            const opposite = replaceRemoveFormatButtons.find((candidate) => candidate.dataset.replaceRemoveFormat === button.dataset.replaceFormat);
-            opposite?.setAttribute('aria-pressed', 'false');
-          }
         });
-      });
-
-      replaceRemoveFormatButtons.forEach((button) => {
-        button.addEventListener('click', () => {
-          const isActive = button.getAttribute('aria-pressed') === 'true';
-          button.setAttribute('aria-pressed', String(!isActive));
-          if (!isActive) {
-            const opposite = replaceFormatButtons.find((candidate) => candidate.dataset.replaceFormat === button.dataset.replaceRemoveFormat);
-            opposite?.setAttribute('aria-pressed', 'false');
-          }
-        });
-      });
-
-      replaceFormatClear.addEventListener('click', () => {
-        [...replaceFormatButtons, ...replaceRemoveFormatButtons]
-          .forEach((button) => button.setAttribute('aria-pressed', 'false'));
-        replaceText.focus();
       });
 
       selectionCommandButtons.forEach((button) => {
