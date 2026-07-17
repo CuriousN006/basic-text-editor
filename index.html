@@ -844,6 +844,21 @@
           .map((button) => button.dataset.replaceFormat)
       });
 
+      const syncReplacementFormatButtonsFromSelection = () => {
+        const selectionInside = selectionIsInsideEditor();
+        replaceFormatButtons.forEach((button) => {
+          let isActive = false;
+          if (selectionInside) {
+            try {
+              isActive = document.queryCommandState(button.dataset.replaceFormat);
+            } catch (error) {
+              isActive = false;
+            }
+          }
+          button.setAttribute('aria-pressed', String(isActive));
+        });
+      };
+
       const hasReplacementFormatSettings = (settings) => Boolean(settings.apply.length || settings.remove.length);
 
       const setSelectionFormatState = (command, shouldBeActive) => {
@@ -1301,6 +1316,7 @@ ${sanitizeHtml(editor.innerHTML)}
           savedRange = selection.getRangeAt(0).cloneRange();
           findText.value = selectedText;
         }
+        if (withReplace) syncReplacementFormatButtonsFromSelection();
         findbar.classList.add('open');
         replaceRow.style.display = withReplace ? 'grid' : 'none';
         replaceFormats.style.display = withReplace ? 'flex' : 'none';
