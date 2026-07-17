@@ -580,6 +580,8 @@
       const linkPreviewUrl = document.getElementById('linkPreviewUrl');
       const linkPreviewCopy = document.getElementById('linkPreviewCopy');
       let currentFileName = '새 문서';
+      let currentHtmlFileHandle = null;
+      let currentMarkdownFileHandle = null;
       let toastTimer = null;
       let savedRange = null;
       let hoveredLink = null;
@@ -1167,6 +1169,114 @@ ${sanitizeHtml(editor.innerHTML)}
       const suggestedName = (extension) => {
         const base = (currentFileName || '문서').replace(/\.(md|markdown|txt|html?|docx?)$/i, '') || '문서';
         return `${base}.${extension}`;
+      };
+
+      const writeToFileHandle = async (handle, content) => {
+        const writable = await handle.createWritable();
+        await writable.write(content);
+        await writable.close();
+      };
+
+      const saveHtmlDocument = async () => {
+        if (typeof window.showSaveFilePicker !== 'function') {
+          downloadText(buildStandaloneHtml(), suggestedName('html'), 'text/html');
+          showToast('HTML 파일로 저장했습니다.');
+          return;
+        }
+
+        const hadHandle = Boolean(currentHtmlFileHandle);
+        try {
+          if (!currentHtmlFileHandle) {
+            currentHtmlFileHandle = await window.showSaveFilePicker({
+              suggestedName: suggestedName('html'),
+              types: [{ description: 'HTML 문서', accept: { 'text/html': ['.html', '.htm'] } }]
+            });
+          }
+          await writeToFileHandle(currentHtmlFileHandle, buildStandaloneHtml());
+          currentFileName = currentHtmlFileHandle.name;
+          updateCount();
+          showToast(hadHandle
+            ? `${currentFileName} 파일을 업데이트했습니다.`
+            : `${currentFileName} 파일로 저장했습니다.`);
+        } catch (error) {
+          if (error?.name === 'AbortError') return;
+          currentHtmlFileHandle = null;
+          showToast('HTML 파일을 저장하지 못했습니다.');
+        }
+      };
+
+      const saveMarkdownDocument = async () => {
+        if (typeof window.showSaveFilePicker !== 'function') {
+          downloadText(htmlToMarkdown(), suggestedName('md'), 'text/markdown');
+          showToast('마크다운 파일로 저장했습니다.');
+          return;
+        }
+
+        const hadHandle = Boolean(currentMarkdownFileHandle);
+        try {
+          if (!currentMarkdownFileHandle) {
+            currentMarkdownFileHandle = await window.showSaveFilePicker({
+              suggestedName: suggestedName('md'),
+              types: [{ description: '마크다운 문서', accept: { 'text/markdown': ['.md', '.markdown'] } }]
+            });
+          }
+          await writeToFileHandle(currentMarkdownFileHandle, htmlToMarkdown());
+          currentFileName = currentMarkdownFileHandle.name;
+          updateCount();
+          showToast(hadHandle
+            ? `${currentFileName} 파일을 업데이트했습니다.`
+            : `${currentFileName} 파일로 저장했습니다.`);
+        } catch (error) {
+          if (error?.name === 'AbortError') return;
+          currentMarkdownFileHandle = null;
+          showToast('마크다운 파일을 저장하지 못했습니다.');
+        }
+      };
+
+      const loadDocumentFile = async (file, handle = null) => {
+        const text = await file.text();
+        if (/\.html?$/i.test(file.name)) {
+          const parsed = new DOMParser().parseFromString(text, 'text/html');
+          editor.innerHTML = sanitizeHtml(parsed.body.innerHTML);
+          currentHtmlFileHandle = handle;
+          currentMarkdownFileHandle = null;
+        } else if (/\.(md|markdown)$/i.test(file.name)) {
+          editor.innerHTML = markdownToHtml(text);
+          currentHtmlFileHandle = null;
+          currentMarkdownFileHandle = handle;
+        } else {
+          editor.innerHTML = text.split(/\r?\n/).map((line) => line ? `<p>${escapeHtml(line)}</p>` : '<p class="blank-line"><br></p>').join('');
+          currentHtmlFileHandle = null;
+          currentMarkdownFileHandle = null;
+        }
+        normalizeEmptyDocument();
+        currentFileName = file.name;
+        updateCount();
+        focusEditor();
+        showToast(`${file.name} 파일을 열었습니다.`);
+      };
+
+      const openDocument = async () => {
+        if (typeof window.showOpenFilePicker !== 'function') {
+          fileInput.click();
+          return;
+        }
+        try {
+          const [handle] = await window.showOpenFilePicker({
+            multiple: false,
+            types: [{
+              description: '문서 파일',
+              accept: {
+                'text/html': ['.html', '.htm'],
+                'text/markdown': ['.md', '.markdown'],
+                'text/plain': ['.txt']
+              }
+            }]
+          });
+          if (handle) await loadDocumentFile(await handle.getFile(), handle);
+        } catch (error) {
+          if (error?.name !== 'AbortError') showToast('파일을 열지 못했습니다.');
+        }
       };
 
       const clipboardHtmlWithExplicitBreaks = (range) => {
@@ -1877,22 +1987,22 @@ ${sanitizeHtml(editor.innerHTML)}
 
       document.querySelectorAll('[data-action]').forEach((button) => {
         button.addEventListener('mousedown', () => saveSelection());
-        button.addEventListener('click', () => {
+        button.addEventListener('click', async () => {
           const action = button.dataset.action;
           if (action === 'new') {
             if (editor.innerText.trim() && !window.confirm('현재 문서를 지우고 새 문서를 만들까요?')) return;
             normalizeEmptyDocument(true);
             currentFileName = '새 문서';
+            currentHtmlFileHandle = null;
+            currentMarkdownFileHandle = null;
             updateCount();
             focusEditor();
           } else if (action === 'open') {
-            fileInput.click();
+            await openDocument();
           } else if (action === 'save-html') {
-            downloadText(buildStandaloneHtml(), suggestedName('html'), 'text/html');
-            showToast('HTML 파일로 저장했습니다.');
+            await saveHtmlDocument();
           } else if (action === 'save-md') {
-            downloadText(htmlToMarkdown(), suggestedName('md'), 'text/markdown');
-            showToast('마크다운 파일로 저장했습니다.');
+            await saveMarkdownDocument();
           } else if (action === 'copy-all') {
             copyAllRich();
           } else if (action === 'print') {
@@ -1917,20 +2027,7 @@ ${sanitizeHtml(editor.innerHTML)}
         const file = fileInput.files?.[0];
         if (!file) return;
         try {
-          const text = await file.text();
-          if (/\.html?$/i.test(file.name)) {
-            const parsed = new DOMParser().parseFromString(text, 'text/html');
-            editor.innerHTML = sanitizeHtml(parsed.body.innerHTML);
-          } else if (/\.(md|markdown)$/i.test(file.name)) {
-            editor.innerHTML = markdownToHtml(text);
-          } else {
-            editor.innerHTML = text.split(/\r?\n/).map((line) => line ? `<p>${escapeHtml(line)}</p>` : '<p class="blank-line"><br></p>').join('');
-          }
-          normalizeEmptyDocument();
-          currentFileName = file.name;
-          updateCount();
-          focusEditor();
-          showToast(`${file.name} 파일을 열었습니다.`);
+          await loadDocumentFile(file);
         } catch (error) {
           showToast('파일을 열지 못했습니다.');
         } finally {
@@ -2057,7 +2154,7 @@ ${sanitizeHtml(editor.innerHTML)}
         if (event.key === 'Escape') closeFindbar();
       });
 
-      document.addEventListener('keydown', (event) => {
+      document.addEventListener('keydown', async (event) => {
         const ctrl = event.ctrlKey || event.metaKey;
         const key = event.key.toLowerCase();
         if (ctrl && event.shiftKey && key === 'v') pastePlainRequested = true;
@@ -2074,8 +2171,7 @@ ${sanitizeHtml(editor.innerHTML)}
           openFindbar(false);
         } else if (key === 's' && !event.shiftKey) {
           event.preventDefault();
-          downloadText(buildStandaloneHtml(), suggestedName('html'), 'text/html');
-          showToast('HTML 파일로 저장했습니다.');
+          await saveHtmlDocument();
         }
       });
 
