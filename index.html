@@ -268,6 +268,41 @@
       color: var(--muted);
     }
 
+    .selection-toolbar {
+      display: none;
+      position: fixed;
+      align-items: center;
+      gap: 3px;
+      padding: 4px;
+      border: 1px solid #c9d1dc;
+      border-radius: 9px;
+      background: #ffffff;
+      box-shadow: 0 7px 24px rgba(32, 33, 36, .18);
+      z-index: 35;
+    }
+
+    .selection-toolbar.visible { display: flex; }
+
+    .mini-format-button {
+      min-width: 30px;
+      min-height: 30px;
+      padding: 4px 7px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+    }
+
+    .mini-format-button:hover,
+    .mini-format-button:focus-visible,
+    .mini-format-button[aria-pressed="true"] {
+      border-color: #93c5fd;
+      background: var(--accent-soft);
+      color: var(--accent);
+      outline: none;
+    }
+
     .findbar {
       display: none;
       position: fixed;
@@ -332,6 +367,34 @@
     .find-specials code {
       color: var(--text);
       font-family: Consolas, monospace;
+    }
+
+    .replace-formats {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .replace-formats-label { margin-right: 2px; }
+
+    .replace-format-clear {
+      padding: 4px 7px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 11px;
+    }
+
+    .replace-format-clear:hover,
+    .replace-format-clear:focus-visible {
+      color: var(--accent);
+      outline: none;
+      text-decoration: underline;
     }
 
     .find-actions {
@@ -403,7 +466,7 @@
 
     @media print {
       body { display: block; overflow: visible; background: white; }
-      .topbar, .findbar, .statusbar, .toast { display: none !important; }
+      .topbar, .findbar, .selection-toolbar, .statusbar, .toast { display: none !important; }
       .workspace { overflow: visible; padding: 0; }
       .page { width: auto; min-height: auto; padding: 0; box-shadow: none; }
       #editor { min-height: auto; }
@@ -470,6 +533,14 @@
         조사 자동 교정
       </label>
     </div>
+    <div id="replaceFormats" class="replace-formats" aria-label="바꿀 내용 서식">
+      <span class="replace-formats-label">바꿀 서식</span>
+      <button class="mini-format-button" type="button" data-replace-format="bold" aria-pressed="false" title="바꿀 내용을 굵게"><b>B</b></button>
+      <button class="mini-format-button" type="button" data-replace-format="italic" aria-pressed="false" title="바꿀 내용을 기울임"><i>I</i></button>
+      <button class="mini-format-button" type="button" data-replace-format="underline" aria-pressed="false" title="바꿀 내용에 밑줄"><u>U</u></button>
+      <button class="mini-format-button" type="button" data-replace-format="strikeThrough" aria-pressed="false" title="바꿀 내용에 취소선"><s>S</s></button>
+      <button id="replaceFormatClear" class="replace-format-clear" type="button">서식 해제</button>
+    </div>
     <div class="find-specials">
       특수기호: <code>^p</code> 문단 · <code>^l</code> 줄바꿈 · <code>^t</code> 탭 · <code>^^</code> ^ 문자
     </div>
@@ -491,6 +562,12 @@
     </div>
     <span class="link-preview-hint">링크 열기 또는 주소 복사</span>
   </div>
+  <div id="selectionToolbar" class="selection-toolbar" role="toolbar" aria-label="선택한 글자 빠른 서식">
+    <button class="mini-format-button" type="button" data-selection-command="bold" aria-pressed="false" title="굵게 (Ctrl+B)"><b>B</b></button>
+    <button class="mini-format-button" type="button" data-selection-command="italic" aria-pressed="false" title="기울임 (Ctrl+I)"><i>I</i></button>
+    <button class="mini-format-button" type="button" data-selection-command="underline" aria-pressed="false" title="밑줄 (Ctrl+U)"><u>U</u></button>
+    <button class="mini-format-button" type="button" data-selection-command="strikeThrough" aria-pressed="false" title="취소선"><s>S</s></button>
+  </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script>
@@ -506,10 +583,15 @@
       const findText = document.getElementById('findText');
       const replaceText = document.getElementById('replaceText');
       const replaceRow = document.getElementById('replaceRow');
+      const replaceFormats = document.getElementById('replaceFormats');
+      const replaceFormatButtons = [...document.querySelectorAll('[data-replace-format]')];
+      const replaceFormatClear = document.getElementById('replaceFormatClear');
       const adjustParticles = document.getElementById('adjustParticles');
       const blockFormat = document.getElementById('blockFormat');
       const statefulCommandButtons = [...document.querySelectorAll('[data-command][aria-pressed]')];
       const supportedBlockFormats = new Set(['P', 'H1', 'H2', 'H3', 'BLOCKQUOTE', 'PRE']);
+      const selectionToolbar = document.getElementById('selectionToolbar');
+      const selectionCommandButtons = [...document.querySelectorAll('[data-selection-command]')];
       const linkPreview = document.getElementById('linkPreview');
       const linkPreviewUrl = document.getElementById('linkPreviewUrl');
       const linkPreviewCopy = document.getElementById('linkPreviewCopy');
@@ -579,6 +661,54 @@
         }
         if (currentBlock === 'DIV') currentBlock = 'P';
         blockFormat.value = supportedBlockFormats.has(currentBlock) ? currentBlock : 'P';
+      };
+
+      const hideSelectionToolbar = () => {
+        selectionToolbar.classList.remove('visible');
+      };
+
+      const updateSelectionToolbarState = () => {
+        selectionCommandButtons.forEach((button) => {
+          let isActive = false;
+          try {
+            isActive = document.queryCommandState(button.dataset.selectionCommand);
+          } catch (error) {
+            isActive = false;
+          }
+          button.setAttribute('aria-pressed', String(isActive));
+        });
+      };
+
+      const showSelectionToolbar = () => {
+        const selection = window.getSelection();
+        if (!selection
+          || selection.isCollapsed
+          || !selection.rangeCount
+          || !selectionIsInsideEditor()
+          || findbar.contains(document.activeElement)) {
+          hideSelectionToolbar();
+          return;
+        }
+
+        const range = selection.getRangeAt(0);
+        const rect = range.getBoundingClientRect();
+        if (!rect.width && !rect.height) {
+          hideSelectionToolbar();
+          return;
+        }
+
+        savedRange = range.cloneRange();
+        updateSelectionToolbarState();
+        selectionToolbar.classList.add('visible');
+        const toolbarRect = selectionToolbar.getBoundingClientRect();
+        const left = Math.min(
+          Math.max(8, rect.left + (rect.width - toolbarRect.width) / 2),
+          window.innerWidth - toolbarRect.width - 8
+        );
+        const preferredTop = rect.top - toolbarRect.height - 8;
+        const top = preferredTop >= 8 ? preferredTop : Math.min(window.innerHeight - toolbarRect.height - 8, rect.bottom + 8);
+        selectionToolbar.style.left = `${left}px`;
+        selectionToolbar.style.top = `${top}px`;
       };
 
       const saveSelection = () => {
@@ -720,6 +850,28 @@
         .replace(/'/g, '&#039;');
 
       const escapeAttribute = (value) => escapeHtml(value).replace(/`/g, '&#096;');
+
+      const getReplacementFormats = () => replaceFormatButtons
+        .filter((button) => button.getAttribute('aria-pressed') === 'true')
+        .map((button) => button.dataset.replaceFormat);
+
+      const formattedReplacementHtml = (value, formats) => {
+        let html = escapeHtml(value);
+        if (formats.includes('strikeThrough')) html = `<s>${html}</s>`;
+        if (formats.includes('underline')) html = `<u>${html}</u>`;
+        if (formats.includes('italic')) html = `<em>${html}</em>`;
+        if (formats.includes('bold')) html = `<strong>${html}</strong>`;
+        return html;
+      };
+
+      const insertReplacementText = (value, formats = []) => {
+        if (!value) return;
+        if (formats.length) {
+          document.execCommand('insertHTML', false, formattedReplacementHtml(value, formats));
+        } else {
+          document.execCommand('insertText', false, value);
+        }
+      };
 
       const sanitizeHtml = (html) => {
         const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -1071,6 +1223,7 @@ ${sanitizeHtml(editor.innerHTML)}
       };
 
       const openFindbar = (withReplace) => {
+        hideSelectionToolbar();
         const selection = window.getSelection();
         const selectedText = withReplace
           && selection
@@ -1085,6 +1238,7 @@ ${sanitizeHtml(editor.innerHTML)}
         }
         findbar.classList.add('open');
         replaceRow.style.display = withReplace ? 'grid' : 'none';
+        replaceFormats.style.display = withReplace ? 'flex' : 'none';
         findText.focus();
         findText.select();
       };
@@ -1357,7 +1511,34 @@ ${sanitizeHtml(editor.innerHTML)}
         return { value: output, count, particleCount };
       };
 
-      const replaceRangeWithSpecialTokens = (range, tokens) => {
+      const getLiteralReplacementOperations = (source, query, replacement, withParticles) => {
+        const operations = [];
+        let cursor = 0;
+        let particleCount = 0;
+
+        while (cursor <= source.length) {
+          const start = source.indexOf(query, cursor);
+          if (start < 0) break;
+          let end = start + query.length;
+          let insertion = replacement;
+
+          if (withParticles) {
+            const adjustment = getParticleAdjustment(source.slice(end), replacement);
+            if (adjustment && adjustment.current !== adjustment.desired) {
+              end += adjustment.current.length;
+              insertion += adjustment.desired;
+              particleCount += 1;
+            }
+          }
+
+          operations.push({ start, end, insertion });
+          cursor = end;
+        }
+
+        return { operations, particleCount };
+      };
+
+      const replaceRangeWithSpecialTokens = (range, tokens, formats = []) => {
         selectEditorRange(range);
         if (!range.collapsed) {
           const deleted = document.execCommand('delete', false, null);
@@ -1370,9 +1551,9 @@ ${sanitizeHtml(editor.innerHTML)}
 
         tokens.forEach((token) => {
           if (token.type === 'text' && token.value) {
-            document.execCommand('insertText', false, token.value);
+            insertReplacementText(token.value, formats);
           } else if (token.type === 'tab') {
-            document.execCommand('insertText', false, '\t');
+            insertReplacementText('\t', formats);
           } else if (token.type === 'line') {
             const inserted = document.execCommand('insertLineBreak', false, null);
             if (!inserted) document.execCommand('insertHTML', false, '<br>');
@@ -1424,7 +1605,7 @@ ${sanitizeHtml(editor.innerHTML)}
         updateCount();
       };
 
-      const replaceAllSpecial = (parsedQuery, parsedReplacement) => {
+      const replaceAllSpecial = (parsedQuery, parsedReplacement, formats) => {
         if (!parsedQuery.text) return 0;
         let beforeIndex = Number.POSITIVE_INFINITY;
         let count = 0;
@@ -1436,7 +1617,7 @@ ${sanitizeHtml(editor.innerHTML)}
           if (index < 0) break;
           const range = createRangeFromModel(model, index, parsedQuery.text.length);
           if (!range) break;
-          replaceRangeWithSpecialTokens(range, parsedReplacement.tokens);
+          replaceRangeWithSpecialTokens(range, parsedReplacement.tokens, formats);
           beforeIndex = index;
           count += 1;
         }
@@ -1448,6 +1629,7 @@ ${sanitizeHtml(editor.innerHTML)}
         const selection = window.getSelection();
         const parsedQuery = parseSpecialCodes(findText.value);
         const parsedReplacement = parseSpecialCodes(replaceText.value);
+        const formats = getReplacementFormats();
         const usesSpecialCodes = parsedQuery.usesCodes || parsedReplacement.usesCodes;
         let particleCount = 0;
         let replaced = false;
@@ -1469,7 +1651,7 @@ ${sanitizeHtml(editor.innerHTML)}
           }
 
           if (range) {
-            replaceRangeWithSpecialTokens(range, parsedReplacement.tokens);
+            replaceRangeWithSpecialTokens(range, parsedReplacement.tokens, formats);
             replaced = true;
             if (parsedQuery.usesCodes) {
               specialSearchState = {
@@ -1503,7 +1685,8 @@ ${sanitizeHtml(editor.innerHTML)}
               }
             }
           }
-          document.execCommand('insertText', false, insertion);
+          const range = selection.getRangeAt(0).cloneRange();
+          replaceRangeWithSpecialTokens(range, [{ type: 'text', value: insertion }], formats);
           updateCount();
           replaced = true;
         }
@@ -1516,8 +1699,9 @@ ${sanitizeHtml(editor.innerHTML)}
         if (!query) return;
         const parsedQuery = parseSpecialCodes(query);
         const parsedReplacement = parseSpecialCodes(replaceText.value);
+        const formats = getReplacementFormats();
         if (parsedQuery.usesCodes || parsedReplacement.usesCodes) {
-          const count = replaceAllSpecial(parsedQuery, parsedReplacement);
+          const count = replaceAllSpecial(parsedQuery, parsedReplacement, formats);
           updateCount();
           showToast(`${count}개 항목을 특수기호 규칙으로 바꿨습니다.`);
           return;
@@ -1528,14 +1712,28 @@ ${sanitizeHtml(editor.innerHTML)}
         const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
         const nodes = [];
         while (walker.nextNode()) nodes.push(walker.currentNode);
-        nodes.forEach((node) => {
-          const result = replaceLiteralText(node.nodeValue, query, replaceText.value, adjustParticles.checked);
-          if (result.count) {
-            count += result.count;
+        if (formats.length) {
+          nodes.reverse().forEach((node) => {
+            const result = getLiteralReplacementOperations(node.nodeValue, query, replaceText.value, adjustParticles.checked);
             particleCount += result.particleCount;
-            node.nodeValue = result.value;
-          }
-        });
+            count += result.operations.length;
+            result.operations.reverse().forEach((operation) => {
+              const range = document.createRange();
+              range.setStart(node, operation.start);
+              range.setEnd(node, operation.end);
+              replaceRangeWithSpecialTokens(range, [{ type: 'text', value: operation.insertion }], formats);
+            });
+          });
+        } else {
+          nodes.forEach((node) => {
+            const result = replaceLiteralText(node.nodeValue, query, replaceText.value, adjustParticles.checked);
+            if (result.count) {
+              count += result.count;
+              particleCount += result.particleCount;
+              node.nodeValue = result.value;
+            }
+          });
+        }
         updateCount();
         const particleMessage = particleCount ? ` · 조사 ${particleCount}개 자동 교정` : '';
         showToast(`${count}개 항목을 바꿨습니다${particleMessage}.`);
@@ -1544,6 +1742,28 @@ ${sanitizeHtml(editor.innerHTML)}
       document.querySelectorAll('[data-command]').forEach((button) => {
         button.addEventListener('mousedown', (event) => event.preventDefault());
         button.addEventListener('click', () => runCommand(button.dataset.command));
+      });
+
+      replaceFormatButtons.forEach((button) => {
+        button.addEventListener('click', () => {
+          const isActive = button.getAttribute('aria-pressed') === 'true';
+          button.setAttribute('aria-pressed', String(!isActive));
+        });
+      });
+
+      replaceFormatClear.addEventListener('click', () => {
+        replaceFormatButtons.forEach((button) => button.setAttribute('aria-pressed', 'false'));
+        replaceText.focus();
+      });
+
+      selectionCommandButtons.forEach((button) => {
+        button.addEventListener('mousedown', (event) => event.preventDefault());
+        button.addEventListener('click', () => {
+          restoreSelection();
+          runCommand(button.dataset.selectionCommand);
+          saveSelection();
+          showSelectionToolbar();
+        });
       });
 
       document.querySelectorAll('[data-action]').forEach((button) => {
@@ -1610,6 +1830,7 @@ ${sanitizeHtml(editor.innerHTML)}
       });
 
       editor.addEventListener('input', () => {
+        hideSelectionToolbar();
         normalizeEmptyDocument();
         updateCount();
         updateFormattingControlsState();
@@ -1617,12 +1838,20 @@ ${sanitizeHtml(editor.innerHTML)}
       editor.addEventListener('mouseup', () => {
         saveSelection();
         updateFormattingControlsState();
+        setTimeout(showSelectionToolbar, 0);
       });
       editor.addEventListener('keyup', () => {
         saveSelection();
         updateFormattingControlsState();
+        showSelectionToolbar();
       });
-      document.addEventListener('selectionchange', updateFormattingControlsState);
+      document.addEventListener('selectionchange', () => {
+        updateFormattingControlsState();
+        if (selectionToolbar.classList.contains('visible')) showSelectionToolbar();
+      });
+      document.addEventListener('mousedown', (event) => {
+        if (!selectionToolbar.contains(event.target)) hideSelectionToolbar();
+      });
 
       editor.addEventListener('mouseover', (event) => {
         const anchor = event.target.closest?.('a');
@@ -1643,9 +1872,18 @@ ${sanitizeHtml(editor.innerHTML)}
       });
       linkPreviewCopy.addEventListener('click', copyPreviewUrl);
 
-      editor.addEventListener('scroll', hideLinkPreview);
-      window.addEventListener('scroll', hideLinkPreview, true);
-      window.addEventListener('resize', hideLinkPreview);
+      editor.addEventListener('scroll', () => {
+        hideLinkPreview();
+        hideSelectionToolbar();
+      });
+      window.addEventListener('scroll', () => {
+        hideLinkPreview();
+        hideSelectionToolbar();
+      }, true);
+      window.addEventListener('resize', () => {
+        hideLinkPreview();
+        hideSelectionToolbar();
+      });
       document.addEventListener('copy', handleEditorCopy);
 
       editor.addEventListener('click', (event) => {
