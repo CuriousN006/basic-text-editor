@@ -465,6 +465,7 @@
       <button class="toolbar-button" type="button" data-action="open" title="마크다운·HTML·텍스트 열기">파일 열기</button>
       <button class="toolbar-button" type="button" data-action="save-html" title="HTML로 저장 (Ctrl+S)">HTML 저장</button>
       <button class="toolbar-button" type="button" data-action="save-md" title="마크다운으로 저장">MD 저장</button>
+      <button class="toolbar-button" type="button" data-action="save-docx" title="Microsoft Word 문서로 저장">DOCX 저장</button>
       <span class="separator" aria-hidden="true"></span>
       <button class="toolbar-button primary" type="button" data-action="copy-all" title="문서 전체를 서식 있게 복사">전체 서식 복사</button>
       <button class="toolbar-button" type="button" data-action="print" title="인쇄 또는 PDF 저장">인쇄</button>
@@ -582,6 +583,7 @@
       let currentFileName = '새 문서';
       let currentHtmlFileHandle = null;
       let currentMarkdownFileHandle = null;
+      let currentDocxFileHandle = null;
       let toastTimer = null;
       let savedRange = null;
       let hoveredLink = null;
@@ -1171,6 +1173,317 @@ ${sanitizeHtml(editor.innerHTML)}
         return `${base}.${extension}`;
       };
 
+      const xmlEscape = (value) => String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+
+      const docxColorValue = (value) => {
+        const color = String(value || '').trim();
+        const shortHex = color.match(/^#([0-9a-f]{3})$/i);
+        if (shortHex) return shortHex[1].split('').map((part) => part + part).join('').toUpperCase();
+        const longHex = color.match(/^#([0-9a-f]{6})$/i);
+        if (longHex) return longHex[1].toUpperCase();
+        const rgb = color.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+        if (!rgb) return '';
+        return rgb.slice(1, 4).map((part) => Math.max(0, Math.min(255, Number(part))).toString(16).padStart(2, '0')).join('').toUpperCase();
+      };
+
+      const docxStateForElement = (element, inherited = {}) => {
+        const next = { ...inherited };
+        const tag = element.tagName;
+        if (['B', 'STRONG'].includes(tag)) next.bold = true;
+        if (['I', 'EM'].includes(tag)) next.italic = true;
+        if (tag === 'U') next.underline = true;
+        if (['S', 'STRIKE', 'DEL'].includes(tag)) next.strike = true;
+        if (tag === 'SUP') next.superscript = true;
+        if (tag === 'SUB') next.subscript = true;
+        if (tag === 'CODE') next.code = true;
+
+        const weight = String(element.style?.fontWeight || '');
+        if (weight === 'bold' || Number.parseInt(weight, 10) >= 600) next.bold = true;
+        if (element.style?.fontStyle === 'italic') next.italic = true;
+        const decoration = String(element.style?.textDecorationLine || element.style?.textDecoration || '');
+        if (decoration.includes('underline')) next.underline = true;
+        if (decoration.includes('line-through')) next.strike = true;
+        const color = docxColorValue(element.style?.color);
+        if (color) next.color = color;
+        return next;
+      };
+
+      const docxRunProperties = (state) => {
+        const properties = [];
+        if (state.bold) properties.push('<w:b/>');
+        if (state.italic) properties.push('<w:i/>');
+        if (state.underline) properties.push('<w:u w:val="single"/>');
+        if (state.strike) properties.push('<w:strike/>');
+        if (state.superscript) properties.push('<w:vertAlign w:val="superscript"/>');
+        if (state.subscript) properties.push('<w:vertAlign w:val="subscript"/>');
+        if (state.color) properties.push('<w:color w:val="' + state.color + '"/>');
+        if (state.code) {
+          properties.push('<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:eastAsia="Consolas"/>');
+          properties.push('<w:sz w:val="21"/><w:szCs w:val="21"/>');
+          properties.push('<w:shd w:val="clear" w:color="auto" w:fill="F3F4F6"/>');
+        }
+        return properties.length ? '<w:rPr>' + properties.join('') + '</w:rPr>' : '';
+      };
+
+      const docxTextRuns = (text, state) => String(text || '')
+        .replace(/\r\n?/g, '\n')
+        .split(/(\n|\t)/)
+        .map((part) => {
+          if (part === '\n') return '<w:r><w:br/></w:r>';
+          if (part === '\t') return '<w:r><w:tab/></w:r>';
+          if (!part) return '';
+          return '<w:r>' + docxRunProperties(state) + '<w:t xml:space="preserve">' + xmlEscape(part) + '</w:t></w:r>';
+        })
+        .join('');
+
+      const docxInlineNodes = (nodes, context, inherited = {}) => [...nodes].map((node) => {
+        if (node.nodeType === Node.TEXT_NODE) return docxTextRuns(node.nodeValue, inherited);
+        if (node.nodeType !== Node.ELEMENT_NODE) return '';
+        if (node.tagName === 'BR') return '<w:r><w:br/></w:r>';
+        if (['UL', 'OL', 'TABLE'].includes(node.tagName)) return '';
+
+        const state = docxStateForElement(node, inherited);
+        if (node.tagName === 'IMG') {
+          const label = node.getAttribute('alt') || node.getAttribute('src') || '이미지';
+          return docxTextRuns('[이미지: ' + label + ']', { ...state, italic: true, color: '5F6368' });
+        }
+        if (node.tagName === 'A') {
+          const href = String(node.getAttribute('href') || '').trim();
+          const content = docxInlineNodes(node.childNodes, context, { ...state, color: '0563C1', underline: true });
+          if (!/^(https?:|mailto:)/i.test(href)) return content;
+          let relationshipId = context.hyperlinks.get(href);
+          if (!relationshipId) {
+            relationshipId = 'rId' + context.nextRelationshipId;
+            context.nextRelationshipId += 1;
+            context.hyperlinks.set(href, relationshipId);
+          }
+          return '<w:hyperlink r:id="' + relationshipId + '" w:history="1">' + content + '</w:hyperlink>';
+        }
+        return docxInlineNodes(node.childNodes, context, state);
+      }).join('');
+
+      const docxParagraphXml = (element, context, options = {}) => {
+        const styleId = options.styleId || 'Normal';
+        const properties = ['<w:pStyle w:val="' + styleId + '"/>'];
+        if (options.numbering) {
+          properties.push(
+            '<w:numPr><w:ilvl w:val="' + Math.min(8, options.numbering.level) + '"/><w:numId w:val="' + options.numbering.numId + '"/></w:numPr>',
+            '<w:spacing w:after="80" w:line="360" w:lineRule="auto"/>'
+          );
+        }
+        if (['Heading1', 'Heading2', 'Heading3'].includes(styleId)) properties.push('<w:keepNext/>');
+        const alignment = String(element?.style?.textAlign || '').toLowerCase();
+        if (['left', 'center', 'right', 'justify'].includes(alignment)) properties.push('<w:jc w:val="' + alignment + '"/>');
+
+        const nodes = options.nodes || element?.childNodes || [];
+        const runs = docxInlineNodes(nodes, context, options.initialState || {});
+        return '<w:p><w:pPr>' + properties.join('') + '</w:pPr>' + runs + '</w:p>';
+      };
+
+      const docxHorizontalRuleXml = () => '<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="CBD5E1"/></w:pBdr><w:spacing w:before="120" w:after="120"/></w:pPr></w:p>';
+
+      const docxListXml = (list, context, level = 0) => [...list.children]
+        .filter((item) => item.tagName === 'LI')
+        .map((item) => {
+          const inlineNodes = [...item.childNodes].filter((node) =>
+            node.nodeType !== Node.ELEMENT_NODE || !['UL', 'OL'].includes(node.tagName)
+          );
+          const paragraph = docxParagraphXml(item, context, {
+            nodes: inlineNodes,
+            numbering: { numId: list.tagName === 'OL' ? 2 : 1, level }
+          });
+          const nested = [...item.children]
+            .filter((child) => ['UL', 'OL'].includes(child.tagName))
+            .map((child) => docxListXml(child, context, level + 1))
+            .join('');
+          return paragraph + nested;
+        })
+        .join('');
+
+      const docxTableWidths = (rows, columnCount) => {
+        const weights = Array.from({ length: columnCount }, () => 10);
+        rows.forEach((row) => {
+          [...row.cells].forEach((cell, index) => {
+            if (index < columnCount) weights[index] = Math.max(weights[index], Math.min(60, cell.innerText.trim().length || 1));
+          });
+        });
+        const minimum = Math.min(900, Math.floor(9360 / columnCount));
+        const remaining = 9360 - (minimum * columnCount);
+        const total = weights.reduce((sum, weight) => sum + weight, 0);
+        const widths = weights.map((weight) => minimum + Math.floor(Math.max(0, remaining) * weight / total));
+        widths[widths.length - 1] += 9360 - widths.reduce((sum, width) => sum + width, 0);
+        return widths;
+      };
+
+      const docxTableXml = (table, context) => {
+        const rows = [...table.rows];
+        const columnCount = Math.max(1, ...rows.map((row) => row.cells.length));
+        const widths = docxTableWidths(rows, columnCount);
+        const grid = widths.map((width) => '<w:gridCol w:w="' + width + '"/>').join('');
+        const rowXml = rows.map((row) => {
+          const cells = [...row.cells].map((cell, index) => {
+            const width = widths[index] || widths[widths.length - 1];
+            const content = docxParagraphXml(cell, context, {
+              initialState: { bold: cell.tagName === 'TH' }
+            });
+            const shading = cell.tagName === 'TH' ? '<w:shd w:val="clear" w:color="auto" w:fill="F2F4F7"/>' : '';
+            return '<w:tc><w:tcPr><w:tcW w:w="' + width + '" w:type="dxa"/>' + shading + '<w:vAlign w:val="center"/></w:tcPr>' + content + '</w:tc>';
+          }).join('');
+          return '<w:tr>' + cells + '</w:tr>';
+        }).join('');
+        return '<w:tbl><w:tblPr><w:tblW w:w="9360" w:type="dxa"/><w:tblInd w:w="120" w:type="dxa"/><w:tblLayout w:type="fixed"/><w:tblBorders><w:top w:val="single" w:sz="4" w:color="CBD5E1"/><w:left w:val="single" w:sz="4" w:color="CBD5E1"/><w:bottom w:val="single" w:sz="4" w:color="CBD5E1"/><w:right w:val="single" w:sz="4" w:color="CBD5E1"/><w:insideH w:val="single" w:sz="4" w:color="CBD5E1"/><w:insideV w:val="single" w:sz="4" w:color="CBD5E1"/></w:tblBorders><w:tblCellMar><w:top w:w="80" w:type="dxa"/><w:start w:w="120" w:type="dxa"/><w:bottom w:w="80" w:type="dxa"/><w:end w:w="120" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid>' + grid + '</w:tblGrid>' + rowXml + '</w:tbl>';
+      };
+
+      const docxBlockXml = (node, context) => {
+        if (node.nodeType === Node.TEXT_NODE) {
+          return node.nodeValue.trim() ? docxParagraphXml(null, context, { nodes: [node] }) : '';
+        }
+        if (node.nodeType !== Node.ELEMENT_NODE) return '';
+        const tag = node.tagName;
+        if (tag === 'UL' || tag === 'OL') return docxListXml(node, context);
+        if (tag === 'TABLE') return docxTableXml(node, context);
+        if (tag === 'HR') return docxHorizontalRuleXml();
+        const styles = {
+          H1: 'Heading1',
+          H2: 'Heading2',
+          H3: 'Heading3',
+          BLOCKQUOTE: 'BlockQuote',
+          PRE: 'Preformatted'
+        };
+        return docxParagraphXml(node, context, { styleId: styles[tag] || 'Normal' });
+      };
+
+      const docxNumberingXml = () => {
+        const bulletLevels = Array.from({ length: 9 }, (_, level) => {
+          const left = 720 + (level * 360);
+          return '<w:lvl w:ilvl="' + level + '"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:lvlJc w:val="left"/><w:pPr><w:tabs><w:tab w:val="num" w:pos="' + left + '"/></w:tabs><w:ind w:left="' + left + '" w:hanging="360"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Arial"/></w:rPr></w:lvl>';
+        }).join('');
+        const decimalLevels = Array.from({ length: 9 }, (_, level) => {
+          const left = 720 + (level * 360);
+          return '<w:lvl w:ilvl="' + level + '"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%' + (level + 1) + '."/><w:lvlJc w:val="left"/><w:pPr><w:tabs><w:tab w:val="num" w:pos="' + left + '"/></w:tabs><w:ind w:left="' + left + '" w:hanging="360"/></w:pPr></w:lvl>';
+        }).join('');
+        return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="0"><w:multiLevelType w:val="hybridMultilevel"/>' + bulletLevels + '</w:abstractNum><w:abstractNum w:abstractNumId="1"><w:multiLevelType w:val="multilevel"/>' + decimalLevels + '</w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num><w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num></w:numbering>';
+      };
+
+      const docxStylesXml = () => '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+        '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Malgun Gothic" w:cs="Arial"/><w:sz w:val="24"/><w:szCs w:val="24"/><w:lang w:val="ko-KR" w:eastAsia="ko-KR"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="160" w:line="360" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>' +
+        '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="0" w:after="160" w:line="360" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Malgun Gothic"/><w:sz w:val="24"/><w:szCs w:val="24"/><w:color w:val="202124"/></w:rPr></w:style>' +
+        '<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:uiPriority w:val="9"/><w:pPr><w:keepNext/><w:keepLines/><w:spacing w:before="360" w:after="160"/></w:pPr><w:rPr><w:b/><w:sz w:val="48"/><w:szCs w:val="48"/><w:color w:val="202124"/></w:rPr></w:style>' +
+        '<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:uiPriority w:val="9"/><w:pPr><w:keepNext/><w:keepLines/><w:spacing w:before="280" w:after="140"/></w:pPr><w:rPr><w:b/><w:sz w:val="37"/><w:szCs w:val="37"/><w:color w:val="202124"/></w:rPr></w:style>' +
+        '<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:uiPriority w:val="9"/><w:pPr><w:keepNext/><w:keepLines/><w:spacing w:before="200" w:after="100"/></w:pPr><w:rPr><w:b/><w:sz w:val="30"/><w:szCs w:val="30"/><w:color w:val="202124"/></w:rPr></w:style>' +
+        '<w:style w:type="paragraph" w:styleId="BlockQuote"><w:name w:val="Block Quote"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:ind w:left="360" w:right="240"/><w:spacing w:before="120" w:after="120"/><w:pBdr><w:left w:val="single" w:sz="18" w:space="8" w:color="94A3B8"/></w:pBdr><w:shd w:val="clear" w:color="auto" w:fill="F8FAFC"/></w:pPr><w:rPr><w:color w:val="475569"/></w:rPr></w:style>' +
+        '<w:style w:type="paragraph" w:styleId="Preformatted"><w:name w:val="Preformatted"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="120" w:after="160" w:line="280" w:lineRule="auto"/><w:ind w:left="240" w:right="240"/><w:shd w:val="clear" w:color="auto" w:fill="F4F5F7"/></w:pPr><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:eastAsia="Consolas"/><w:sz w:val="21"/><w:szCs w:val="21"/></w:rPr></w:style>' +
+        '</w:styles>';
+
+      const zipCrc32 = (bytes) => {
+        const table = zipCrc32.table || (zipCrc32.table = Array.from({ length: 256 }, (_, index) => {
+          let value = index;
+          for (let bit = 0; bit < 8; bit += 1) value = (value & 1) ? (0xEDB88320 ^ (value >>> 1)) : (value >>> 1);
+          return value >>> 0;
+        }));
+        let crc = 0xFFFFFFFF;
+        bytes.forEach((byte) => { crc = table[(crc ^ byte) & 0xFF] ^ (crc >>> 8); });
+        return (crc ^ 0xFFFFFFFF) >>> 0;
+      };
+
+      const zipU16 = (value) => new Uint8Array([value & 0xFF, (value >>> 8) & 0xFF]);
+      const zipU32 = (value) => new Uint8Array([value & 0xFF, (value >>> 8) & 0xFF, (value >>> 16) & 0xFF, (value >>> 24) & 0xFF]);
+      const zipConcat = (parts) => {
+        const output = new Uint8Array(parts.reduce((size, part) => size + part.length, 0));
+        let offset = 0;
+        parts.forEach((part) => {
+          output.set(part, offset);
+          offset += part.length;
+        });
+        return output;
+      };
+
+      const createStoredZip = (entries) => {
+        const encoder = new TextEncoder();
+        const now = new Date();
+        const dosTime = (now.getHours() << 11) | (now.getMinutes() << 5) | Math.floor(now.getSeconds() / 2);
+        const dosDate = ((Math.max(1980, now.getFullYear()) - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+        const localParts = [];
+        const centralParts = [];
+        let offset = 0;
+
+        entries.forEach(([name, content]) => {
+          const nameBytes = encoder.encode(name);
+          const data = content instanceof Uint8Array ? content : encoder.encode(content);
+          const crc = zipCrc32(data);
+          const localHeader = zipConcat([
+            zipU32(0x04034B50), zipU16(20), zipU16(0x0800), zipU16(0), zipU16(dosTime), zipU16(dosDate),
+            zipU32(crc), zipU32(data.length), zipU32(data.length), zipU16(nameBytes.length), zipU16(0), nameBytes
+          ]);
+          const centralHeader = zipConcat([
+            zipU32(0x02014B50), zipU16(20), zipU16(20), zipU16(0x0800), zipU16(0), zipU16(dosTime), zipU16(dosDate),
+            zipU32(crc), zipU32(data.length), zipU32(data.length), zipU16(nameBytes.length), zipU16(0), zipU16(0),
+            zipU16(0), zipU16(0), zipU32(0), zipU32(offset), nameBytes
+          ]);
+          localParts.push(localHeader, data);
+          centralParts.push(centralHeader);
+          offset += localHeader.length + data.length;
+        });
+
+        const centralDirectory = zipConcat(centralParts);
+        const endRecord = zipConcat([
+          zipU32(0x06054B50), zipU16(0), zipU16(0), zipU16(entries.length), zipU16(entries.length),
+          zipU32(centralDirectory.length), zipU32(offset), zipU16(0)
+        ]);
+        return new Blob([...localParts, centralDirectory, endRecord], {
+          type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        });
+      };
+
+      const buildDocxBlob = () => {
+        const context = { hyperlinks: new Map(), nextRelationshipId: 3 };
+        const body = [...editor.childNodes].map((node) => docxBlockXml(node, context)).join('');
+        const relationships = [
+          '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>',
+          '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>'
+        ];
+        context.hyperlinks.forEach((relationshipId, href) => {
+          relationships.push('<Relationship Id="' + relationshipId + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="' + xmlEscape(href) + '" TargetMode="External"/>');
+        });
+        const timestamp = new Date().toISOString();
+        const documentXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>' +
+          (body || '<w:p/>') +
+          '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/><w:cols w:space="708"/><w:docGrid w:linePitch="360"/></w:sectPr></w:body></w:document>';
+        const contentTypes = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>';
+        const rootRelationships = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>';
+        const documentRelationships = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + relationships.join('') + '</Relationships>';
+        const coreProperties = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>' + xmlEscape(currentFileName.replace(/\.[^.]+$/, '') || '문서') + '</dc:title><dc:creator>오프라인 리치 라이터</dc:creator><cp:lastModifiedBy>오프라인 리치 라이터</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">' + timestamp + '</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">' + timestamp + '</dcterms:modified></cp:coreProperties>';
+        const appProperties = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>오프라인 리치 라이터</Application><DocSecurity>0</DocSecurity><ScaleCrop>false</ScaleCrop><Company></Company><LinksUpToDate>false</LinksUpToDate><SharedDoc>false</SharedDoc><HyperlinksChanged>false</HyperlinksChanged><AppVersion>1.0</AppVersion></Properties>';
+
+        return createStoredZip([
+          ['[Content_Types].xml', contentTypes],
+          ['_rels/.rels', rootRelationships],
+          ['docProps/core.xml', coreProperties],
+          ['docProps/app.xml', appProperties],
+          ['word/document.xml', documentXml],
+          ['word/styles.xml', docxStylesXml()],
+          ['word/numbering.xml', docxNumberingXml()],
+          ['word/_rels/document.xml.rels', documentRelationships]
+        ]);
+      };
+
+      const downloadBlob = (blob, fileName) => {
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = fileName;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      };
+
       const writeToFileHandle = async (handle, content) => {
         const writable = await handle.createWritable();
         await writable.write(content);
@@ -1233,6 +1546,39 @@ ${sanitizeHtml(editor.innerHTML)}
         }
       };
 
+      const saveDocxDocument = async () => {
+        const mime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+        if (typeof window.showSaveFilePicker !== 'function') {
+          try {
+            downloadBlob(buildDocxBlob(), suggestedName('docx'));
+            showToast('DOCX 파일로 저장했습니다.');
+          } catch (error) {
+            showToast('DOCX 파일을 만들지 못했습니다.');
+          }
+          return;
+        }
+
+        const hadHandle = Boolean(currentDocxFileHandle);
+        try {
+          if (!currentDocxFileHandle) {
+            currentDocxFileHandle = await window.showSaveFilePicker({
+              suggestedName: suggestedName('docx'),
+              types: [{ description: 'Microsoft Word 문서', accept: { [mime]: ['.docx'] } }]
+            });
+          }
+          await writeToFileHandle(currentDocxFileHandle, buildDocxBlob());
+          currentFileName = currentDocxFileHandle.name;
+          updateCount();
+          showToast(hadHandle
+            ? currentFileName + ' 파일을 업데이트했습니다.'
+            : currentFileName + ' 파일로 저장했습니다.');
+        } catch (error) {
+          if (error?.name === 'AbortError') return;
+          currentDocxFileHandle = null;
+          showToast('DOCX 파일을 저장하지 못했습니다.');
+        }
+      };
+
       const loadDocumentFile = async (file, handle = null) => {
         const text = await file.text();
         if (/\.html?$/i.test(file.name)) {
@@ -1240,14 +1586,17 @@ ${sanitizeHtml(editor.innerHTML)}
           editor.innerHTML = sanitizeHtml(parsed.body.innerHTML);
           currentHtmlFileHandle = handle;
           currentMarkdownFileHandle = null;
+          currentDocxFileHandle = null;
         } else if (/\.(md|markdown)$/i.test(file.name)) {
           editor.innerHTML = markdownToHtml(text);
           currentHtmlFileHandle = null;
           currentMarkdownFileHandle = handle;
+          currentDocxFileHandle = null;
         } else {
           editor.innerHTML = text.split(/\r?\n/).map((line) => line ? `<p>${escapeHtml(line)}</p>` : '<p class="blank-line"><br></p>').join('');
           currentHtmlFileHandle = null;
           currentMarkdownFileHandle = null;
+          currentDocxFileHandle = null;
         }
         normalizeEmptyDocument();
         currentFileName = file.name;
@@ -1995,6 +2344,7 @@ ${sanitizeHtml(editor.innerHTML)}
             currentFileName = '새 문서';
             currentHtmlFileHandle = null;
             currentMarkdownFileHandle = null;
+            currentDocxFileHandle = null;
             updateCount();
             focusEditor();
           } else if (action === 'open') {
@@ -2003,6 +2353,8 @@ ${sanitizeHtml(editor.innerHTML)}
             await saveHtmlDocument();
           } else if (action === 'save-md') {
             await saveMarkdownDocument();
+          } else if (action === 'save-docx') {
+            await saveDocxDocument();
           } else if (action === 'copy-all') {
             copyAllRich();
           } else if (action === 'print') {
