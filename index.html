@@ -1884,6 +1884,29 @@ ${sanitizeHtml(editor.innerHTML)}
         }
       };
 
+      const normalizeClipboardLinks = (container) => {
+        [...container.querySelectorAll('a')].forEach((anchor) => {
+          const source = String(anchor.getAttribute('href') || '').trim();
+          let href = '';
+          try {
+            const resolved = new URL(source, document.baseURI);
+            if (resolved.protocol === 'http:' || resolved.protocol === 'https:') href = resolved.href;
+          } catch (error) {
+            href = '';
+          }
+
+          if (!href) {
+            anchor.replaceWith(...anchor.childNodes);
+            return;
+          }
+
+          const cleanAnchor = document.createElement('a');
+          cleanAnchor.setAttribute('href', href);
+          while (anchor.firstChild) cleanAnchor.appendChild(anchor.firstChild);
+          anchor.replaceWith(cleanAnchor);
+        });
+      };
+
       const clipboardHtmlWithExplicitBreaks = (range) => {
         const container = document.createElement('div');
         container.appendChild(range.cloneContents());
@@ -1986,6 +2009,7 @@ ${sanitizeHtml(editor.innerHTML)}
           });
         });
 
+        normalizeClipboardLinks(container);
         return sanitizeHtml(container.innerHTML);
       };
 
@@ -2835,4 +2859,3 @@ ${sanitizeHtml(editor.innerHTML)}
   </script>
 </body>
 </html>
-
