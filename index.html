@@ -202,6 +202,7 @@
       min-width: 48px;
       padding: 8px 10px;
       border: 1px solid #9ca3af;
+      text-align: left;
       vertical-align: top;
     }
     #editor th {
@@ -606,6 +607,10 @@
       <button class="toolbar-button" type="button" data-command="underline" aria-pressed="false" title="밑줄 (Ctrl+U)"><u>U</u></button>
       <button class="toolbar-button" type="button" data-command="strikeThrough" aria-pressed="false" title="취소선"><s>S</s></button>
       <span class="separator" aria-hidden="true"></span>
+      <button class="toolbar-button" type="button" data-command="justifyLeft" aria-pressed="false" title="왼쪽 정렬">왼쪽</button>
+      <button class="toolbar-button" type="button" data-command="justifyCenter" aria-pressed="false" title="가운데 정렬">가운데</button>
+      <button class="toolbar-button" type="button" data-command="justifyRight" aria-pressed="false" title="오른쪽 정렬">오른쪽</button>
+      <span class="separator" aria-hidden="true"></span>
       <button class="toolbar-button" type="button" data-command="insertUnorderedList" aria-pressed="false" title="글머리 기호 목록">• 목록</button>
       <button class="toolbar-button" type="button" data-command="insertOrderedList" aria-pressed="false" title="번호 목록">1. 목록</button>
       <button class="toolbar-button" type="button" data-action="link" title="하이퍼링크 (Ctrl+K)">🔗</button>
@@ -667,7 +672,7 @@
       <label>열 <input id="tableColumns" type="number" min="1" max="20" value="2"></label>
     </div>
     <label class="table-header-option">
-      <input id="tableHeaderRow" type="checkbox" checked>
+      <input id="tableHeaderRow" type="checkbox">
       첫 행을 제목 행으로 사용
     </label>
     <div class="table-picker-actions">
@@ -854,6 +859,30 @@
         savedRange = range.cloneRange();
       };
 
+      const appendTableRowUndoably = (table) => {
+        const columnCount = Math.max(1, table.rows[0]?.cells.length || 1);
+        const marker = `appended-table-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const replacement = table.cloneNode(true);
+        replacement.setAttribute('data-append-marker', marker);
+        const row = replacement.insertRow();
+        for (let column = 0; column < columnCount; column += 1) {
+          row.insertCell().innerHTML = '<br>';
+        }
+
+        const range = document.createRange();
+        range.selectNode(table);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        document.execCommand('insertHTML', false, replacement.outerHTML);
+
+        const insertedTable = editor.querySelector(`[data-append-marker="${marker}"]`);
+        if (!insertedTable) return null;
+        insertedTable.removeAttribute('data-append-marker');
+        updateCount();
+        return insertedTable.rows[insertedTable.rows.length - 1]?.cells[0] || null;
+      };
+
       const insertTable = (requestedRows, requestedColumns) => {
         const rows = clampTableSize(requestedRows, 50);
         const columns = clampTableSize(requestedColumns, 20);
@@ -868,7 +897,7 @@
         restoreSelection();
         focusEditor();
         document.execCommand('insertHTML', false,
-          `<table data-insert-marker="${marker}"><tbody>${body}</tbody></table><p><br></p>`);
+          `<table data-insert-marker="${marker}"><tbody>${body}</tbody></table>`);
         const table = editor.querySelector(`[data-insert-marker="${marker}"]`);
         if (table) {
           table.removeAttribute('data-insert-marker');
@@ -1941,18 +1970,68 @@ ${sanitizeHtml(editor.innerHTML)}
             return;
           }
 
-          const formats = ['b', 'i', 'u', 's']
-            .filter((tagName) => anchor.querySelector(tagName) && !anchor.closest(tagName));
-          const cleanAnchor = document.createElement('a');
-          cleanAnchor.setAttribute('href', href);
-          cleanAnchor.textContent = anchor.textContent;
-          let replacement = cleanAnchor;
-          formats.slice().reverse().forEach((tagName) => {
-            const wrapper = document.createElement(tagName);
-            wrapper.appendChild(replacement);
-            replacement = wrapper;
-          });
+          const linkedSegment = (node, formats) => {
+            const cleanAnchor = document.createElement('a');
+            cleanAnchor.setAttribute('href', href);
+            cleanAnchor.appendChild(node);
+            let replacement = cleanAnchor;
+            formats.slice().reverse().forEach((tagName) => {
+              const wrapper = document.createElement(tagName);
+              wrapper.appendChild(replacement);
+              replacement = wrapper;
+            });
+            return replacement;
+          };
+
+          const appendSegments = (node, formats, destination) => {
+            if (node.nodeType === Node.TEXT_NODE) {
+              if (node.nodeValue) destination.appendChild(linkedSegment(node.cloneNode(), formats));
+              return;
+            }
+            if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+            const tagName = node.tagName.toLowerCase();
+            if (['b', 'i', 'u', 's'].includes(tagName)) {
+              [...node.childNodes].forEach((child) => appendSegments(child, [...formats, tagName], destination));
+              return;
+            }
+
+            if (!node.childNodes.length) {
+              destination.appendChild(linkedSegment(node.cloneNode(true), formats));
+              return;
+            }
+
+            const shell = node.cloneNode(false);
+            [...node.childNodes].forEach((child) => appendSegments(child, formats, shell));
+            destination.appendChild(shell);
+          };
+
+          const replacement = document.createDocumentFragment();
+          [...anchor.childNodes].forEach((child) => appendSegments(child, [], replacement));
           anchor.replaceWith(replacement);
+        });
+      };
+
+      const applyClipboardTableStyles = (container) => {
+        [...container.querySelectorAll('table')].forEach((table) => {
+          table.setAttribute('border', '1');
+          table.setAttribute('cellspacing', '0');
+          table.setAttribute('cellpadding', '0');
+          table.style.width = '100%';
+          table.style.border = '1px solid #9ca3af';
+          table.style.borderCollapse = 'collapse';
+          table.style.tableLayout = 'fixed';
+
+          [...table.querySelectorAll('th,td')].forEach((cell) => {
+            cell.style.border = '1px solid #9ca3af';
+            cell.style.padding = '8px 10px';
+            cell.style.textAlign = cell.style.textAlign || 'left';
+            cell.style.verticalAlign = 'top';
+            if (cell.tagName === 'TH') {
+              cell.style.background = '#f1f5f9';
+              cell.style.fontWeight = '700';
+            }
+          });
         });
       };
 
@@ -2051,6 +2130,12 @@ ${sanitizeHtml(editor.innerHTML)}
           const parts = breakParts(element);
           if (!parts.length) return;
           element.replaceChildren();
+          if ((element.tagName === 'TD' || element.tagName === 'TH')
+            && !element.textContent
+            && parts.every((part) => !part.textContent && !part.querySelector?.('img,hr,table,iframe,video,audio,canvas,svg'))) {
+            element.appendChild(document.createTextNode('\u00A0'));
+            return;
+          }
           parts.forEach((part) => {
             const line = document.createElement('div');
             appendPart(line, part);
@@ -2060,6 +2145,7 @@ ${sanitizeHtml(editor.innerHTML)}
 
         normalizeClipboardFormatting(container);
         normalizeClipboardLinks(container);
+        applyClipboardTableStyles(container);
         return sanitizeHtml(container.innerHTML);
       };
 
@@ -2763,14 +2849,7 @@ ${sanitizeHtml(editor.innerHTML)}
         event.preventDefault();
         let target = event.shiftKey ? cells[index - 1] : cells[index + 1];
         if (!target && !event.shiftKey) {
-          const columnCount = Math.max(1, table.rows[0]?.cells.length || 1);
-          const row = table.insertRow();
-          for (let column = 0; column < columnCount; column += 1) {
-            const nextCell = row.insertCell();
-            nextCell.innerHTML = '<br>';
-          }
-          target = row.cells[0];
-          updateCount();
+          target = appendTableRowUndoably(table);
         }
         placeCaretInCell(target);
       });
