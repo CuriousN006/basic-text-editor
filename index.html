@@ -191,6 +191,23 @@
     #editor a { color: #1558d6; text-decoration: underline; }
     #editor hr { margin: 2em 0; border: 0; border-top: 1px solid #cdd2d9; }
     #editor img { max-width: 100%; height: auto; }
+    #editor table {
+      width: 100%;
+      margin: .8em 0 1em;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+    #editor th,
+    #editor td {
+      min-width: 48px;
+      padding: 8px 10px;
+      border: 1px solid #9ca3af;
+      vertical-align: top;
+    }
+    #editor th {
+      background: #f1f5f9;
+      font-weight: 700;
+    }
 
     .link-preview {
       display: none;
@@ -282,6 +299,107 @@
     }
 
     .selection-toolbar.visible { display: flex; }
+
+    .table-picker {
+      display: none;
+      position: fixed;
+      width: 286px;
+      padding: 12px;
+      border: 1px solid #c9d1dc;
+      border-radius: 10px;
+      background: #ffffff;
+      box-shadow: var(--shadow);
+      z-index: 36;
+    }
+
+    .table-picker.open { display: block; }
+
+    .table-picker-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 9px;
+      font-weight: 700;
+    }
+
+    .table-picker-close {
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      cursor: pointer;
+    }
+
+    .table-picker-close:hover,
+    .table-picker-close:focus-visible { background: #f1f5f9; outline: none; }
+
+    .table-grid {
+      display: grid;
+      grid-template-columns: repeat(10, 21px);
+      gap: 4px;
+      width: max-content;
+      margin: 0 auto;
+    }
+
+    .table-grid-cell {
+      width: 21px;
+      height: 21px;
+      padding: 0;
+      border: 1px solid #aeb7c4;
+      background: #ffffff;
+      cursor: pointer;
+    }
+
+    .table-grid-cell.active {
+      border-color: #2563eb;
+      background: #bfdbfe;
+    }
+
+    .table-size-label {
+      margin: 8px 0 10px;
+      color: var(--muted);
+      text-align: center;
+      font-size: 12px;
+    }
+
+    .table-direct {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      padding-top: 10px;
+      border-top: 1px solid #e5e7eb;
+    }
+
+    .table-direct label {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      align-items: center;
+      gap: 5px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .table-direct input[type="number"] {
+      width: 100%;
+      min-width: 0;
+      padding: 5px 6px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+    }
+
+    .table-header-option {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 9px 0;
+      color: var(--muted);
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .table-picker-actions { display: flex; justify-content: flex-end; }
 
     .mini-format-button {
       min-width: 30px;
@@ -450,7 +568,7 @@
 
     @media print {
       body { display: block; overflow: visible; background: white; }
-      .topbar, .findbar, .selection-toolbar, .statusbar, .toast { display: none !important; }
+      .topbar, .findbar, .selection-toolbar, .table-picker, .statusbar, .toast { display: none !important; }
       .workspace { overflow: visible; padding: 0; }
       .page { width: auto; min-height: auto; padding: 0; box-shadow: none; }
       #editor { min-height: auto; }
@@ -494,6 +612,7 @@
       <button class="toolbar-button" type="button" data-command="unlink" title="링크 제거">링크 해제</button>
       <button class="toolbar-button" type="button" data-action="clear-format" title="글자 및 문단 서식 제거">서식 제거</button>
       <button class="toolbar-button" type="button" data-command="insertHorizontalRule" title="구분선">―</button>
+      <button id="tableButton" class="toolbar-button" type="button" data-action="table" title="표 삽입">▦ 표</button>
       <span class="separator" aria-hidden="true"></span>
       <button class="toolbar-button" type="button" data-action="find" title="찾기 (Ctrl+F)">찾기</button>
       <button class="toolbar-button" type="button" data-action="replace" title="찾아 바꾸기 (Ctrl+H)">바꾸기</button>
@@ -533,6 +652,26 @@
       <button class="toolbar-button" type="button" data-find="next">다음 찾기</button>
       <button class="toolbar-button" type="button" data-find="replace">바꾸기</button>
       <button class="toolbar-button" type="button" data-find="replace-all">모두 바꾸기</button>
+    </div>
+  </section>
+
+  <section id="tablePicker" class="table-picker" role="dialog" aria-label="표 삽입" aria-hidden="true">
+    <div class="table-picker-header">
+      <span>표 삽입</span>
+      <button class="table-picker-close" type="button" data-table-action="close" title="닫기">✕</button>
+    </div>
+    <div id="tableGrid" class="table-grid" role="grid" aria-label="행과 열 선택"></div>
+    <div id="tableSizeLabel" class="table-size-label">1행 × 1열</div>
+    <div class="table-direct">
+      <label>행 <input id="tableRows" type="number" min="1" max="50" value="2"></label>
+      <label>열 <input id="tableColumns" type="number" min="1" max="20" value="2"></label>
+    </div>
+    <label class="table-header-option">
+      <input id="tableHeaderRow" type="checkbox" checked>
+      첫 행을 제목 행으로 사용
+    </label>
+    <div class="table-picker-actions">
+      <button class="toolbar-button primary" type="button" data-table-action="insert">표 삽입</button>
     </div>
   </section>
 
@@ -577,6 +716,13 @@
       const supportedBlockFormats = new Set(['P', 'H1', 'H2', 'H3', 'BLOCKQUOTE', 'PRE']);
       const selectionToolbar = document.getElementById('selectionToolbar');
       const selectionCommandButtons = [...document.querySelectorAll('[data-selection-command]')];
+      const tableButton = document.getElementById('tableButton');
+      const tablePicker = document.getElementById('tablePicker');
+      const tableGrid = document.getElementById('tableGrid');
+      const tableSizeLabel = document.getElementById('tableSizeLabel');
+      const tableRows = document.getElementById('tableRows');
+      const tableColumns = document.getElementById('tableColumns');
+      const tableHeaderRow = document.getElementById('tableHeaderRow');
       const linkPreview = document.getElementById('linkPreview');
       const linkPreviewUrl = document.getElementById('linkPreviewUrl');
       const linkPreviewCopy = document.getElementById('linkPreviewCopy');
@@ -654,6 +800,109 @@
       const hideSelectionToolbar = () => {
         selectionToolbar.classList.remove('visible');
       };
+
+      const closeTablePicker = () => {
+        tablePicker.classList.remove('open');
+        tablePicker.setAttribute('aria-hidden', 'true');
+      };
+
+      const updateTableGridHighlight = (rows, columns) => {
+        const safeRows = Math.max(1, Math.min(8, Number(rows) || 1));
+        const safeColumns = Math.max(1, Math.min(10, Number(columns) || 1));
+        tableGrid.querySelectorAll('[data-table-row]').forEach((cell) => {
+          const active = Number(cell.dataset.tableRow) <= safeRows
+            && Number(cell.dataset.tableColumn) <= safeColumns;
+          cell.classList.toggle('active', active);
+        });
+        tableSizeLabel.textContent = `${safeRows}행 × ${safeColumns}열`;
+      };
+
+      const positionTablePicker = () => {
+        const buttonRect = tableButton.getBoundingClientRect();
+        const pickerRect = tablePicker.getBoundingClientRect();
+        const left = Math.min(
+          Math.max(8, buttonRect.left),
+          window.innerWidth - pickerRect.width - 8
+        );
+        const below = buttonRect.bottom + 7;
+        const top = below + pickerRect.height <= window.innerHeight - 8
+          ? below
+          : Math.max(8, buttonRect.top - pickerRect.height - 7);
+        tablePicker.style.left = `${left}px`;
+        tablePicker.style.top = `${top}px`;
+      };
+
+      const openTablePicker = () => {
+        hideSelectionToolbar();
+        findbar.classList.remove('open');
+        tablePicker.classList.add('open');
+        tablePicker.setAttribute('aria-hidden', 'false');
+        updateTableGridHighlight(1, 1);
+        positionTablePicker();
+      };
+
+      const clampTableSize = (value, maximum) => Math.max(1, Math.min(maximum, Number.parseInt(value, 10) || 1));
+
+      const placeCaretInCell = (cell) => {
+        if (!cell) return;
+        const range = document.createRange();
+        range.selectNodeContents(cell);
+        range.collapse(true);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        savedRange = range.cloneRange();
+      };
+
+      const insertTable = (requestedRows, requestedColumns) => {
+        const rows = clampTableSize(requestedRows, 50);
+        const columns = clampTableSize(requestedColumns, 20);
+        const useHeader = tableHeaderRow.checked;
+        const marker = `inserted-table-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const body = Array.from({ length: rows }, (_, rowIndex) => {
+          const tag = useHeader && rowIndex === 0 ? 'th' : 'td';
+          const cells = Array.from({ length: columns }, () => `<${tag}><br></${tag}>`).join('');
+          return `<tr>${cells}</tr>`;
+        }).join('');
+
+        restoreSelection();
+        focusEditor();
+        document.execCommand('insertHTML', false,
+          `<table data-insert-marker="${marker}"><tbody>${body}</tbody></table><p><br></p>`);
+        const table = editor.querySelector(`[data-insert-marker="${marker}"]`);
+        if (table) {
+          table.removeAttribute('data-insert-marker');
+          placeCaretInCell(table.querySelector('th,td'));
+        }
+        closeTablePicker();
+        normalizeEmptyDocument();
+        updateCount();
+        updateFormattingControlsState();
+      };
+
+      const selectedTableCell = () => {
+        const selection = window.getSelection();
+        if (!selection || !selection.rangeCount || !selectionIsInsideEditor()) return null;
+        const node = selection.anchorNode;
+        const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+        return element?.closest?.('th,td') || null;
+      };
+
+      for (let row = 1; row <= 8; row += 1) {
+        for (let column = 1; column <= 10; column += 1) {
+          const cell = document.createElement('button');
+          cell.className = 'table-grid-cell';
+          cell.type = 'button';
+          cell.setAttribute('role', 'gridcell');
+          cell.dataset.tableRow = String(row);
+          cell.dataset.tableColumn = String(column);
+          cell.title = `${row}행 × ${column}열`;
+          cell.addEventListener('mouseenter', () => updateTableGridHighlight(row, column));
+          cell.addEventListener('focus', () => updateTableGridHighlight(row, column));
+          cell.addEventListener('click', () => insertTable(row, column));
+          tableGrid.appendChild(cell);
+        }
+      }
 
       const updateSelectionToolbarState = () => {
         selectionCommandButtons.forEach((button) => {
@@ -1055,11 +1304,15 @@
           const unordered = line.match(/^\s*[-+*]\s+(?:\[([ xX])\]\s+)?(.+)$/);
           const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
           const quote = line.match(/^>\s?(.*)$/);
+          const htmlTable = line.match(/^\s*(<table[\s\S]*<\/table>)\s*$/i);
 
           flushParagraph();
           emitBlanks();
 
-          if (heading) {
+          if (htmlTable) {
+            closeList();
+            output.push(sanitizeHtml(htmlTable[1]));
+          } else if (heading) {
             closeList();
             const level = heading[1].length;
             output.push(`<h${level}>${parseInlineMarkdown(heading[2])}</h${level}>`);
@@ -1129,6 +1382,9 @@
           if (tag === 'blockquote') return inline().split('\n').map((line) => `> ${line}`).join('\n') + '\n\n';
           if (tag === 'pre') return `\`\`\`\n${node.innerText.replace(/\n$/, '')}\n\`\`\`\n\n`;
           if (tag === 'hr') return '---\n\n';
+          if (tag === 'table') {
+            return `${sanitizeHtml(node.outerHTML).replace(/\r?\n/g, '')}\n\n`;
+          }
           if (tag === 'ul' || tag === 'ol') {
             return [...node.children].map((li, index) => {
               const marker = tag === 'ol' ? `${index + 1}. ` : '- ';
@@ -1148,7 +1404,7 @@
 <title>${escapeHtml(currentFileName.replace(/\.[^.]+$/, '') || '문서')}</title>
 <style>
 body{max-width:780px;margin:40px auto;padding:0 24px;color:#202124;font-family:"Malgun Gothic","맑은 고딕",Arial,sans-serif;font-size:16px;line-height:1.75;tab-size:4;word-break:break-word}
-p,h1,h2,h3,blockquote,li,pre{white-space:pre-wrap}p{margin:0 0 1em}p.blank-line{min-height:1.75em;margin:0}h1{font-size:2em}h2{font-size:1.55em}h3{font-size:1.25em}blockquote{margin:1em 0;padding:.5em 1em;border-left:4px solid #94a3b8;background:#f8fafc;color:#475569}pre{overflow:auto;padding:14px 16px;border-radius:8px;background:#f4f5f7}code{font-family:Consolas,monospace}a{color:#1558d6}img{max-width:100%;height:auto}hr{border:0;border-top:1px solid #cdd2d9;margin:2em 0}
+p,h1,h2,h3,blockquote,li,pre,th,td{white-space:pre-wrap}p{margin:0 0 1em}p.blank-line{min-height:1.75em;margin:0}h1{font-size:2em}h2{font-size:1.55em}h3{font-size:1.25em}blockquote{margin:1em 0;padding:.5em 1em;border-left:4px solid #94a3b8;background:#f8fafc;color:#475569}pre{overflow:auto;padding:14px 16px;border-radius:8px;background:#f4f5f7}code{font-family:Consolas,monospace}a{color:#1558d6}img{max-width:100%;height:auto}hr{border:0;border-top:1px solid #cdd2d9;margin:2em 0}table{width:100%;margin:.8em 0 1em;border-collapse:collapse;table-layout:fixed}th,td{padding:8px 10px;border:1px solid #9ca3af;vertical-align:top}th{background:#f1f5f9;font-weight:700}
 </style>
 </head>
 <body>
@@ -2363,6 +2619,8 @@ ${sanitizeHtml(editor.innerHTML)}
             insertLink();
           } else if (action === 'clear-format') {
             clearFormatting();
+          } else if (action === 'table') {
+            openTablePicker();
           } else if (action === 'find') {
             openFindbar(false);
           } else if (action === 'replace') {
@@ -2409,6 +2667,38 @@ ${sanitizeHtml(editor.innerHTML)}
       });
       document.addEventListener('mousedown', (event) => {
         if (!selectionToolbar.contains(event.target)) hideSelectionToolbar();
+        if (!tablePicker.contains(event.target) && !tableButton.contains(event.target)) closeTablePicker();
+      });
+
+      document.querySelectorAll('[data-table-action]').forEach((button) => {
+        button.addEventListener('click', () => {
+          if (button.dataset.tableAction === 'close') closeTablePicker();
+          if (button.dataset.tableAction === 'insert') insertTable(tableRows.value, tableColumns.value);
+        });
+      });
+
+      editor.addEventListener('keydown', (event) => {
+        if (event.key !== 'Tab') return;
+        const cell = selectedTableCell();
+        if (!cell) return;
+        const table = cell.closest('table');
+        const cells = [...table.querySelectorAll('th,td')];
+        const index = cells.indexOf(cell);
+        if (event.shiftKey && index === 0) return;
+
+        event.preventDefault();
+        let target = event.shiftKey ? cells[index - 1] : cells[index + 1];
+        if (!target && !event.shiftKey) {
+          const columnCount = Math.max(1, table.rows[0]?.cells.length || 1);
+          const row = table.insertRow();
+          for (let column = 0; column < columnCount; column += 1) {
+            const nextCell = row.insertCell();
+            nextCell.innerHTML = '<br>';
+          }
+          target = row.cells[0];
+          updateCount();
+        }
+        placeCaretInCell(target);
       });
 
       editor.addEventListener('mouseover', (event) => {
@@ -2441,6 +2731,7 @@ ${sanitizeHtml(editor.innerHTML)}
       window.addEventListener('resize', () => {
         hideLinkPreview();
         hideSelectionToolbar();
+        closeTablePicker();
       });
       document.addEventListener('copy', handleEditorCopy);
 
@@ -2510,6 +2801,12 @@ ${sanitizeHtml(editor.innerHTML)}
         const ctrl = event.ctrlKey || event.metaKey;
         const key = event.key.toLowerCase();
         if (ctrl && event.shiftKey && key === 'v') pastePlainRequested = true;
+        if (event.key === 'Escape' && tablePicker.classList.contains('open')) {
+          event.preventDefault();
+          closeTablePicker();
+          focusEditor();
+          return;
+        }
         if (!ctrl) return;
         if (key === 'k') {
           event.preventDefault();
