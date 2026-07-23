@@ -1250,6 +1250,153 @@
         return doc.body.innerHTML;
       };
 
+      const sanitizePastedRichHtml = (html) => {
+        const doc = new DOMParser().parseFromString(String(html), 'text/html');
+        const allowedTags = new Set([
+          'A', 'B', 'BLOCKQUOTE', 'BR', 'CODE', 'DEL', 'DIV', 'EM', 'FONT', 'H1', 'H2', 'H3',
+          'HR', 'I', 'IMG', 'LI', 'MARK', 'OL', 'P', 'PRE', 'S', 'SPAN', 'STRIKE', 'STRONG',
+          'TABLE', 'TBODY', 'TD', 'TFOOT', 'TH', 'THEAD', 'TR', 'U', 'UL'
+        ]);
+        const discardedTags = new Set([
+          'BUTTON', 'CANVAS', 'EMBED', 'FORM', 'IFRAME', 'INPUT', 'LINK', 'MATH', 'META',
+          'NOSCRIPT', 'OBJECT', 'OPTION', 'SCRIPT', 'SELECT', 'STYLE', 'SVG', 'TEXTAREA'
+        ]);
+        const allowedStyles = new Set([
+          'background-color', 'border', 'border-bottom', 'border-collapse', 'border-color',
+          'border-left', 'border-right', 'border-style', 'border-top', 'border-width',
+          'color', 'font-family', 'font-size', 'font-style', 'font-weight', 'height',
+          'letter-spacing', 'line-height', 'list-style-type', 'margin-left', 'margin-right',
+          'max-width', 'padding', 'padding-left', 'padding-right', 'table-layout',
+          'text-align', 'text-decoration', 'text-decoration-color', 'text-decoration-line',
+          'text-decoration-style', 'text-indent', 'vertical-align', 'white-space', 'width'
+        ]);
+        const unsafeStyleValue = /(?:expression|javascript\s*:|url\s*\(|behavior\s*:|@import)/i;
+        const safeWebUrl = (source) => {
+          const value = String(source || '').trim();
+          if (!value) return '';
+          try {
+            const resolved = new URL(value.startsWith('//') ? `https:${value}` : value, document.baseURI);
+            return resolved.protocol === 'http:' || resolved.protocol === 'https:' ? resolved.href : '';
+          } catch (error) {
+            return '';
+          }
+        };
+        const safeImageUrl = (source) => {
+          const value = String(source || '').trim();
+          if (/^data:image\/(?:png|jpe?g|gif|webp);base64,/i.test(value)) return value;
+          return safeWebUrl(value);
+        };
+        const safeInteger = (value, maximum = 1000) => {
+          const number = Number.parseInt(value, 10);
+          return Number.isFinite(number) && number >= 1 && number <= maximum ? String(number) : '';
+        };
+
+        [...doc.body.querySelectorAll('*')].reverse().forEach((element) => {
+          if (discardedTags.has(element.tagName)) {
+            element.remove();
+            return;
+          }
+          if (!allowedTags.has(element.tagName)) {
+            element.replaceWith(...element.childNodes);
+            return;
+          }
+
+          const original = {
+            href: element.getAttribute('href'),
+            src: element.getAttribute('src'),
+            alt: element.getAttribute('alt'),
+            title: element.getAttribute('title'),
+            colspan: element.getAttribute('colspan'),
+            rowspan: element.getAttribute('rowspan'),
+            start: element.getAttribute('start'),
+            value: element.getAttribute('value'),
+            border: element.getAttribute('border'),
+            cellspacing: element.getAttribute('cellspacing'),
+            cellpadding: element.getAttribute('cellpadding'),
+            color: element.getAttribute('color'),
+            face: element.getAttribute('face'),
+            size: element.getAttribute('size'),
+            className: element.getAttribute('class'),
+            align: element.getAttribute('align'),
+            width: element.getAttribute('width'),
+            height: element.getAttribute('height')
+          };
+          const safeStyles = [];
+          for (let index = 0; index < element.style.length; index += 1) {
+            const property = element.style[index].toLowerCase();
+            const value = element.style.getPropertyValue(property).trim();
+            if (allowedStyles.has(property)
+              && value
+              && value.length <= 300
+              && !unsafeStyleValue.test(value)) {
+              safeStyles.push([property, value]);
+            }
+          }
+          if (/^(?:left|center|right|justify)$/i.test(original.align || '')
+            && !safeStyles.some(([property]) => property === 'text-align')) {
+            safeStyles.push(['text-align', original.align.toLowerCase()]);
+          }
+          const naverAlignment = String(original.className || '')
+            .match(/(?:^|\s)se-text-paragraph-align-(left|center|right|justify)(?:\s|$)/i)?.[1];
+          if (naverAlignment && !safeStyles.some(([property]) => property === 'text-align')) {
+            safeStyles.push(['text-align', naverAlignment.toLowerCase()]);
+          }
+
+          [...element.attributes].forEach((attribute) => element.removeAttribute(attribute.name));
+          safeStyles.forEach(([property, value]) => element.style.setProperty(property, value));
+
+          if (element.tagName === 'A') {
+            const href = safeWebUrl(original.href);
+            if (!href) {
+              element.replaceWith(...element.childNodes);
+              return;
+            }
+            element.setAttribute('href', href);
+            if (original.title) element.setAttribute('title', original.title.slice(0, 300));
+          } else if (element.tagName === 'IMG') {
+            const src = safeImageUrl(original.src);
+            if (!src) {
+              element.remove();
+              return;
+            }
+            element.setAttribute('src', src);
+            if (original.alt) element.setAttribute('alt', original.alt.slice(0, 500));
+            const width = safeInteger(original.width, 10000);
+            const height = safeInteger(original.height, 10000);
+            if (width) element.setAttribute('width', width);
+            if (height) element.setAttribute('height', height);
+          } else if (element.tagName === 'TD' || element.tagName === 'TH') {
+            const colspan = safeInteger(original.colspan, 100);
+            const rowspan = safeInteger(original.rowspan, 100);
+            if (colspan) element.setAttribute('colspan', colspan);
+            if (rowspan) element.setAttribute('rowspan', rowspan);
+          } else if (element.tagName === 'OL') {
+            const start = safeInteger(original.start, 100000);
+            if (start) element.setAttribute('start', start);
+          } else if (element.tagName === 'LI') {
+            const value = safeInteger(original.value, 100000);
+            if (value) element.setAttribute('value', value);
+          } else if (element.tagName === 'TABLE') {
+            ['border', 'cellspacing', 'cellpadding'].forEach((name) => {
+              const value = safeInteger(original[name], 100);
+              if (value) element.setAttribute(name, value);
+            });
+          } else if (element.tagName === 'FONT') {
+            if (original.color && !unsafeStyleValue.test(original.color)) {
+              element.setAttribute('color', original.color.slice(0, 100));
+            }
+            if (original.face) element.setAttribute('face', original.face.slice(0, 200));
+            if (/^[1-7]$/.test(original.size || '')) element.setAttribute('size', original.size);
+          }
+
+          if (element.tagName === 'SPAN' && !element.getAttribute('style')) {
+            element.replaceWith(...element.childNodes);
+          }
+        });
+
+        return doc.body.innerHTML;
+      };
+
       const parseInlineMarkdown = (source) => {
         const codeTokens = [];
         let value = String(source).replace(/`([^`]+)`/g, (_, code) => {
@@ -2562,6 +2709,16 @@ ${sanitizeHtml(editor.innerHTML)}
         updateCount();
       };
 
+      const insertRichHtmlPreservingFormatting = (html) => {
+        const safeHtml = sanitizePastedRichHtml(html);
+        if (!safeHtml.trim()) return false;
+        document.execCommand('insertHTML', false, safeHtml);
+        normalizeEmptyDocument();
+        updateCount();
+        updateFormattingControlsState();
+        return true;
+      };
+
       const replaceAllSpecial = (parsedQuery, parsedReplacement, settings, formattingOnly) => {
         if (!parsedQuery.text) return 0;
         let beforeIndex = Number.POSITIVE_INFINITY;
@@ -2901,6 +3058,7 @@ ${sanitizeHtml(editor.innerHTML)}
       editor.addEventListener('paste', (event) => {
         const selection = window.getSelection();
         const plain = event.clipboardData?.getData('text/plain') || '';
+        const rich = event.clipboardData?.getData('text/html') || '';
         const explicitPlainPaste = pastePlainRequested;
         const linkCandidate = plain.trim();
         pastePlainRequested = false;
@@ -2917,8 +3075,9 @@ ${sanitizeHtml(editor.innerHTML)}
         }
 
         event.preventDefault();
+        if (!explicitPlainPaste && rich && insertRichHtmlPreservingFormatting(rich)) return;
         if (!plain) {
-          showToast('붙여넣을 일반 텍스트를 찾지 못했습니다.');
+          showToast('붙여넣을 내용을 찾지 못했습니다.');
           return;
         }
         insertPlainTextPreservingBreaks(plain);
