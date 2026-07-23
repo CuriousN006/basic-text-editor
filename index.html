@@ -1250,6 +1250,90 @@
         return doc.body.innerHTML;
       };
 
+      const normalizePastedWebUrl = (source) => {
+        const value = String(source || '').trim();
+        if (!value) return '';
+        try {
+          const base = value.startsWith('/') && !value.startsWith('//')
+            ? 'https://cafe.naver.com/'
+            : document.baseURI;
+          const resolved = new URL(value.startsWith('//') ? `https:${value}` : value, base);
+          return resolved.protocol === 'http:' || resolved.protocol === 'https:' ? resolved.href : '';
+        } catch (error) {
+          return '';
+        }
+      };
+
+      const pastedLinkUrlFromValue = (source, depth = 0) => {
+        if (depth > 4) return '';
+        const value = String(source || '').trim();
+        if (!value) return '';
+        const direct = normalizePastedWebUrl(value);
+        if (direct) return direct;
+
+        const unescaped = value.replace(/\\\//g, '/');
+        const embedded = unescaped.match(/https?:\/\/[^\s"'<>\\}]+/i)?.[0] || '';
+        if (embedded) {
+          const normalized = normalizePastedWebUrl(embedded);
+          if (normalized) return normalized;
+        }
+
+        try {
+          const decoded = decodeURIComponent(unescaped);
+          if (decoded !== unescaped) {
+            const decodedUrl = pastedLinkUrlFromValue(decoded, depth + 1);
+            if (decodedUrl) return decodedUrl;
+          }
+        } catch (error) {
+          // 인코딩되지 않은 일반 문자열은 그대로 다음 단계에서 검사합니다.
+        }
+
+        try {
+          const parsed = JSON.parse(value);
+          const queue = [parsed];
+          while (queue.length) {
+            const item = queue.shift();
+            if (typeof item === 'string') {
+              const nested = pastedLinkUrlFromValue(item, depth + 1);
+              if (nested) return nested;
+            } else if (Array.isArray(item)) {
+              queue.push(...item);
+            } else if (item && typeof item === 'object') {
+              const preferredKeys = ['href', 'url', 'link', 'linkUrl', 'linkURL', 'originalUrl'];
+              preferredKeys.forEach((key) => {
+                if (key in item) queue.unshift(item[key]);
+              });
+              Object.entries(item).forEach(([key, nested]) => {
+                if (!preferredKeys.includes(key)) queue.push(nested);
+              });
+            }
+          }
+        } catch (error) {
+          // JSON이 아닌 속성값은 링크 메타데이터가 아닙니다.
+        }
+        return '';
+      };
+
+      const pastedLinkUrlFromElement = (element) => {
+        const preferredNames = [
+          'href', 'data-href', 'data-url', 'data-link', 'data-link-url',
+          'data-original-href', 'data-original-url', 'data-linkdata', 'data-oglink'
+        ];
+        const values = [];
+        preferredNames.forEach((name) => {
+          if (element.hasAttribute(name)) values.push(element.getAttribute(name));
+        });
+        [...element.attributes].forEach((attribute) => {
+          if (preferredNames.includes(attribute.name)) return;
+          if (/(?:href|url|link)/i.test(attribute.name)) values.push(attribute.value);
+        });
+        for (const value of values) {
+          const href = pastedLinkUrlFromValue(value);
+          if (href) return href;
+        }
+        return '';
+      };
+
       const sanitizePastedRichHtml = (html) => {
         const doc = new DOMParser().parseFromString(String(html), 'text/html');
         const allowedTags = new Set([
@@ -1271,25 +1355,27 @@
           'text-decoration-style', 'text-indent', 'vertical-align', 'white-space', 'width'
         ]);
         const unsafeStyleValue = /(?:expression|javascript\s*:|url\s*\(|behavior\s*:|@import)/i;
-        const safeWebUrl = (source) => {
-          const value = String(source || '').trim();
-          if (!value) return '';
-          try {
-            const resolved = new URL(value.startsWith('//') ? `https:${value}` : value, document.baseURI);
-            return resolved.protocol === 'http:' || resolved.protocol === 'https:' ? resolved.href : '';
-          } catch (error) {
-            return '';
-          }
-        };
         const safeImageUrl = (source) => {
           const value = String(source || '').trim();
           if (/^data:image\/(?:png|jpe?g|gif|webp);base64,/i.test(value)) return value;
-          return safeWebUrl(value);
+          return normalizePastedWebUrl(value);
         };
         const safeInteger = (value, maximum = 1000) => {
           const number = Number.parseInt(value, 10);
           return Number.isFinite(number) && number >= 1 && number <= maximum ? String(number) : '';
         };
+
+        doc.body.querySelectorAll(
+          'span[data-linkdata],span[data-href],span[data-url],span[data-link],span[data-link-url]'
+        ).forEach((span) => {
+          if (span.closest('a')) return;
+          const href = pastedLinkUrlFromElement(span);
+          if (!href) return;
+          const anchor = doc.createElement('a');
+          anchor.setAttribute('href', href);
+          span.replaceWith(anchor);
+          anchor.appendChild(span);
+        });
 
         [...doc.body.querySelectorAll('*')].reverse().forEach((element) => {
           if (discardedTags.has(element.tagName)) {
@@ -1319,7 +1405,8 @@
             className: element.getAttribute('class'),
             align: element.getAttribute('align'),
             width: element.getAttribute('width'),
-            height: element.getAttribute('height')
+            height: element.getAttribute('height'),
+            linkUrl: element.tagName === 'A' ? pastedLinkUrlFromElement(element) : ''
           };
           const safeStyles = [];
           for (let index = 0; index < element.style.length; index += 1) {
@@ -1346,7 +1433,7 @@
           safeStyles.forEach(([property, value]) => element.style.setProperty(property, value));
 
           if (element.tagName === 'A') {
-            const href = safeWebUrl(original.href);
+            const href = original.linkUrl;
             if (!href) {
               element.replaceWith(...element.childNodes);
               return;
@@ -3059,8 +3146,13 @@ ${sanitizeHtml(editor.innerHTML)}
         const selection = window.getSelection();
         const plain = event.clipboardData?.getData('text/plain') || '';
         const rich = event.clipboardData?.getData('text/html') || '';
+        const uriList = event.clipboardData?.getData('text/uri-list') || '';
         const explicitPlainPaste = pastePlainRequested;
         const linkCandidate = plain.trim();
+        const clipboardLink = uriList
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .find((line) => line && !line.startsWith('#')) || '';
         pastePlainRequested = false;
 
         if (!explicitPlainPaste
@@ -3075,6 +3167,19 @@ ${sanitizeHtml(editor.innerHTML)}
         }
 
         event.preventDefault();
+        const normalizedClipboardLink = !explicitPlainPaste
+          && !/[\r\n]/.test(plain)
+          ? pastedLinkUrlFromValue(clipboardLink)
+          : '';
+        const richHasLinkMetadata = /<a\b|data-(?:href|url|link|link-url|linkdata)\s*=/i.test(rich);
+        if (normalizedClipboardLink && (!rich || !richHasLinkMetadata)) {
+          const label = plain.trim() || normalizedClipboardLink;
+          document.execCommand('insertHTML', false,
+            `<a href="${escapeAttribute(normalizedClipboardLink)}">${escapeHtml(label)}</a>`);
+          updateCount();
+          updateFormattingControlsState();
+          return;
+        }
         if (!explicitPlainPaste && rich && insertRichHtmlPreservingFormatting(rich)) return;
         if (!plain) {
           showToast('붙여넣을 내용을 찾지 못했습니다.');
