@@ -2852,26 +2852,29 @@ ${sanitizeHtml(editor.innerHTML)}
 
       const replaceAllSpecial = (parsedQuery, parsedReplacement, settings, formattingOnly) => {
         if (!parsedQuery.text) return 0;
-        let beforeIndex = Number.POSITIVE_INFINITY;
-        let count = 0;
-
-        while (count < 10000) {
-          const model = buildSpecialSearchModel();
-          const searchable = model.text.slice(0, beforeIndex);
-          const index = searchable.lastIndexOf(parsedQuery.text);
+        // 모델을 한 번만 만들어 모든 일치 위치를 수집한 뒤 뒤에서부터 처리합니다.
+        // 뒤에서부터 바꾸면 앞쪽 위치가 밀리지 않으므로 모델 재구축이 불필요합니다.
+        const model = buildSpecialSearchModel();
+        const indices = [];
+        let cursor = 0;
+        while (indices.length < 10000) {
+          const index = model.text.indexOf(parsedQuery.text, cursor);
           if (index < 0) break;
-          const range = createRangeFromModel(model, index, parsedQuery.text.length);
-          if (!range) break;
+          indices.push(index);
+          cursor = index + Math.max(1, parsedQuery.text.length);
+        }
+        // 뒤에서부터 치환
+        for (let i = indices.length - 1; i >= 0; i -= 1) {
+          const range = createRangeFromModel(model, indices[i], parsedQuery.text.length);
+          if (!range) continue;
           if (formattingOnly) {
             applyFormattingToRange(range, settings);
           } else {
             replaceRangeWithSpecialTokens(range, parsedReplacement.tokens, settings);
           }
-          beforeIndex = index;
-          count += 1;
         }
         specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
-        return count;
+        return indices.length;
       };
 
       const replaceCurrent = () => {
@@ -3004,11 +3007,27 @@ ${sanitizeHtml(editor.innerHTML)}
         });
 
         // 뒤에서부터 바꾸면 아직 처리하지 않은 앞쪽 위치는 그대로 유지됩니다.
-        // 매번 위치를 다시 찾아 해석하므로 끊어진 노드 참조를 쓰는 일이 없습니다.
+        // 치환 전에 모아 둔 노드 목록에서 직접 범위를 계산하므로 O(n)입니다.
+        // (이전에는 매번 collectEditorTextNodes를 호출해 O(n×m)이었습니다.)
         matches.sort((a, b) => b.start - a.start);
+        const textNodes = collectEditorTextNodes();
+        const nodeStarts = [];
+        let acc = 0;
+        textNodes.forEach((node) => { nodeStarts.push(acc); acc += node.nodeValue.length; });
+
         matches.forEach((match) => {
-          const range = createRangeAtTextOffset(match.start, match.length);
-          if (!range) return;
+          // 이진 탐색으로 해당 절대 위치가 속한 노드를 찾습니다.
+          let lo = 0, hi = textNodes.length - 1;
+          while (lo < hi) {
+            const mid = (lo + hi + 1) >>> 1;
+            if (nodeStarts[mid] <= match.start) lo = mid; else hi = mid - 1;
+          }
+          const node = textNodes[lo];
+          if (!node) return;
+          const localStart = match.start - nodeStarts[lo];
+          const range = document.createRange();
+          range.setStart(node, localStart);
+          range.setEnd(node, Math.min(localStart + match.length, node.nodeValue.length));
           count += 1;
           if (formattingOnly) {
             applyFormattingToRange(range, settings);
