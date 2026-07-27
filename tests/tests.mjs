@@ -258,7 +258,9 @@ await withPage({}, async (page) => {
   await openReplace(page, { find: '|', replace: '^l' });
   await page.click('[data-find="replace-all"]');
   await page.waitForTimeout(120);
-  r.check('R11 ^l 줄바꿈', await page.evaluate(() => T.html()), '<p>가<br>나</p>');
+  // 이 편집기의 Shift+Enter는 pre-wrap 때문에 <br>이 아니라 개행 문자를 만든다.
+  r.check('R11 ^l 줄바꿈(Shift+Enter와 같은 형태)',
+    await page.evaluate(() => T.html()), '<p>가\n나</p>');
 });
 
 // ^p 를 찾아 문단 합치기
@@ -425,6 +427,146 @@ await withPage({}, async (page) => {
   await page.waitForTimeout(2000);
   const toast = await page.evaluate(() => T.toast());
   r.check('R32 상한 도달을 알린다', /한 번에 10,000개까지만/.test(toast), true, toast);
+});
+
+console.log('\n--- 붙여넣기 ---');
+
+// 실제 Ctrl+Shift+V 키 입력은 브라우저 자체 붙여넣기를 먼저 발생시켜
+// 요청 표시를 소비하므로, 테스트에서는 keydown만 합성해 분리한다.
+const pasteInto = async (page, { html = '', text = '', plain = false } = {}) => {
+  await page.evaluate(({ h, t, p }) => {
+    if (p) {
+      document.dispatchEvent(new KeyboardEvent('keydown', {
+        ctrlKey: true, shiftKey: true, key: 'V', bubbles: true,
+      }));
+    }
+    const dt = new DataTransfer();
+    if (t) dt.setData('text/plain', t);
+    if (h) dt.setData('text/html', h);
+    T.ed().focus();
+    T.ed().dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  }, { h: html, t: text, p: plain });
+  await page.waitForTimeout(150);
+};
+
+const RICH_SOURCE = '<p>첫 문단에 <b>굵게</b>와 <a href="https://example.com/a">링크</a>가 있습니다.</p>'
+  + '<p>둘째 문단은 <em>기울임</em>과 <span style="text-decoration:line-through">취소선</span>.</p>'
+  + '<p>셋째 줄<br>같은 문단 안 줄바꿈</p>';
+
+// P1. Ctrl+V는 인라인 서식을 유지하고 줄 구조는 다시 계산한다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p><br></p>'));
+  await pasteInto(page, { html: RICH_SOURCE, text: '무시되는 평문' });
+  r.check('P1 문단 수', await page.evaluate(() => T.ed().querySelectorAll('p').length), 3);
+  r.check('P2 서식 경계가 새지 않는다',
+    await page.evaluate(() => T.ed().querySelector('p').innerHTML),
+    '첫 문단에 <b>굵게</b>와 <a href="https://example.com/a">링크</a>가 있습니다.');
+  r.check('P3 기울임·취소선 유지',
+    await page.evaluate(() => [
+      T.ed().querySelectorAll('i,em').length,
+      T.ed().querySelectorAll('s,strike,del').length,
+    ]), [1, 1]);
+  r.check('P4 문단 안 줄바꿈 유지',
+    await page.evaluate(() => T.ed().querySelectorAll('p')[2].textContent),
+    '셋째 줄\n같은 문단 안 줄바꿈');
+  r.check('P5 붙여넣은 뒤 빈 문단이 생기지 않는다',
+    await page.evaluate(() => T.ed().querySelectorAll('p').length), 3);
+});
+
+// P6. Ctrl+Shift+V는 서식을 버린다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p><br></p>'));
+  await pasteInto(page, { html: RICH_SOURCE, text: '무시되는 평문', plain: true });
+  r.check('P6 서식 태그 없음',
+    await page.evaluate(() => T.ed().querySelectorAll('b,strong,i,em,u,s,strike,del,a').length), 0,
+    await page.evaluate(() => T.html()));
+  r.check('P7 줄 구조는 그대로',
+    await page.evaluate(() => T.ed().querySelectorAll('p').length), 3);
+});
+
+// P8. 글꼴·글자 크기·색 같은 외부 서식은 가져오지 않는다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p><br></p>'));
+  await pasteInto(page, {
+    html: '<p style="font-family:Impact;font-size:32px">'
+      + '<span style="color:red;font-size:40px">색과 크기</span> 그리고 <b>굵게</b></p>',
+    text: '색과 크기 그리고 굵게',
+  });
+  const html = await page.evaluate(() => T.html());
+  r.check('P8 외부 글꼴·색 미반영', /font-family|font-size|color/.test(html), false, html);
+  r.check('P9 굵게는 유지', /<b>/.test(html), true, html);
+});
+
+// P10. 문단 중간에 붙여넣으면 그 자리에 들어간다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>앞뒤</p>'));
+  await page.evaluate(() => {
+    const node = T.ed().querySelector('p').firstChild;
+    const range = document.createRange();
+    range.setStart(node, 1);
+    range.collapse(true);
+    T.ed().focus();
+    const s = getSelection();
+    s.removeAllRanges();
+    s.addRange(range);
+  });
+  await pasteInto(page, { html: '<p><b>굵은</b>것</p>', text: '굵은것' });
+  r.check('P10 문단 중간 삽입', await page.evaluate(() => T.html()), '<p>앞<b>굵은</b>것뒤</p>');
+});
+
+// P11. 평문만 있는 클립보드는 공백을 그대로 보존한다(기존 동작).
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p><br></p>'));
+  await pasteInto(page, { text: '가  나 다' });
+  r.check('P11 평문 연속 공백 보존', await page.evaluate(() => T.html()), '<p>가  나 다</p>');
+});
+
+// P12. 위험한 주소는 링크로 만들지 않는다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p><br></p>'));
+  await pasteInto(page, {
+    html: '<p><a href="javascript:alert(1)">위험</a> <a href="https://ok.example/">정상</a></p>',
+    text: '위험 정상',
+  });
+  const html = await page.evaluate(() => T.html());
+  r.check('P12 javascript: 링크 제거', /javascript:/i.test(html), false, html);
+  r.check('P13 정상 링크 유지', /https:\/\/ok\.example\//.test(html), true, html);
+});
+
+// P14. 서식 유지 붙여넣기도 실행 취소된다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>원본</p>'));
+  await page.evaluate(() => {
+    const range = document.createRange();
+    range.selectNodeContents(T.ed().querySelector('p'));
+    range.collapse(false);
+    T.ed().focus();
+    const s = getSelection();
+    s.removeAllRanges();
+    s.addRange(range);
+  });
+  await pasteInto(page, { html: '<p><b>굵게</b></p>', text: '굵게' });
+  r.check('P14 붙여넣기 결과', await page.evaluate(() => T.html()), '<p>원본<b>굵게</b></p>');
+  await page.keyboard.press('Control+z');
+  await page.waitForTimeout(100);
+  r.check('P15 실행 취소', await page.evaluate(() => T.text()), '원본');
+});
+
+// P16. URL 단독/선택 영역 붙여넣기 동작은 그대로.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p><br></p>'));
+  await pasteInto(page, { text: 'https://example.com/x' });
+  r.check('P16 URL 단독 붙여넣기는 링크',
+    await page.evaluate(() => T.ed().querySelector('a')?.getAttribute('href')),
+    'https://example.com/x');
+});
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>대상</p>'));
+  await page.evaluate(() => T.select('대상'));
+  await pasteInto(page, { text: 'https://example.com/y' });
+  r.check('P17 선택 위에 URL 붙여넣기는 링크로 감쌈',
+    await page.evaluate(() => T.html()),
+    '<p><a href="https://example.com/y">대상</a></p>');
 });
 
 console.log('\n--- 실행 취소 메커니즘 ---');

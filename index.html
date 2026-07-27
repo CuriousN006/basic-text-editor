@@ -2532,9 +2532,79 @@ ${sanitizeHtml(editor.innerHTML)}
       // <br>은 문단 나눔이 아니라 문단 안의 줄바꿈이므로 따로 표시해 둡니다.
       const CLIPBOARD_SOFT_BREAK = '\u0001';
 
-      // 클립보드 HTML을 "문단 배열 안의 줄 배열"로 바꿉니다.
+      // 붙여넣기에서 유지하는 인라인 서식입니다. 글꼴·글자 크기·색처럼 문서
+      // 전체 모양을 흔드는 외부 서식은 가져오지 않습니다.
+      const EMPTY_CLIPBOARD_STYLE = {
+        bold: false, italic: false, underline: false, strike: false, href: ''
+      };
+
+      const sameClipboardStyle = (left, right) => left.bold === right.bold
+        && left.italic === right.italic
+        && left.underline === right.underline
+        && left.strike === right.strike
+        && left.href === right.href;
+
+      const clipboardLinkHref = (element) => {
+        const source = String(element.getAttribute('href') || '').trim();
+        if (!source) return '';
+        try {
+          const resolved = new URL(source, document.baseURI);
+          return SAFE_URL_SCHEMES.has(resolved.protocol) ? resolved.href : '';
+        } catch (error) {
+          return '';
+        }
+      };
+
+      const clipboardStyleAt = (node, root) => {
+        const style = { ...EMPTY_CLIPBOARD_STYLE };
+        for (let element = node.parentNode; element && element !== root; element = element.parentNode) {
+          if (element.nodeType !== Node.ELEMENT_NODE) continue;
+          if (elementCarriesFormat(element, 'bold')) style.bold = true;
+          if (elementCarriesFormat(element, 'italic')) style.italic = true;
+          if (elementCarriesFormat(element, 'underline')) style.underline = true;
+          if (elementCarriesFormat(element, 'strikeThrough')) style.strike = true;
+          if (!style.href && element.tagName === 'A') style.href = clipboardLinkHref(element);
+        }
+        return style;
+      };
+
+      // 서식 표식으로 쓸 사용자 영역 문자입니다. 공백이 아니므로 innerText의
+      // 공백 정리에 사라지지 않고, 글자와 같은 자리에 남습니다.
+      const CLIPBOARD_MARK_BASE = 0xE300;
+      const CLIPBOARD_MARK_LIMIT = 240;
+
+      const clipboardRunsFromMarkedText = (segment, styles) => {
+        const runs = [];
+        let style = EMPTY_CLIPBOARD_STYLE;
+        let buffer = '';
+        const flush = () => {
+          if (!buffer) return;
+          runs.push({ ...style, text: buffer });
+          buffer = '';
+        };
+
+        for (const character of segment) {
+          const code = character.charCodeAt(0);
+          if (code >= CLIPBOARD_MARK_BASE && code < CLIPBOARD_MARK_BASE + CLIPBOARD_MARK_LIMIT) {
+            flush();
+            style = styles[code - CLIPBOARD_MARK_BASE] || EMPTY_CLIPBOARD_STYLE;
+            continue;
+          }
+          // 빈 줄 자리를 채우려고 넣은 &nbsp;는 원래 없던 글자입니다.
+          buffer += character === '\u00A0' ? ' ' : character;
+        }
+        flush();
+        // 공백만 남은 줄은 빈 줄로 봅니다. 그대로 두면 줄 앞에 공백이 생깁니다.
+        return runs.some((run) => run.text.trim()) ? runs : [];
+      };
+
+      const clipboardSegmentText = (runs) => runs.map((run) => run.text).join('');
+
+      // 클립보드 HTML을 "문단 배열 안의 줄 배열"로 바꿉니다. 각 줄은 서식이 같은
+      // 구간(run)의 배열입니다.
       // innerText는 <p>를 두 줄로 계산하기 때문에(마진과 무관한 규격상 동작)
-      // <div>로 바꿔 눈에 보이는 줄과 개행 수를 1:1로 맞춥니다.
+      // <div>로 바꿔 눈에 보이는 줄과 개행 수를 1:1로 맞춥니다. 이 계산은 그대로
+      // 두고, 서식은 각 텍스트 노드 앞에 표식 문자를 붙여 함께 실어 보냅니다.
       const clipboardLinesFromHtml = (html) => {
         const doc = new DOMParser().parseFromString(String(html), 'text/html');
         doc.body.querySelectorAll('br').forEach((lineBreak) => {
@@ -2550,6 +2620,22 @@ ${sanitizeHtml(editor.innerHTML)}
 
         doc.body.querySelectorAll('img, svg, video, audio, iframe').forEach((el) => el.remove());
 
+        const styles = [];
+        const textNodes = [];
+        const styleWalker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+        while (styleWalker.nextNode()) textNodes.push(styleWalker.currentNode);
+        textNodes.forEach((node) => {
+          if (!node.nodeValue) return;
+          const style = clipboardStyleAt(node, doc.body);
+          let index = styles.findIndex((item) => sameClipboardStyle(item, style));
+          if (index < 0) {
+            if (styles.length >= CLIPBOARD_MARK_LIMIT) return;
+            styles.push(style);
+            index = styles.length - 1;
+          }
+          node.nodeValue = String.fromCharCode(CLIPBOARD_MARK_BASE + index) + node.nodeValue;
+        });
+
         const host = document.createElement('div');
         host.setAttribute('aria-hidden', 'true');
         host.style.cssText = 'position:fixed;left:-9999px;top:0;width:800px;pointer-events:none';
@@ -2563,18 +2649,13 @@ ${sanitizeHtml(editor.innerHTML)}
           host.remove();
         }
 
-        // 빈 줄 자리를 채우려고 넣은 &nbsp;는 원래 없던 글자이므로 비워 둡니다.
-        // 그대로 두면 붙여넣을 때 줄 앞에 공백 한 칸이 생깁니다.
         return normalizeClipboardText(measured).split('\n').map((line) => line
           .split(CLIPBOARD_SOFT_BREAK)
-          .map((segment) => {
-            const restored = segment.replace(/\u00A0/g, ' ');
-            return restored.trim() ? restored : '';
-          }));
+          .map((segment) => clipboardRunsFromMarkedText(segment, styles)));
       };
 
       const clipboardPlainTextFromHtml = (html) => clipboardLinesFromHtml(html)
-        .map((line) => line.join('\n'))
+        .map((line) => line.map(clipboardSegmentText).join('\n'))
         .join('\n');
 
       const writeEditorClipboardData = (event) => {
@@ -2912,7 +2993,8 @@ ${sanitizeHtml(editor.innerHTML)}
         const block = blockAncestor(range.startContainer, root);
         const doc = root.ownerDocument;
         if (!block) {
-          const lineBreak = doc.createElement('br');
+          // 나눌 문단이 없으면 줄바꿈으로 대체합니다.
+          const lineBreak = doc.createTextNode('\n');
           range.insertNode(lineBreak);
           range.setStartAfter(lineBreak);
           range.collapse(true);
@@ -2965,7 +3047,9 @@ ${sanitizeHtml(editor.innerHTML)}
             return;
           }
           let node = null;
-          if (token.type === 'line') node = doc.createElement('br');
+          // 이 편집기는 white-space: pre-wrap이므로 문단 안 줄바꿈은 <br>이 아니라
+          // 개행 문자입니다. Shift+Enter와 붙여넣기가 만드는 형태와 같습니다.
+          if (token.type === 'line') node = doc.createTextNode('\n');
           else if (token.type === 'tab') node = doc.createTextNode('\t');
           else if (token.type === 'text' && token.value) node = doc.createTextNode(token.value);
           if (!node) return;
@@ -3093,6 +3177,64 @@ ${sanitizeHtml(editor.innerHTML)}
         return null;
       };
 
+      const CLIPBOARD_FORMAT_COMMANDS = [
+        ['bold', 'bold'],
+        ['italic', 'italic'],
+        ['underline', 'underline'],
+        ['strike', 'strikeThrough']
+      ];
+
+      // 커서 위치에서는 queryCommandState가 혼합 상태를 돌려줄 일이 없으므로
+      // 토글로 원하는 상태를 정확히 맞출 수 있습니다. 이렇게 하면 글자는
+      // insertText로 넣게 되어 연속 공백이 그대로 보존됩니다.
+      // (insertHTML은 넣는 과정에서 공백을 한 칸으로 줄입니다.)
+      const setCaretFormatState = (command, shouldBeActive) => {
+        let isActive = false;
+        try {
+          isActive = document.queryCommandState(command);
+        } catch (error) {
+          isActive = false;
+        }
+        if (isActive !== shouldBeActive) document.execCommand(command, false, null);
+      };
+
+      const applyCaretStyle = (style) => {
+        CLIPBOARD_FORMAT_COMMANDS.forEach(([key, command]) => {
+          setCaretFormatState(command, Boolean(style[key]));
+        });
+      };
+
+      const anchorAtSelection = () => {
+        const node = window.getSelection()?.focusNode;
+        const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+        return element?.closest?.('a') || null;
+      };
+
+      // 방금 넣은 글자를 링크로 감싼 뒤 커서를 링크 바깥으로 옮깁니다.
+      // 옮기지 않으면 다음에 넣는 글자까지 링크 안으로 들어갑니다.
+      const linkJustInsertedText = (length, href) => {
+        const selection = window.getSelection();
+        if (!selection || !selection.rangeCount) return;
+        const caret = selection.getRangeAt(0);
+        const node = caret.endContainer;
+        if (node.nodeType !== Node.TEXT_NODE || caret.endOffset < length) return;
+
+        const target = document.createRange();
+        target.setStart(node, caret.endOffset - length);
+        target.setEnd(node, caret.endOffset);
+        selection.removeAllRanges();
+        selection.addRange(target);
+        document.execCommand('createLink', false, href);
+
+        const anchor = anchorAtSelection();
+        const after = document.createRange();
+        if (anchor?.parentNode) after.setStartAfter(anchor);
+        else after.setStart(node, Math.min(node.nodeValue?.length ?? 0, caret.endOffset));
+        after.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(after);
+      };
+
       // 붙여넣기 전용 경로입니다. 커서 위치에 그대로 끼워 넣어야 하므로
       // execCommand를 사용해 브라우저 실행 취소 기록에 남깁니다.
       const insertTokensAtSelection = (range, tokens) => {
@@ -3108,7 +3250,11 @@ ${sanitizeHtml(editor.innerHTML)}
 
         tokens.forEach((token) => {
           if (token.type === 'text' && token.value) {
+            // style이 없으면(평문 붙여넣기, ^p 치환 등) 커서 위치의 서식을
+            // 그대로 물려받습니다. 기존 동작과 같습니다.
+            if (token.style) applyCaretStyle(token.style);
             document.execCommand('insertText', false, token.value);
+            if (token.style?.href) linkJustInsertedText(token.value.length, token.style.href);
           } else if (token.type === 'tab') {
             document.execCommand('insertText', false, '\t');
           } else if (token.type === 'line') {
@@ -3124,12 +3270,13 @@ ${sanitizeHtml(editor.innerHTML)}
 
       const normalizeClipboardText = (value) => String(value).replace(/\r\n?/g, '\n');
 
-      const plainTextToSpecialTokens = (source) => {
+      // style을 주면 만들어지는 글자 토큰이 그 인라인 서식을 함께 지닙니다.
+      const plainTextToSpecialTokens = (source, style = null) => {
         const tokens = [];
         let buffer = '';
         const flushText = () => {
           if (!buffer) return;
-          tokens.push({ type: 'text', value: buffer });
+          tokens.push(style ? { type: 'text', value: buffer, style } : { type: 'text', value: buffer });
           buffer = '';
         };
 
@@ -3164,20 +3311,26 @@ ${sanitizeHtml(editor.innerHTML)}
 
       // 이 편집기에서 Enter는 새 문단, Shift+Enter는 문단 안의 줄바꿈입니다.
       // 붙여넣기도 같은 규칙을 따라야 원본과 줄 구조가 같아집니다.
-      const clipboardTokensFromLines = (lines) => {
+      // keepFormatting이 참이면 구간별 인라인 서식을 함께 싣습니다.
+      const clipboardTokensFromLines = (lines, keepFormatting = false) => {
         const tokens = [];
         lines.forEach((line, lineIndex) => {
           if (lineIndex) tokens.push({ type: 'paragraph' });
-          line.forEach((segment, segmentIndex) => {
+          line.forEach((runs, segmentIndex) => {
             if (segmentIndex) tokens.push({ type: 'line' });
-            plainTextToSpecialTokens(segment).forEach((token) => tokens.push(token));
+            runs.forEach((run) => {
+              plainTextToSpecialTokens(run.text, keepFormatting ? run : null)
+                .forEach((token) => tokens.push(token));
+            });
           });
         });
         return tokens;
       };
 
       const insertPlainTextPreservingBreaks = (text) => {
-        const lines = normalizeClipboardText(text).split('\n').map((line) => [line]);
+        const lines = normalizeClipboardText(text)
+          .split('\n')
+          .map((line) => [[{ ...EMPTY_CLIPBOARD_STYLE, text: line }]]);
         insertClipboardTokens(clipboardTokensFromLines(lines));
       };
 
@@ -3604,12 +3757,31 @@ ${sanitizeHtml(editor.innerHTML)}
         }
       });
 
-      // 서식을 유지하는 붙여넣기는 원본 HTML의 블록 구조를 그대로 끼워 넣기 때문에
-      // 문단이 쪼개지거나 붙여넣은 내용 뒤에 빈 줄이 하나 더 생기는 문제가 있었습니다.
-      // 그래서 Ctrl+V도 Ctrl+Shift+V와 똑같이 줄바꿈만 살린 순수 텍스트로 붙여넣습니다.
-      // 단, URL 붙여넣기로 하이퍼링크를 만드는 동작은 유지합니다.
+      // Ctrl+Shift+V는 서식 없이 붙여넣기입니다. paste 이벤트만으로는 두 조작을
+      // 구분할 수 없으므로 키를 누른 시각을 기록해 판단합니다.
+      let plainPasteRequestedAt = 0;
+
+      document.addEventListener('keydown', (event) => {
+        if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'v') {
+          plainPasteRequestedAt = Date.now();
+        }
+      });
+
+      const consumePlainPasteRequest = () => {
+        const requested = Date.now() - plainPasteRequestedAt < 1000;
+        plainPasteRequestedAt = 0;
+        return requested;
+      };
+
+      // 원본 HTML의 블록 구조를 그대로 끼워 넣으면 문단이 쪼개지거나 붙여넣은
+      // 내용 뒤에 빈 줄이 하나 더 생깁니다. 그래서 줄 구조는 Ctrl+Shift+V처럼
+      // "보이는 줄 하나 = 문단 하나"로 다시 계산하고, 그 위에 굵게·기울임·밑줄·
+      // 취소선·하이퍼링크만 구간별로 되살립니다. 글꼴·글자 크기·색처럼 문서 모양을
+      // 흔드는 외부 서식은 가져오지 않습니다.
+      // Ctrl+Shift+V는 서식 없이 글자만 붙여넣습니다.
       editor.addEventListener('paste', (event) => {
         event.preventDefault();
+        const keepFormatting = !consumePlainPasteRequest();
         const selection = window.getSelection();
         const plain = event.clipboardData?.getData('text/plain') || '';
         const rich = event.clipboardData?.getData('text/html') || '';
@@ -3634,10 +3806,11 @@ ${sanitizeHtml(editor.innerHTML)}
           return;
         }
 
-        // 3) 일반 텍스트: HTML이 있으면 줄 구조를 뽑아 문단 경계를 올바르게 삽입합니다.
+        // 3) HTML이 있으면 줄 구조를 다시 계산해 문단 경계를 올바르게 삽입합니다.
         const lines = rich ? clipboardLinesFromHtml(rich) : [];
-        if (lines.some((line) => line.some((segment) => segment.trim()))) {
-          insertClipboardTokens(clipboardTokensFromLines(lines));
+        if (lines.some((line) => line.some((runs) => runs.some((run) => run.text.trim())))) {
+          insertClipboardTokens(clipboardTokensFromLines(lines, keepFormatting));
+          updateFormattingControlsState();
           return;
         }
         if (!plain) {
