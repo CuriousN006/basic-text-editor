@@ -650,11 +650,47 @@ await withPage({}, async (page) => {
     '<p>가</p><p><br></p><p>나</p>');
 });
 
-// P28. 진짜 <br>은 문단 안 줄바꿈으로 들어간다(Shift+Enter와 같은 형태).
+// P28. <br>도 평문의 줄바꿈과 같게 문단이 된다. 줄 구조는 평문을 따른다.
 await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<p><br></p>'));
   await pasteReal(page, { html: '<p>첫<br>둘</p>', text: '첫\n둘' });
-  r.check('P28 문단 안 줄바꿈', await page.evaluate(() => T.html()), '<p>첫\n둘</p>');
+  r.check('P28 <br>도 문단으로', await page.evaluate(() => T.html()), '<p>첫</p><p>둘</p>');
+});
+
+// P32~. 줄 구조는 평문을 따른다.
+// 채팅 화면 등은 평문에는 문단 사이 빈 줄이 있지만 HTML에는 <p> 두 개만 있다.
+// HTML 블록만 보고 줄을 세면 빈 줄이 사라져 Ctrl+Shift+V 와 결과가 어긋난다.
+const CHAT_HTML = '<p>첫 문단에 <b>굵게</b>가 있습니다.</p>\n'
+  + '<p>둘째 문단입니다.</p>\n'
+  + '<p>셋째 문단에 <a href="https://x.example/">링크</a>.</p>';
+const CHAT_PLAIN = '첫 문단에 굵게가 있습니다.\n\n둘째 문단입니다.\n\n셋째 문단에 링크.';
+
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p><br></p>'));
+  await pasteReal(page, { html: CHAT_HTML, text: CHAT_PLAIN });
+  r.check('P32 빈 줄이 유지된다', await page.evaluate(() => T.blocks()), 'P P:빈 P P:빈 P');
+  r.check('P33 서식도 함께 유지된다', await page.evaluate(() => T.html()),
+    '<p>첫 문단에 <b>굵게</b>가 있습니다.</p><p><br></p><p>둘째 문단입니다.</p><p><br></p>'
+    + '<p>셋째 문단에 <a href="https://x.example/">링크</a>.</p>');
+});
+
+// P34. Ctrl+V 와 Ctrl+Shift+V 의 줄 구조가 같아야 한다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p><br></p>'));
+  await pasteReal(page, { html: CHAT_HTML, text: CHAT_PLAIN });
+  const withFormat = await page.evaluate(() => T.blocks());
+  await page.evaluate(() => T.set('<p><br></p>'));
+  await pasteReal(page, { html: CHAT_HTML, text: CHAT_PLAIN, plain: true });
+  const plainOnly = await page.evaluate(() => T.blocks());
+  r.check('P34 두 붙여넣기의 줄 구조 일치', withFormat, plainOnly);
+});
+
+// P35. 평문과 HTML의 글자가 다르면 서식이 밀릴 수 있으므로 HTML 구조를 쓴다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p><br></p>'));
+  await pasteReal(page, { html: '<p>가 <b>굵게</b></p>', text: '전혀 다른 글' });
+  r.check('P35 불일치 시 HTML 구조로 되돌아감',
+    await page.evaluate(() => T.html()), '<p>가 <b>굵게</b></p>');
 });
 
 // P29. 목록은 줄 구조를 다시 계산하므로 문단이 된다(서식은 유지).

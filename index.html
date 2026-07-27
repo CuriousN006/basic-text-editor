@@ -2671,25 +2671,32 @@ ${sanitizeHtml(editor.innerHTML)}
           buffer += character;
         }
         flush();
+        return finalizeClipboardRuns(runs, true);
+      };
 
-        // 표식 문자가 공백이 아니어서, 블록 앞뒤의 공백이 innerText에서 지워지지
-        // 않고 남습니다. 브라우저가 화면에서도 지우는 공백이므로 여기서 맞춥니다.
-        // 줄바꿈 없는 공백(&nbsp;)은 눈에 보이는 글자이므로 남깁니다.
-        while (runs.length) {
-          runs[0].text = runs[0].text.replace(/^[ \t\n\r]+/, '');
-          if (runs[0].text) break;
-          runs.shift();
+      // 한 줄의 구간 목록을 다듬습니다.
+      //  - trimEdges: 표식 문자가 공백이 아니어서 블록 앞뒤 공백이 innerText에서
+      //    지워지지 않고 남습니다. 브라우저가 화면에서도 지우는 공백이므로 맞춥니다.
+      //  - 서식이 있는 구간의 양 끝 공백은 서식 밖으로 뺍니다. 밑줄·취소선·링크는
+      //    공백에도 선이 그려져 "밑줄 "처럼 눈에 보입니다.
+      //  - 줄바꿈 없는 공백(&nbsp;)은 눈에 보이는 글자이므로 일반 공백으로 남깁니다.
+      const finalizeClipboardRuns = (runs, trimEdges) => {
+        const working = [...runs];
+        if (trimEdges) {
+          while (working.length) {
+            working[0].text = working[0].text.replace(/^[ \t\n\r]+/, '');
+            if (working[0].text) break;
+            working.shift();
+          }
+          while (working.length) {
+            const last = working[working.length - 1];
+            last.text = last.text.replace(/[ \t\n\r]+$/, '');
+            if (last.text) break;
+            working.pop();
+          }
         }
-        while (runs.length) {
-          const last = runs[runs.length - 1];
-          last.text = last.text.replace(/[ \t\n\r]+$/, '');
-          if (last.text) break;
-          runs.pop();
-        }
-        runs.forEach((run) => { run.text = run.text.replace(/\u00A0/g, ' '); });
+        working.forEach((run) => { run.text = run.text.replace(/\u00A0/g, ' '); });
 
-        // 서식이 있는 구간의 양 끝 공백은 서식 밖으로 뺍니다. 밑줄·취소선·링크는
-        // 공백에도 선이 그려져 "밑줄 "처럼 눈에 보입니다.
         const spaced = [];
         const push = (style, text) => {
           if (!text) return;
@@ -2697,7 +2704,7 @@ ${sanitizeHtml(editor.innerHTML)}
           if (last && sameClipboardStyle(last, style)) last.text += text;
           else spaced.push({ ...style, text });
         };
-        runs.forEach((run) => {
+        working.forEach((run) => {
           const styled = run.bold || run.italic || run.underline || run.strike || run.href;
           const parts = run.text.match(/^(\s*)([\s\S]*?)(\s*)$/);
           if (!styled || !parts || !parts[2]) {
@@ -2711,6 +2718,53 @@ ${sanitizeHtml(editor.innerHTML)}
 
         // 공백만 남은 줄은 빈 줄로 봅니다. 그대로 두면 줄 앞에 공백이 생깁니다.
         return spaced.some((run) => run.text.trim()) ? spaced : [];
+      };
+
+      // 줄 구조는 평문(text/plain)을 따르고, 서식만 HTML에서 가져와 같은 글자에
+      // 얹습니다.
+      //
+      // HTML 블록만 보고 줄을 세면 문단 사이의 빈 줄이 사라집니다. 채팅 화면에서
+      // 복사하면 평문에는 문단 사이에 빈 줄이 있는데 HTML에는 <p>가 두 개만 있기
+      // 때문입니다. 그러면 Ctrl+Shift+V로는 빈 줄이 남고 Ctrl+V로는 사라져
+      // 두 동작이 어긋납니다.
+      //
+      // 두 표현의 "공백을 뺀 글자"가 정확히 같을 때만 겹칩니다. 다르면 글자와
+      // 서식이 밀려 엉뚱한 곳이 굵어질 수 있으므로 HTML 구조를 그대로 씁니다.
+      const alignClipboardLinesToPlainText = (plain, htmlLines) => {
+        const flat = [];
+        htmlLines.forEach((line) => line.forEach((runs) => runs.forEach((run) => {
+          for (const character of run.text) flat.push({ character, style: run });
+        })));
+        const withoutSpaces = (value) => value.replace(/\s/g, '');
+        const htmlCompact = withoutSpaces(flat.map((item) => item.character).join(''));
+        if (!htmlCompact) return null;
+        const text = normalizeClipboardText(plain);
+        if (withoutSpaces(text) !== htmlCompact) return null;
+
+        let cursor = 0;
+        const takeStyle = () => {
+          while (cursor < flat.length && /\s/.test(flat[cursor].character)) cursor += 1;
+          if (cursor >= flat.length) return EMPTY_CLIPBOARD_STYLE;
+          const style = flat[cursor].style;
+          cursor += 1;
+          return style;
+        };
+
+        return text.split('\n').map((line) => {
+          const runs = [];
+          let last = EMPTY_CLIPBOARD_STYLE;
+          line.split('').forEach((character) => {
+            // 공백은 앞 글자의 서식을 따라가되, 구간 끝 공백은 아래 다듬기에서
+            // 서식 밖으로 빠집니다.
+            const style = /\s/.test(character) ? last : takeStyle();
+            last = style;
+            const tail = runs[runs.length - 1];
+            if (tail && sameClipboardStyle(tail, style)) tail.text += character;
+            else runs.push({ ...style, text: character });
+          });
+          // 평문에는 문단 안 줄바꿈이 따로 없으므로 한 줄은 한 구간뿐입니다.
+          return [finalizeClipboardRuns(runs, false)];
+        });
       };
 
       const clipboardSegmentText = (runs) => runs.map((run) => run.text).join('');
@@ -4040,8 +4094,11 @@ ${sanitizeHtml(editor.innerHTML)}
           return;
         }
 
-        // 3) HTML이 있으면 줄 구조를 다시 계산해 문단 경계를 올바르게 삽입합니다.
-        const lines = rich ? clipboardLinesFromHtml(rich) : [];
+        // 3) 줄 구조는 평문을 따르고, HTML에서 서식만 가져와 얹습니다.
+        const htmlLines = rich ? clipboardLinesFromHtml(rich) : [];
+        const lines = (plain && htmlLines.length
+          ? alignClipboardLinesToPlainText(plain, htmlLines)
+          : null) || htmlLines;
         if (lines.some((line) => line.some((runs) => runs.some((run) => run.text.trim())))) {
           insertClipboardTokens(clipboardTokensFromLines(lines, keepFormatting));
           updateFormattingControlsState();
