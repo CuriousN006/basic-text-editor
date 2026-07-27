@@ -422,6 +422,52 @@
       outline: none;
     }
 
+    .mini-format-button[data-format-state="apply"] {
+      border-color: #93c5fd;
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    .mini-format-button[data-format-state="remove"] {
+      border-color: #cbd5e1;
+      background: #eceff3;
+      color: var(--muted);
+      text-decoration: line-through;
+    }
+
+    .mini-format-button[data-format-state="remove"]:hover,
+    .mini-format-button[data-format-state="remove"]:focus-visible {
+      border-color: #94a3b8;
+      background: #dfe4ea;
+      color: var(--muted);
+      outline: none;
+    }
+
+    .replace-formats-reset {
+      min-height: 30px;
+      margin-left: auto;
+      padding: 4px 9px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #f8fafc;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .replace-formats-reset:hover:not(:disabled),
+    .replace-formats-reset:focus-visible:not(:disabled) {
+      border-color: #93c5fd;
+      background: var(--accent-soft);
+      outline: none;
+    }
+
+    .replace-formats-reset:disabled {
+      color: #9aa0a6;
+      cursor: default;
+      opacity: .6;
+    }
+
     .findbar {
       display: none;
       position: fixed;
@@ -499,6 +545,9 @@
     }
 
     .replace-formats-label { margin-right: 2px; }
+
+
+
 
     .find-actions {
       display: flex;
@@ -632,11 +681,11 @@
 
   <section id="findbar" class="findbar" aria-label="찾기 및 바꾸기">
     <div class="find-row">
-      <input id="findText" class="find-input" type="text" placeholder="찾을 내용" autocomplete="off">
+      <input id="findText" class="find-input" type="text" placeholder="찾을 내용" autocomplete="off" title="바꾸기에서는 찾은 글자의 현재 서식이 이 칸에 그대로 표시됩니다.">
       <button class="toolbar-button" type="button" data-find="close" title="닫기">✕</button>
     </div>
     <div id="replaceRow" class="find-row">
-      <input id="replaceText" class="find-input" type="text" placeholder="바꿀 내용" autocomplete="off">
+      <input id="replaceText" class="find-input" type="text" placeholder="바꿀 내용" autocomplete="off" title="바꿀 서식을 적용한 결과가 이 칸에 그대로 표시됩니다.">
       <label class="particle-option" title="바꾼 단어의 받침에 맞춰 바로 뒤의 조사를 교정합니다.">
         <input id="adjustParticles" type="checkbox" checked>
         조사 자동 교정
@@ -644,12 +693,14 @@
     </div>
     <div id="replaceFormats" class="replace-formats" aria-label="바꿀 내용 서식">
       <span class="replace-formats-label">바꿀 서식</span>
-      <button class="mini-format-button" type="button" data-replace-format="bold" aria-pressed="false" title="바꿀 내용을 굵게"><b>B</b></button>
-      <button class="mini-format-button" type="button" data-replace-format="italic" aria-pressed="false" title="바꿀 내용을 기울임"><i>I</i></button>
-      <button class="mini-format-button" type="button" data-replace-format="underline" aria-pressed="false" title="바꿀 내용에 밑줄"><u>U</u></button>
-      <button class="mini-format-button" type="button" data-replace-format="strikeThrough" aria-pressed="false" title="바꿀 내용에 취소선"><s>S</s></button>
+      <button class="mini-format-button" type="button" data-replace-format="bold" data-format-state="none"><b>B</b></button>
+      <button class="mini-format-button" type="button" data-replace-format="italic" data-format-state="none"><i>I</i></button>
+      <button class="mini-format-button" type="button" data-replace-format="underline" data-format-state="none"><u>U</u></button>
+      <button class="mini-format-button" type="button" data-replace-format="strikeThrough" data-format-state="none"><s>S</s></button>
+      <button id="replaceFormatReset" class="replace-formats-reset" type="button" data-format-reset title="지정한 서식을 모두 해제합니다.">서식 없음</button>
     </div>
-    <div id="replaceFormatHint" class="find-specials">켜진 버튼의 서식은 적용하고 꺼진 버튼의 서식은 제거합니다. 바꿀 내용을 비우면 글자는 유지하고 서식만 변경합니다.</div>
+    <div id="replaceFormatHint" class="find-specials" aria-live="polite"></div>
+
     <div class="find-specials">
       특수기호: <code>^p</code> 문단 · <code>^l</code> 줄바꿈 · <code>^t</code> 탭 · <code>^^</code> ^ 문자
     </div>
@@ -714,7 +765,9 @@
       const replaceRow = document.getElementById('replaceRow');
       const replaceFormats = document.getElementById('replaceFormats');
       const replaceFormatButtons = [...document.querySelectorAll('[data-replace-format]')];
+      const replaceFormatReset = document.getElementById('replaceFormatReset');
       const replaceFormatHint = document.getElementById('replaceFormatHint');
+
       const adjustParticles = document.getElementById('adjustParticles');
       const blockFormat = document.getElementById('blockFormat');
       const statefulCommandButtons = [...document.querySelectorAll('[data-command][aria-pressed]')];
@@ -740,6 +793,7 @@
       let hoveredLink = null;
       let specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
       let pastePlainRequested = false;
+      let findbarReplaceMode = false;
 
       const showToast = (message) => {
         toast.textContent = message;
@@ -1117,28 +1171,119 @@
 
       const escapeAttribute = (value) => escapeHtml(value).replace(/`/g, '&#096;');
 
-      const getReplacementFormatSettings = () => ({
-        apply: replaceFormatButtons
-          .filter((button) => button.getAttribute('aria-pressed') === 'true')
-          .map((button) => button.dataset.replaceFormat),
-        remove: replaceFormatButtons
-          .filter((button) => button.getAttribute('aria-pressed') !== 'true')
-          .map((button) => button.dataset.replaceFormat)
-      });
+      const FORMAT_LABELS = {
+        bold: '굵게',
+        italic: '기울임',
+        underline: '밑줄',
+        strikeThrough: '취소선'
+      };
+      const FORMAT_STATE_LABELS = { none: '변경 없음', apply: '적용', remove: '제거' };
+      const FORMAT_STATE_ORDER = ['none', 'apply', 'remove'];
 
-      const syncReplacementFormatButtonsFromSelection = () => {
-        const selectionInside = selectionIsInsideEditor();
+      const replacementFormatState = (button) => button.dataset.formatState || 'none';
+
+      const getReplacementFormatSettings = () => {
+        const apply = [];
+        const remove = [];
         replaceFormatButtons.forEach((button) => {
-          let isActive = false;
-          if (selectionInside) {
-            try {
-              isActive = document.queryCommandState(button.dataset.replaceFormat);
-            } catch (error) {
-              isActive = false;
-            }
-          }
-          button.setAttribute('aria-pressed', String(isActive));
+          const state = replacementFormatState(button);
+          if (state === 'apply') apply.push(button.dataset.replaceFormat);
+          else if (state === 'remove') remove.push(button.dataset.replaceFormat);
         });
+        return { apply, remove };
+      };
+
+      const FORMAT_PREVIEW_KEYS = {
+        bold: 'bold',
+        italic: 'italic',
+        underline: 'underline',
+        strikeThrough: 'strike'
+      };
+      const EMPTY_FORMAT_STATE = { bold: false, italic: false, underline: false, strike: false };
+
+      const formatStateAtNode = (node) => {
+        const chain = [];
+        let element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+        while (element && element !== editor && editor.contains(element)) {
+          chain.push(element);
+          element = element.parentElement;
+        }
+        let state = { ...EMPTY_FORMAT_STATE };
+        chain.reverse().forEach((item) => { state = docxStateForElement(item, state); });
+        return state;
+      };
+
+      const matchFormatState = () => {
+        const selection = window.getSelection();
+        let range = null;
+        if (selection && selection.rangeCount && selectionIsInsideEditor()) {
+          range = selection.getRangeAt(0);
+        } else if (savedRange) {
+          range = savedRange;
+        }
+        if (!range) return { ...EMPTY_FORMAT_STATE };
+        try {
+          return formatStateAtNode(range.startContainer);
+        } catch (error) {
+          return { ...EMPTY_FORMAT_STATE };
+        }
+      };
+
+      const resultingFormatState = (base) => {
+        const next = { ...base };
+        replaceFormatButtons.forEach((button) => {
+          const key = FORMAT_PREVIEW_KEYS[button.dataset.replaceFormat];
+          const state = replacementFormatState(button);
+          if (state === 'apply') next[key] = true;
+          else if (state === 'remove') next[key] = false;
+        });
+        return next;
+      };
+
+      const applyFormatStateToInput = (input, state) => {
+        const decorations = [];
+        if (state.underline) decorations.push('underline');
+        if (state.strike) decorations.push('line-through');
+        input.style.fontWeight = state.bold ? '700' : '';
+        input.style.fontStyle = state.italic ? 'italic' : '';
+        input.style.textDecoration = decorations.join(' ');
+      };
+
+      const updateReplacementFormatPreview = () => {
+        if (!findbarReplaceMode) {
+          applyFormatStateToInput(findText, EMPTY_FORMAT_STATE);
+          applyFormatStateToInput(replaceText, EMPTY_FORMAT_STATE);
+          return;
+        }
+        const base = matchFormatState();
+        applyFormatStateToInput(findText, base);
+        applyFormatStateToInput(replaceText, resultingFormatState(base));
+      };
+
+      const updateReplacementFormatSummary = () => {
+        const parts = replaceFormatButtons
+          .filter((button) => replacementFormatState(button) !== 'none')
+          .map((button) => `${FORMAT_LABELS[button.dataset.replaceFormat]} ${FORMAT_STATE_LABELS[replacementFormatState(button)]}`);
+        const keepsText = Boolean(parts.length) && !replaceText.value;
+        const summary = parts.length
+          ? `서식: ${parts.join(' · ')}${keepsText ? ' · 글자는 유지' : ''}`
+          : '서식: 변경 없음';
+        if (replaceFormatHint.textContent !== summary) replaceFormatHint.textContent = summary;
+        replaceFormatReset.disabled = !parts.length;
+        updateReplacementFormatPreview();
+      };
+
+      const setReplacementFormatState = (button, state) => {
+        button.dataset.formatState = state;
+        const label = FORMAT_LABELS[button.dataset.replaceFormat] || '';
+        const nextState = FORMAT_STATE_ORDER[(FORMAT_STATE_ORDER.indexOf(state) + 1) % FORMAT_STATE_ORDER.length];
+        button.setAttribute('aria-label', `${label} 서식: ${FORMAT_STATE_LABELS[state]}`);
+        button.title = `${label}: ${FORMAT_STATE_LABELS[state]} (누르면 ${FORMAT_STATE_LABELS[nextState]})`;
+      };
+
+      const resetReplacementFormatStates = () => {
+        replaceFormatButtons.forEach((button) => setReplacementFormatState(button, 'none'));
+        updateReplacementFormatSummary();
       };
 
       const hasReplacementFormatSettings = (settings) => Boolean(settings.apply.length || settings.remove.length);
@@ -2459,6 +2604,7 @@ ${sanitizeHtml(editor.innerHTML)}
 
       const openFindbar = (withReplace) => {
         hideSelectionToolbar();
+        findbarReplaceMode = Boolean(withReplace);
         const selection = window.getSelection();
         const selectedText = withReplace
           && selection
@@ -2471,11 +2617,12 @@ ${sanitizeHtml(editor.innerHTML)}
           savedRange = selection.getRangeAt(0).cloneRange();
           findText.value = selectedText;
         }
-        if (withReplace) syncReplacementFormatButtonsFromSelection();
+        if (withReplace) resetReplacementFormatStates();
         findbar.classList.add('open');
         replaceRow.style.display = withReplace ? 'grid' : 'none';
         replaceFormats.style.display = withReplace ? 'flex' : 'none';
         replaceFormatHint.style.display = withReplace ? 'block' : 'none';
+        updateReplacementFormatPreview();
         findText.focus();
         findText.select();
       };
@@ -2718,36 +2865,6 @@ ${sanitizeHtml(editor.innerHTML)}
         return null;
       };
 
-      const replaceLiteralText = (source, query, replacement, withParticles) => {
-        let cursor = 0;
-        let count = 0;
-        let particleCount = 0;
-        let output = '';
-
-        while (cursor <= source.length) {
-          const matchIndex = source.indexOf(query, cursor);
-          if (matchIndex < 0) {
-            output += source.slice(cursor);
-            break;
-          }
-
-          output += source.slice(cursor, matchIndex) + replacement;
-          cursor = matchIndex + query.length;
-          count += 1;
-
-          if (withParticles) {
-            const adjustment = getParticleAdjustment(source.slice(cursor), replacement);
-            if (adjustment && adjustment.current !== adjustment.desired) {
-              output += adjustment.desired;
-              cursor += adjustment.current.length;
-              particleCount += 1;
-            }
-          }
-        }
-
-        return { value: output, count, particleCount };
-      };
-
       const getLiteralReplacementOperations = (source, query, replacement, withParticles) => {
         const operations = [];
         let cursor = 0;
@@ -2981,8 +3098,12 @@ ${sanitizeHtml(editor.innerHTML)}
         const query = findText.value;
         const settings = getReplacementFormatSettings();
         if (!query) {
+          if (!hasReplacementFormatSettings(settings)) {
+            showToast('찾을 내용을 입력하거나 바꿀 서식을 지정하세요.');
+            return;
+          }
           const count = applyFormatSettingsToDocument(settings);
-          showToast(`문서 전체의 서식을 버튼 상태대로 변경했습니다 · 요소 ${count}개 정리.`);
+          showToast(`문서 전체의 서식을 지정한 대로 변경했습니다 · 요소 ${count}개 정리.`);
           return;
         }
         const parsedQuery = parseSpecialCodes(query);
@@ -3002,33 +3123,22 @@ ${sanitizeHtml(editor.innerHTML)}
         const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
         const nodes = [];
         while (walker.nextNode()) nodes.push(walker.currentNode);
-        if (hasReplacementFormatSettings(settings)) {
-          nodes.reverse().forEach((node) => {
-            const replacement = formattingOnly ? query : replaceText.value;
-            const result = getLiteralReplacementOperations(node.nodeValue, query, replacement, !formattingOnly && adjustParticles.checked);
-            particleCount += result.particleCount;
-            count += result.operations.length;
-            result.operations.reverse().forEach((operation) => {
-              const range = document.createRange();
-              range.setStart(node, operation.start);
-              range.setEnd(node, operation.end);
-              if (formattingOnly) {
-                applyFormattingToRange(range, settings);
-              } else {
-                replaceRangeWithSpecialTokens(range, [{ type: 'text', value: operation.insertion }], settings);
-              }
-            });
-          });
-        } else {
-          nodes.forEach((node) => {
-            const result = replaceLiteralText(node.nodeValue, query, replaceText.value, adjustParticles.checked);
-            if (result.count) {
-              count += result.count;
-              particleCount += result.particleCount;
-              node.nodeValue = result.value;
+        nodes.reverse().forEach((node) => {
+          const replacement = formattingOnly ? query : replaceText.value;
+          const result = getLiteralReplacementOperations(node.nodeValue, query, replacement, !formattingOnly && adjustParticles.checked);
+          particleCount += result.particleCount;
+          count += result.operations.length;
+          result.operations.reverse().forEach((operation) => {
+            const range = document.createRange();
+            range.setStart(node, operation.start);
+            range.setEnd(node, operation.end);
+            if (formattingOnly) {
+              applyFormattingToRange(range, settings);
+            } else {
+              replaceRangeWithSpecialTokens(range, [{ type: 'text', value: operation.insertion }], settings);
             }
           });
-        }
+        });
         updateCount();
         const particleMessage = particleCount ? ` · 조사 ${particleCount}개 자동 교정` : '';
         showToast(formattingOnly
@@ -3043,9 +3153,16 @@ ${sanitizeHtml(editor.innerHTML)}
 
       replaceFormatButtons.forEach((button) => {
         button.addEventListener('click', () => {
-          const isActive = button.getAttribute('aria-pressed') === 'true';
-          button.setAttribute('aria-pressed', String(!isActive));
+          const currentIndex = FORMAT_STATE_ORDER.indexOf(replacementFormatState(button));
+          const nextState = FORMAT_STATE_ORDER[(currentIndex + 1) % FORMAT_STATE_ORDER.length];
+          setReplacementFormatState(button, nextState);
+          updateReplacementFormatSummary();
         });
+      });
+
+      replaceFormatReset.addEventListener('click', () => {
+        resetReplacementFormatStates();
+        showToast('지정한 바꿀 서식을 모두 해제했습니다.');
       });
 
       selectionCommandButtons.forEach((button) => {
@@ -3132,6 +3249,7 @@ ${sanitizeHtml(editor.innerHTML)}
       document.addEventListener('selectionchange', () => {
         updateFormattingControlsState();
         if (selectionToolbar.classList.contains('visible')) showSelectionToolbar();
+        if (findbar.classList.contains('open')) updateReplacementFormatPreview();
       });
       document.addEventListener('mousedown', (event) => {
         if (!selectionToolbar.contains(event.target)) hideSelectionToolbar();
@@ -3278,6 +3396,9 @@ ${sanitizeHtml(editor.innerHTML)}
         if (event.key === 'Escape') closeFindbar();
       });
 
+      replaceText.addEventListener('input', updateReplacementFormatSummary);
+      findText.addEventListener('input', updateReplacementFormatPreview);
+
       document.addEventListener('keydown', async (event) => {
         const ctrl = event.ctrlKey || event.metaKey;
         const key = event.key.toLowerCase();
@@ -3310,6 +3431,86 @@ ${sanitizeHtml(editor.innerHTML)}
       });
       window.addEventListener('blur', () => { pastePlainRequested = false; });
 
+      // ===== 임시 진단 도구 (붙여넣기 문제 원인 파악용, 해결 후 이 블록만 삭제하면 됩니다) =====
+      const clipboardDiagnostics = { enabled: false, panel: null, output: null };
+
+      const buildClipboardDiagnosticsPanel = () => {
+        const panel = document.createElement('section');
+        panel.style.cssText = 'position:fixed;left:16px;bottom:16px;z-index:60;display:none;'
+          + 'width:min(600px,calc(100vw - 32px));padding:10px;border:1px solid #c9d1dc;border-radius:10px;'
+          + 'background:#fff;box-shadow:0 8px 28px rgba(32,33,36,.2);font-size:12px';
+        const title = document.createElement('div');
+        title.textContent = '클립보드 진단 · Ctrl+Alt+D로 끄기';
+        title.style.cssText = 'margin-bottom:6px;font-weight:700';
+        const output = document.createElement('textarea');
+        output.readOnly = true;
+        output.spellcheck = false;
+        output.style.cssText = 'width:100%;height:240px;padding:6px;border:1px solid #d7dce3;border-radius:6px;'
+          + 'font:11px/1.45 Consolas,monospace;white-space:pre;overflow:auto';
+        const actions = document.createElement('div');
+        actions.style.cssText = 'display:flex;gap:6px;justify-content:flex-end;margin-top:6px';
+        const copyButton = document.createElement('button');
+        copyButton.type = 'button';
+        copyButton.textContent = '진단 결과 복사';
+        copyButton.style.cssText = 'padding:4px 9px;border:1px solid #c9d1dc;border-radius:6px;background:#f8fafc;cursor:pointer';
+        copyButton.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(output.value);
+            showToast('진단 결과를 복사했습니다.');
+          } catch (error) {
+            showToast('복사에 실패했습니다. 진단 칸에서 직접 선택해 복사하세요.');
+          }
+        });
+        const clearButton = document.createElement('button');
+        clearButton.type = 'button';
+        clearButton.textContent = '지우기';
+        clearButton.style.cssText = copyButton.style.cssText;
+        clearButton.addEventListener('click', () => { output.value = ''; });
+        actions.append(copyButton, clearButton);
+        panel.append(title, output, actions);
+        document.body.appendChild(panel);
+        clipboardDiagnostics.panel = panel;
+        clipboardDiagnostics.output = output;
+      };
+
+      const recordClipboardDiagnostics = (label, event) => {
+        if (!clipboardDiagnostics.enabled || !clipboardDiagnostics.output) return;
+        const data = event.clipboardData;
+        const lines = [];
+        lines.push(`===== ${label} @ ${new Date().toLocaleTimeString()} =====`);
+        lines.push(`types: ${data ? [...data.types].join(', ') : '(clipboardData 없음)'}`);
+        ['text/plain', 'text/html'].forEach((type) => {
+          lines.push(`--- ${type} ---`);
+          lines.push(JSON.stringify(data?.getData(type) || ''));
+        });
+        lines.push('--- editor.innerHTML (이벤트 직전) ---');
+        lines.push(JSON.stringify(editor.innerHTML));
+        const previous = clipboardDiagnostics.output.value;
+        clipboardDiagnostics.output.value = `${previous ? `${previous}\n\n` : ''}${lines.join('\n')}`;
+        setTimeout(() => {
+          clipboardDiagnostics.output.value += `\n--- editor.innerHTML (이벤트 직후) ---\n${JSON.stringify(editor.innerHTML)}`;
+          clipboardDiagnostics.output.scrollTop = clipboardDiagnostics.output.scrollHeight;
+        }, 0);
+      };
+
+      const toggleClipboardDiagnostics = () => {
+        if (!clipboardDiagnostics.panel) buildClipboardDiagnosticsPanel();
+        clipboardDiagnostics.enabled = !clipboardDiagnostics.enabled;
+        clipboardDiagnostics.panel.style.display = clipboardDiagnostics.enabled ? 'block' : 'none';
+        showToast(clipboardDiagnostics.enabled ? '클립보드 진단을 켰습니다.' : '클립보드 진단을 껐습니다.');
+      };
+
+      editor.addEventListener('paste', (event) => recordClipboardDiagnostics('PASTE', event), true);
+      document.addEventListener('copy', (event) => recordClipboardDiagnostics('COPY', event));
+      document.addEventListener('keydown', (event) => {
+        if ((event.ctrlKey || event.metaKey) && event.altKey && event.key.toLowerCase() === 'd') {
+          event.preventDefault();
+          toggleClipboardDiagnostics();
+        }
+      });
+      // ===== 임시 진단 도구 끝 =====
+
+      resetReplacementFormatStates();
       updateCount();
       updateFormattingControlsState();
     })();
