@@ -833,6 +833,51 @@ await withPage({}, async (page) => {
   r.check('U10 툴바 되돌리기 버튼', await page.evaluate(() => T.html()), '<p>가 가</p>');
 });
 
+/* =================== 사용자 영역 문자 보존 =================== */
+
+// 복사·붙여넣기는 서식을 U+E300 부터의 사용자 영역 문자로 표시한다.
+// 원고에 그 구간의 문자가 들어 있으면 표식으로 오해해 글자가 사라졌다.
+// 글꼴 아이콘이나 일부 이모지 세트가 실제로 쓰는 구간이므로 실제 원고에 나온다.
+console.log('\n--- 사용자 영역 문자 보존 ---');
+
+// 실제 클립보드를 거쳐 왕복시킨다. 표식은 클립보드에 쓸 때 붙고 읽을 때
+// 떼어지므로, 합성 이벤트로는 이 경로를 재현할 수 없다.
+const copyAllAndPaste = async (page) => {
+  await page.keyboard.press('Control+a');
+  await page.keyboard.press('Control+c');
+  await page.waitForTimeout(200);
+  await page.evaluate(() => T.set('<p><br></p>'));
+  await page.evaluate(() => T.caretIn(0, true));
+  await page.keyboard.press('Control+v');
+  await page.waitForTimeout(280);
+};
+
+for (const [label, spec, expected] of [
+  ['표식 구간 첫 문자', '<p>앞뒤</p>', '앞뒤'],
+  ['표식 구간 끝 문자', '<p>앞뒤</p>', '앞뒤'],
+  ['escape 문자 자체', '<p>앞뒤</p>', '앞뒤'],
+  ['여러 개 섞임', '<p>가나다</p>', '가나다'],
+  ['서식과 함께', '<p>앞<b>굵게</b>뒤</p>', '앞굵게뒤'],
+]) {
+  // eslint-disable-next-line no-await-in-loop
+  await withPage({}, async (page) => {
+    await page.evaluate((html) => T.set(html), spec);
+    await copyAllAndPaste(page);
+    r.check(`V1 왕복 후 글자 보존 — ${label}`,
+      await page.evaluate(() => T.text()), expected,
+      await page.evaluate(() => T.html()));
+  });
+}
+
+// 표식이 살아 있어야 서식도 함께 유지된다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>앞<b>굵게</b>뒤</p>'));
+  await copyAllAndPaste(page);
+  r.check('V2 사용자 영역 문자가 있어도 굵게 유지',
+    await page.evaluate(() => T.boldTags()), 1,
+    await page.evaluate(() => T.html()));
+});
+
 const failed = r.summary();
 await browser.close();
 server.close();

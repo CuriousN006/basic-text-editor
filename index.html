@@ -2647,6 +2647,19 @@ ${sanitizeHtml(editor.innerHTML)}
       const CLIPBOARD_MARK_BASE = 0xE300;
       const CLIPBOARD_MARK_LIMIT = 240;
 
+      // 사용자 영역(PUA)은 글꼴 아이콘이나 일부 이모지 세트가 실제로 쓰는
+      // 구간입니다. 원고에 그런 문자가 들어 있으면 표식으로 오해해 글자가
+      // 그대로 사라졌습니다. 그래서 원고의 해당 문자 앞에는 이 escape 문자를
+      // 붙여 표식과 구분하고, 읽는 쪽에서 escape를 떼어 원래 글자를 살립니다.
+      const CLIPBOARD_MARK_ESCAPE = 0xE2FF;
+      const CLIPBOARD_RESERVED_PATTERN = new RegExp(
+        `[\\u${CLIPBOARD_MARK_ESCAPE.toString(16)}-\\u${(CLIPBOARD_MARK_BASE + CLIPBOARD_MARK_LIMIT - 1).toString(16)}]`,
+        'g'
+      );
+
+      const escapeClipboardReserved = (value) => String(value)
+        .replace(CLIPBOARD_RESERVED_PATTERN, (character) => String.fromCharCode(CLIPBOARD_MARK_ESCAPE) + character);
+
       const clipboardRunsFromMarkedText = (segment, styles) => {
         const runs = [];
         let style = EMPTY_CLIPBOARD_STYLE;
@@ -2661,8 +2674,19 @@ ${sanitizeHtml(editor.innerHTML)}
           buffer = '';
         };
 
-        for (const character of segment) {
+        // 서로게이트 쌍은 코드 단위로 나눠 담아도 buffer에서 다시 이어집니다.
+        for (let index = 0; index < segment.length; index += 1) {
+          const character = segment[index];
           const code = character.charCodeAt(0);
+          if (code === CLIPBOARD_MARK_ESCAPE) {
+            // escape 다음 글자는 표식이 아니라 원고의 글자입니다.
+            const escaped = segment[index + 1];
+            if (escaped !== undefined) {
+              buffer += escaped;
+              index += 1;
+            }
+            continue;
+          }
           if (code >= CLIPBOARD_MARK_BASE && code < CLIPBOARD_MARK_BASE + CLIPBOARD_MARK_LIMIT) {
             flush();
             style = styles[code - CLIPBOARD_MARK_BASE] || EMPTY_CLIPBOARD_STYLE;
@@ -2808,11 +2832,16 @@ ${sanitizeHtml(editor.innerHTML)}
           const style = clipboardStyleAt(node, doc.body);
           let index = styles.findIndex((item) => sameClipboardStyle(item, style));
           if (index < 0) {
-            if (styles.length >= CLIPBOARD_MARK_LIMIT) return;
+            if (styles.length >= CLIPBOARD_MARK_LIMIT) {
+              // 표식을 못 붙이면 서식은 잃지만 글자는 남겨야 합니다.
+              node.nodeValue = escapeClipboardReserved(node.nodeValue);
+              return;
+            }
             styles.push(style);
             index = styles.length - 1;
           }
-          node.nodeValue = String.fromCharCode(CLIPBOARD_MARK_BASE + index) + node.nodeValue;
+          node.nodeValue = String.fromCharCode(CLIPBOARD_MARK_BASE + index)
+            + escapeClipboardReserved(node.nodeValue);
         });
 
         const host = document.createElement('div');
