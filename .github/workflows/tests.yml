@@ -23,7 +23,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       # package-lock.json 을 저장소에 두지 않으므로 npm ci 대신 install 입니다.
       - name: 의존성 설치
