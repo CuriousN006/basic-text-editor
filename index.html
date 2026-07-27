@@ -716,7 +716,8 @@
       <span>표 삽입</span>
       <button class="table-picker-close" type="button" data-table-action="close" title="닫기">✕</button>
     </div>
-    <div id="tableGrid" class="table-grid" role="grid" aria-label="행과 열 선택"></div>
+    <!-- role="grid"는 row 래퍼를 요구합니다. 여기서는 버튼 묶음이므로 group을 씁니다. -->
+    <div id="tableGrid" class="table-grid" role="group" aria-label="행과 열 선택"></div>
     <div id="tableSizeLabel" class="table-size-label">1행 × 1열</div>
     <div class="table-direct">
       <label>행 <input id="tableRows" type="number" min="1" max="50" value="2"></label>
@@ -731,7 +732,8 @@
     </div>
   </section>
 
-  <div class="statusbar" aria-live="polite">
+  <!-- 글자 수가 바뀔 때마다 읽어 주면 입력을 방해하므로 aria-live를 두지 않습니다. -->
+  <div class="statusbar">
     <span id="fileName">새 문서</span>
     <span id="count">0자 · 0단어</span>
   </div>
@@ -1154,8 +1156,9 @@
         if (!url) return;
 
         const trimmed = url.trim();
-        if (!/^(https?:\/\/|mailto:|tel:)/i.test(trimmed)) {
-          showToast('http://, https://, mailto:, tel: 주소만 사용할 수 있습니다.');
+        // 스킴만 있는 값(기본값 https:// 를 그대로 확인한 경우)은 거부합니다.
+        if (!isUrl(trimmed)) {
+          showToast('http://, https://, mailto:, tel: 뒤에 주소를 입력하세요.');
           return;
         }
 
@@ -1315,33 +1318,6 @@
 
       const hasReplacementFormatSettings = (settings) => Boolean(settings.apply.length || settings.remove.length);
 
-      const setSelectionFormatState = (command, shouldBeActive) => {
-        let isActive = false;
-        try {
-          isActive = document.queryCommandState(command);
-        } catch (error) {
-          isActive = false;
-        }
-        if (isActive !== shouldBeActive) document.execCommand(command, false, null);
-      };
-
-      const applyReplacementFormatSettings = (settings) => {
-        settings.remove.forEach((command) => setSelectionFormatState(command, false));
-        settings.apply.forEach((command) => setSelectionFormatState(command, true));
-      };
-
-      const insertReplacementText = (value, settings = { apply: [], remove: [] }) => {
-        if (!value) return;
-        applyReplacementFormatSettings(settings);
-        document.execCommand('insertText', false, value);
-      };
-
-      const applyFormattingToRange = (range, settings) => {
-        selectEditorRange(range);
-        applyReplacementFormatSettings(settings);
-        saveSelection();
-      };
-
       const unwrapElement = (element) => {
         const parent = element.parentNode;
         if (!parent) return;
@@ -1349,72 +1325,238 @@
         element.remove();
       };
 
-      const removeFormatsFromDocument = (formats) => {
-        const selectors = {
-          bold: 'b,strong',
-          italic: 'i,em',
-          underline: 'u',
-          strikeThrough: 's,strike,del'
-        };
-        const affected = new Set();
-
-        formats.forEach((format) => {
-          editor.querySelectorAll(selectors[format]).forEach((element) => {
-            affected.add(element);
-            unwrapElement(element);
-          });
-        });
-
-        editor.querySelectorAll('[style]').forEach((element) => {
-          let changed = false;
-          if (formats.includes('bold') && element.style.fontWeight) {
-            element.style.fontWeight = '';
-            changed = true;
-          }
-          if (formats.includes('italic') && element.style.fontStyle) {
-            element.style.fontStyle = '';
-            changed = true;
-          }
-          const removedDecorations = [];
-          if (formats.includes('underline')) removedDecorations.push('underline');
-          if (formats.includes('strikeThrough')) removedDecorations.push('line-through');
-          if (removedDecorations.length) {
-            const decoration = String(element.style.textDecorationLine || element.style.textDecoration || '');
-            const nextDecoration = decoration.split(/\s+/).filter((value) => value && !removedDecorations.includes(value)).join(' ');
-            if (nextDecoration !== decoration) {
-              element.style.textDecoration = nextDecoration;
-              changed = true;
-            }
-          }
-          if (changed) affected.add(element);
-          if (!element.getAttribute('style')?.trim()) element.removeAttribute('style');
-        });
-
-        normalizeEmptyDocument();
-        updateCount();
-        updateFormattingControlsState();
-        return affected.size;
+      // ===== 인라인 서식 엔진 =====
+      // document.execCommand는 선택 영역에 대한 "토글"만 제공하므로 서식이 섞인
+      // 범위에 절대 상태(반드시 해제)를 지정할 수 없습니다. queryCommandState가
+      // 혼합 범위에서 false를 돌려주면 해제 명령이 아예 실행되지 않기 때문입니다.
+      // 그래서 서식 적용/해제를 DOM 조작으로 직접 구현합니다.
+      // 여기의 모든 함수는 편집기 본체와 분리된 복제본에서도 동작해야 하므로
+      // 대상 root를 인자로 받고 전역 selection을 건드리지 않습니다.
+      const FORMAT_DEFINITIONS = {
+        bold: { tag: 'b', selector: 'b,strong' },
+        italic: { tag: 'i', selector: 'i,em' },
+        underline: { tag: 'u', selector: 'u' },
+        strikeThrough: { tag: 's', selector: 's,strike,del' }
       };
 
-      const applyFormatSettingsToDocument = (settings) => {
-        const removedCount = removeFormatsFromDocument(settings.remove);
-        if (settings.apply.length) {
-          const range = document.createRange();
-          range.selectNodeContents(editor);
-          applyFormattingToRange(range, { apply: settings.apply, remove: [] });
+      const FORMAT_DECORATIONS = { underline: 'underline', strikeThrough: 'line-through' };
+
+      const styleCarriesFormat = (element, format) => {
+        const style = element.style;
+        if (!style) return false;
+        if (format === 'bold') {
+          const weight = String(style.fontWeight || '');
+          return weight === 'bold' || Number.parseInt(weight, 10) >= 600;
         }
-        updateCount();
-        return removedCount;
+        if (format === 'italic') return style.fontStyle === 'italic';
+        const decoration = String(style.textDecorationLine || style.textDecoration || '');
+        return decoration.includes(FORMAT_DECORATIONS[format]);
       };
+
+      const clearFormatStyle = (element, format) => {
+        const style = element.style;
+        if (!style) return;
+        if (format === 'bold') style.fontWeight = '';
+        else if (format === 'italic') style.fontStyle = '';
+        else {
+          const decoration = String(style.textDecorationLine || style.textDecoration || '');
+          const next = decoration.split(/\s+/)
+            .filter((value) => value && value !== FORMAT_DECORATIONS[format])
+            .join(' ');
+          style.textDecoration = next;
+          if (style.textDecorationLine) style.textDecorationLine = next;
+        }
+        if (!element.getAttribute('style')?.trim()) element.removeAttribute('style');
+      };
+
+      const elementCarriesFormat = (element, format) => {
+        if (element.nodeType !== Node.ELEMENT_NODE) return false;
+        const definition = FORMAT_DEFINITIONS[format];
+        if (!definition) return false;
+        return element.matches(definition.selector) || styleCarriesFormat(element, format);
+      };
+
+      const formatActiveAt = (node, root, format) => {
+        for (let element = node.parentNode; element && element !== root; element = element.parentNode) {
+          if (elementCarriesFormat(element, format)) return true;
+        }
+        return false;
+      };
+
+      // 범위와 겹치는 텍스트 노드를, 범위 경계에서 정확히 쪼개어 돌려줍니다.
+      const splitTextNodesInRange = (range, root) => {
+        const overlaps = [];
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+          const node = walker.currentNode;
+          if (!node.nodeValue) continue;
+          if (!range.intersectsNode(node)) continue;
+          const start = node === range.startContainer ? range.startOffset : 0;
+          const end = node === range.endContainer ? range.endOffset : node.nodeValue.length;
+          if (start >= end) continue;
+          overlaps.push({ node, start, end });
+        }
+        // 쪼개기는 수집이 끝난 뒤에 합니다. 도중에 하면 walker가 새 노드를 다시 봅니다.
+        return overlaps.map(({ node, start, end }) => {
+          let target = node;
+          if (end < target.nodeValue.length) target.splitText(end);
+          if (start > 0) target = target.splitText(start);
+          return target;
+        });
+      };
+
+      // node를 ancestor 밖으로 끌어냅니다. ancestor를 [앞][node][뒤]로 나누되
+      // 중간 래퍼(예: <b> 안의 <em>)는 그대로 보존합니다.
+      const splitAncestorAround = (node, ancestor, format) => {
+        const doc = ancestor.ownerDocument;
+        const parent = ancestor.parentNode;
+        if (!parent) return;
+
+        const tailRange = doc.createRange();
+        tailRange.setStartAfter(node);
+        tailRange.setEnd(ancestor, ancestor.childNodes.length);
+        const tailFragment = tailRange.extractContents();
+
+        const headRange = doc.createRange();
+        headRange.setStart(ancestor, 0);
+        headRange.setEndBefore(node);
+        const headFragment = headRange.extractContents();
+
+        // 이제 ancestor에는 node를 감싼 중간 래퍼만 남아 있습니다.
+        const middle = doc.createDocumentFragment();
+        while (ancestor.firstChild) middle.appendChild(ancestor.firstChild);
+
+        // 서식이 인라인 스타일로 표현된 경우, 그 속성만 지운 사본으로 감싸
+        // 색상 등 다른 스타일은 잃지 않게 합니다.
+        let middleRoot = middle;
+        if (!ancestor.matches(FORMAT_DEFINITIONS[format].selector)) {
+          const keeper = ancestor.cloneNode(false);
+          clearFormatStyle(keeper, format);
+          if (keeper.attributes.length) {
+            keeper.appendChild(middle);
+            middleRoot = keeper;
+          }
+        }
+
+        const head = ancestor.cloneNode(false);
+        head.appendChild(headFragment);
+        const tail = ancestor.cloneNode(false);
+        tail.appendChild(tailFragment);
+
+        if (head.firstChild) parent.insertBefore(head, ancestor);
+        parent.insertBefore(middleRoot, ancestor);
+        if (tail.firstChild) parent.insertBefore(tail, ancestor);
+        ancestor.remove();
+      };
+
+      const liftNodeOutOfFormat = (node, root, format) => {
+        for (let guard = 0; guard < 64; guard += 1) {
+          let outermost = null;
+          for (let element = node.parentNode; element && element !== root; element = element.parentNode) {
+            if (elementCarriesFormat(element, format)) outermost = element;
+          }
+          if (!outermost) return;
+          splitAncestorAround(node, outermost, format);
+        }
+      };
+
+      const rangeAround = (nodes) => {
+        const range = document.createRange();
+        range.setStartBefore(nodes[0]);
+        range.setEndAfter(nodes[nodes.length - 1]);
+        return range;
+      };
+
+      // 범위 안의 해당 서식을 확실히 제거합니다. 범위 내부의 서식 요소든
+      // 범위를 감싼 조상이든, 모든 텍스트 노드를 서식 밖으로 끌어내는
+      // 한 가지 방법으로 함께 처리됩니다.
+      const removeFormatFromRange = (range, root, format) => {
+        const nodes = splitTextNodesInRange(range, root);
+        if (!nodes.length) return range;
+        nodes.forEach((node) => liftNodeOutOfFormat(node, root, format));
+        return rangeAround(nodes);
+      };
+
+      const applyFormatToRange = (range, root, format) => {
+        const nodes = splitTextNodesInRange(range, root);
+        if (!nodes.length) return range;
+        const { tag } = FORMAT_DEFINITIONS[format];
+        nodes.forEach((node) => {
+          if (formatActiveAt(node, root, format)) return;
+          const wrapper = node.ownerDocument.createElement(tag);
+          node.parentNode.insertBefore(wrapper, node);
+          wrapper.appendChild(node);
+        });
+        return rangeAround(nodes);
+      };
+
+      const applyLinkToRange = (range, root, href) => {
+        const nodes = splitTextNodesInRange(range, root);
+        if (!nodes.length) return range;
+        nodes.forEach((node) => {
+          if (node.parentElement?.closest('a')) return;
+          const anchor = node.ownerDocument.createElement('a');
+          anchor.setAttribute('href', href);
+          node.parentNode.insertBefore(anchor, node);
+          anchor.appendChild(node);
+        });
+        return rangeAround(nodes);
+      };
+
+      const applyFormatSettingsToRange = (range, root, settings) => {
+        let current = range;
+        settings.remove.forEach((format) => { current = removeFormatFromRange(current, root, format); });
+        settings.apply.forEach((format) => { current = applyFormatToRange(current, root, format); });
+        return current;
+      };
+
+      // 내용이 사라진 인라인 래퍼를 정리합니다.
+      const pruneEmptyInlineElements = (root) => {
+        [...root.querySelectorAll('b,strong,i,em,u,s,strike,del,span,code,a')].forEach((element) => {
+          if (element.textContent) return;
+          if (element.querySelector('img,br,hr,table,svg,video,audio,canvas')) return;
+          element.remove();
+        });
+      };
+      // ===== 인라인 서식 엔진 끝 =====
+
+      // 브라우저는 URL을 해석할 때 탭·개행 같은 제어문자를 먼저 제거합니다.
+      // 그래서 "java&#9;script:..." 같은 값은 실제로 실행되는데도 단순한
+      // 문자열 앞부분 비교로는 걸러지지 않습니다. 브라우저와 같은 방식으로
+      // 정규화한 뒤 허용된 스킴만 통과시킵니다.
+      const SAFE_URL_SCHEMES = new Set(['http:', 'https:', 'mailto:', 'tel:']);
+
+      const isSafeUrlValue = (value, { allowInlineImage = false } = {}) => {
+        const normalized = String(value).replace(/[\u0000-\u0020\u00a0]/g, '');
+        if (!normalized) return true;
+        if (!/^[a-z][a-z0-9+.-]*:/i.test(normalized)) return true; // 스킴 없는 상대 주소
+        // 붙여넣은 문서에 들어 있는 인라인 이미지는 살립니다. 단 SVG는
+        // 자체적으로 스크립트를 담을 수 있으므로 제외합니다.
+        if (allowInlineImage && /^data:image\/(png|jpe?g|gif|webp|bmp|avif);/i.test(normalized)) return true;
+        try {
+          return SAFE_URL_SCHEMES.has(new URL(normalized, document.baseURI).protocol);
+        } catch (error) {
+          return false;
+        }
+      };
+
+      const URL_ATTRIBUTES = new Set(['href', 'src', 'srcdoc', 'srcset', 'action', 'formaction', 'xlink:href', 'data', 'background', 'poster']);
 
       const sanitizeHtml = (html) => {
         const doc = new DOMParser().parseFromString(html, 'text/html');
-        doc.querySelectorAll('script, style, iframe, object, embed, link, meta').forEach((node) => node.remove());
+        // form은 formaction/action 을 통해 저장된 HTML에서 동작할 수 있으므로 함께 제거합니다.
+        doc.querySelectorAll('script, style, iframe, object, embed, link, meta, form, base, template, noscript')
+          .forEach((node) => node.remove());
         doc.querySelectorAll('*').forEach((node) => {
           [...node.attributes].forEach((attribute) => {
             const name = attribute.name.toLowerCase();
-            const value = attribute.value.trim().toLowerCase();
-            if (name.startsWith('on') || ((name === 'href' || name === 'src') && value.startsWith('javascript:'))) {
+            if (name.startsWith('on')) {
+              node.removeAttribute(attribute.name);
+              return;
+            }
+            if (!URL_ATTRIBUTES.has(name)) return;
+            const allowInlineImage = name === 'src' && ['IMG', 'VIDEO', 'AUDIO'].includes(node.tagName);
+            if (!isSafeUrlValue(attribute.value, { allowInlineImage })) {
               node.removeAttribute(attribute.name);
             }
           });
@@ -1440,8 +1582,10 @@
           .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>')
           .replace(/(^|[^_])_([^_\n]+)_(?!_)/g, '$1<em>$2</em>')
           .replace(/  $/, '<br>');
+        // 치환값을 문자열로 넘기면 $&, $`, $' 가 특수 치환으로 해석됩니다.
+        // 코드 스팬에 그런 문자가 들어 있으면 내용이 깨지므로 함수로 넘깁니다.
         codeTokens.forEach((html, index) => {
-          value = value.replace(`\u0000CODE${index}\u0000`, html);
+          value = value.replace(`\u0000CODE${index}\u0000`, () => html);
         });
         return value;
       };
@@ -1573,9 +1717,10 @@
           if (node.nodeType !== Node.ELEMENT_NODE) return '';
           const tag = node.tagName.toLowerCase();
           const inline = () => [...node.childNodes].map(inlineHtmlToMarkdown).join('').trimEnd();
-          if (tag === 'h1') return `# ${inline()}\n\n`;
-          if (tag === 'h2') return `## ${inline()}\n\n`;
-          if (tag === 'h3') return `### ${inline()}\n\n`;
+          // h4~h6은 편집기 메뉴에는 없지만 외부 HTML을 열면 들어옵니다.
+          // 처리하지 않으면 기본 분기로 떨어져 개행 없이 옆 글자와 붙습니다.
+          const heading = tag.match(/^h([1-6])$/);
+          if (heading) return `${'#'.repeat(Number(heading[1]))} ${inline()}\n\n`;
           if (tag === 'p' || tag === 'div') {
             const value = inline();
             return value ? `${value}\n\n` : '\n';
@@ -1587,10 +1732,27 @@
             return `${sanitizeHtml(node.outerHTML).replace(/\r?\n/g, '')}\n\n`;
           }
           if (tag === 'ul' || tag === 'ol') {
-            return [...node.children].map((li, index) => {
-              const marker = tag === 'ol' ? `${index + 1}. ` : '- ';
-              return `${'  '.repeat(depth)}${marker}${[...li.childNodes].map(inlineHtmlToMarkdown).join('').trim()}`;
-            }).join('\n') + '\n\n';
+            // 중첩 목록은 자식 ul/ol을 따로 떼어 depth를 올려 재귀합니다.
+            // 예전에는 depth가 증가하지 않고 중첩 목록이 인라인으로 취급되어
+            // 안쪽 항목이 바깥 항목 뒤에 그대로 붙어 버렸습니다.
+            return [...node.children]
+              .filter((child) => child.tagName === 'LI')
+              .map((li, index) => {
+                const marker = tag === 'ol' ? `${index + 1}. ` : '- ';
+                const nestedLists = [...li.children].filter((child) => ['UL', 'OL'].includes(child.tagName));
+                const own = [...li.childNodes]
+                  .filter((child) => !(child.nodeType === Node.ELEMENT_NODE && ['UL', 'OL'].includes(child.tagName)))
+                  .map(inlineHtmlToMarkdown)
+                  .join('')
+                  .trim();
+                const line = `${'  '.repeat(depth)}${marker}${own}`;
+                const nested = nestedLists
+                  .map((child) => convertBlock(child, depth + 1).replace(/\n+$/, ''))
+                  .filter(Boolean)
+                  .join('\n');
+                return nested ? `${line}\n${nested}` : line;
+              })
+              .join('\n') + '\n\n';
           }
           return [...node.childNodes].map((child) => convertBlock(child, depth)).join('');
         };
@@ -1809,6 +1971,10 @@ ${sanitizeHtml(editor.innerHTML)}
           H1: 'Heading1',
           H2: 'Heading2',
           H3: 'Heading3',
+          // 외부 HTML의 h4~h6도 제목으로 보이게 가장 가까운 단계에 맞춥니다.
+          H4: 'Heading3',
+          H5: 'Heading3',
+          H6: 'Heading3',
           BLOCKQUOTE: 'BlockQuote',
           PRE: 'Preformatted'
         };
@@ -1950,8 +2116,8 @@ ${sanitizeHtml(editor.innerHTML)}
       const saveHtmlDocument = async () => {
         if (typeof window.showSaveFilePicker !== 'function') {
           downloadText(buildStandaloneHtml(), suggestedName('html'), 'text/html');
-          markDocumentClean();
-          showToast('HTML 파일로 저장했습니다.');
+          markDocumentSavedUnverified();
+          showToast('HTML 파일을 내려받았습니다.');
           return;
         }
 
@@ -1980,8 +2146,8 @@ ${sanitizeHtml(editor.innerHTML)}
       const saveMarkdownDocument = async () => {
         if (typeof window.showSaveFilePicker !== 'function') {
           downloadText(htmlToMarkdown(), suggestedName('md'), 'text/markdown');
-          markDocumentClean();
-          showToast('마크다운 파일로 저장했습니다.');
+          markDocumentSavedUnverified();
+          showToast('마크다운 파일을 내려받았습니다.');
           return;
         }
 
@@ -2012,8 +2178,8 @@ ${sanitizeHtml(editor.innerHTML)}
         if (typeof window.showSaveFilePicker !== 'function') {
           try {
             downloadBlob(buildDocxBlob(), suggestedName('docx'));
-            markDocumentClean();
-            showToast('DOCX 파일로 저장했습니다.');
+            markDocumentSavedUnverified();
+            showToast('DOCX 파일을 내려받았습니다.');
           } catch (error) {
             showToast('DOCX 파일을 만들지 못했습니다.');
           }
@@ -2261,9 +2427,31 @@ ${sanitizeHtml(editor.innerHTML)}
         });
       };
 
+      const INLINE_COPY_TAGS = new Set([
+        'B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'DEL', 'A', 'CODE', 'SPAN', 'FONT'
+      ]);
+
+      // Range.cloneContents는 범위를 감싸고 있는 조상 태그를 포함하지 않습니다.
+      // 그래서 굵은 단어의 일부만 선택해 복사하면 굵게가 사라졌습니다.
+      // 빠진 인라인 서식 조상을 안쪽부터 다시 씌웁니다.
+      const restoreInlineAncestors = (container, range) => {
+        const chain = [];
+        let element = range.commonAncestorContainer;
+        if (element && element.nodeType !== Node.ELEMENT_NODE) element = element.parentElement;
+        for (; element && element !== editor && editor.contains(element); element = element.parentElement) {
+          if (INLINE_COPY_TAGS.has(element.tagName)) chain.push(element);
+        }
+        chain.forEach((source) => {
+          const wrapper = source.cloneNode(false);
+          while (container.firstChild) wrapper.appendChild(container.firstChild);
+          container.appendChild(wrapper);
+        });
+      };
+
       const clipboardHtmlWithExplicitBreaks = (range) => {
         const container = document.createElement('div');
         container.appendChild(range.cloneContents());
+        restoreInlineAncestors(container, range);
         const clipboardBlockTags = new Set([
           'P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'PRE',
           'UL', 'OL', 'LI', 'TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TD', 'TH', 'HR'
@@ -2379,12 +2567,223 @@ ${sanitizeHtml(editor.innerHTML)}
       // <br>은 문단 나눔이 아니라 문단 안의 줄바꿈이므로 따로 표시해 둡니다.
       const CLIPBOARD_SOFT_BREAK = '\u0001';
 
-      // 클립보드 HTML을 "문단 배열 안의 줄 배열"로 바꿉니다.
+      // 붙여넣기에서 유지하는 인라인 서식입니다. 글꼴·글자 크기·색처럼 문서
+      // 전체 모양을 흔드는 외부 서식은 가져오지 않습니다.
+      const EMPTY_CLIPBOARD_STYLE = {
+        bold: false, italic: false, underline: false, strike: false, href: ''
+      };
+
+      const sameClipboardStyle = (left, right) => left.bold === right.bold
+        && left.italic === right.italic
+        && left.underline === right.underline
+        && left.strike === right.strike
+        && left.href === right.href;
+
+      const clipboardLinkHref = (element) => {
+        const source = String(element.getAttribute('href') || '').trim();
+        if (!source) return '';
+        try {
+          const resolved = new URL(source, document.baseURI);
+          return SAFE_URL_SCHEMES.has(resolved.protocol) ? resolved.href : '';
+        } catch (error) {
+          return '';
+        }
+      };
+
+      // 인라인 스타일로 명시된 값을 돌려줍니다. 지정이 없으면 null입니다.
+      const explicitInheritedStyleState = (element, format) => {
+        const style = element.style;
+        if (!style) return null;
+        if (format === 'bold') {
+          const weight = String(style.fontWeight || '');
+          if (!weight) return null;
+          return weight === 'bold' || Number.parseInt(weight, 10) >= 600;
+        }
+        const fontStyle = String(style.fontStyle || '');
+        if (!fontStyle) return null;
+        return fontStyle === 'italic' || fontStyle === 'oblique';
+      };
+
+      // 굵게·기울임은 상속되는 속성이므로 가장 가까운 명시적 지정이 이깁니다.
+      // Google 문서는 <b style="font-weight:normal"> 래퍼로 문서 전체를 감싸기
+      // 때문에, 태그만 보고 판정하면 붙여넣은 글이 전부 굵어집니다.
+      const resolveInheritedFormat = (node, root, format) => {
+        for (let element = node.parentNode; element && element !== root; element = element.parentNode) {
+          if (element.nodeType !== Node.ELEMENT_NODE) continue;
+          const explicit = explicitInheritedStyleState(element, format);
+          if (explicit !== null) return explicit;
+          if (element.matches(FORMAT_DEFINITIONS[format].selector)) return true;
+        }
+        return false;
+      };
+
+      // 밑줄·취소선은 상속이 아니라 조상에 그려지는 장식이라, 자손에서 none으로
+      // 되돌릴 수 없습니다. 그래서 하나라도 있으면 적용된 것으로 봅니다.
+      const hasDecorationFormat = (node, root, format) => {
+        for (let element = node.parentNode; element && element !== root; element = element.parentNode) {
+          if (element.nodeType !== Node.ELEMENT_NODE) continue;
+          if (elementCarriesFormat(element, format)) return true;
+        }
+        return false;
+      };
+
+      const clipboardStyleAt = (node, root) => {
+        const style = { ...EMPTY_CLIPBOARD_STYLE };
+        style.bold = resolveInheritedFormat(node, root, 'bold');
+        style.italic = resolveInheritedFormat(node, root, 'italic');
+        style.underline = hasDecorationFormat(node, root, 'underline');
+        style.strike = hasDecorationFormat(node, root, 'strikeThrough');
+        for (let element = node.parentNode; element && element !== root; element = element.parentNode) {
+          if (element.nodeType === Node.ELEMENT_NODE && element.tagName === 'A') {
+            style.href = clipboardLinkHref(element);
+            if (style.href) break;
+          }
+        }
+        return style;
+      };
+
+      // 서식 표식으로 쓸 사용자 영역 문자입니다. 공백이 아니므로 innerText의
+      // 공백 정리에 사라지지 않고, 글자와 같은 자리에 남습니다.
+      const CLIPBOARD_MARK_BASE = 0xE300;
+      const CLIPBOARD_MARK_LIMIT = 240;
+
+      const clipboardRunsFromMarkedText = (segment, styles) => {
+        const runs = [];
+        let style = EMPTY_CLIPBOARD_STYLE;
+        let buffer = '';
+        const flush = () => {
+          if (!buffer) return;
+          // 서식이 같은 이웃 구간은 하나로 합칩니다. 나누어 두면 붙여넣을 때
+          // <b>가</b><b>나</b> 처럼 껍데기가 여러 개 생깁니다.
+          const last = runs[runs.length - 1];
+          if (last && sameClipboardStyle(last, style)) last.text += buffer;
+          else runs.push({ ...style, text: buffer });
+          buffer = '';
+        };
+
+        for (const character of segment) {
+          const code = character.charCodeAt(0);
+          if (code >= CLIPBOARD_MARK_BASE && code < CLIPBOARD_MARK_BASE + CLIPBOARD_MARK_LIMIT) {
+            flush();
+            style = styles[code - CLIPBOARD_MARK_BASE] || EMPTY_CLIPBOARD_STYLE;
+            continue;
+          }
+          buffer += character;
+        }
+        flush();
+        return finalizeClipboardRuns(runs, true);
+      };
+
+      // 한 줄의 구간 목록을 다듬습니다.
+      //  - trimEdges: 표식 문자가 공백이 아니어서 블록 앞뒤 공백이 innerText에서
+      //    지워지지 않고 남습니다. 브라우저가 화면에서도 지우는 공백이므로 맞춥니다.
+      //  - 서식이 있는 구간의 양 끝 공백은 서식 밖으로 뺍니다. 밑줄·취소선·링크는
+      //    공백에도 선이 그려져 "밑줄 "처럼 눈에 보입니다.
+      //  - 줄바꿈 없는 공백(&nbsp;)은 눈에 보이는 글자이므로 일반 공백으로 남깁니다.
+      const finalizeClipboardRuns = (runs, trimEdges) => {
+        const working = [...runs];
+        if (trimEdges) {
+          while (working.length) {
+            working[0].text = working[0].text.replace(/^[ \t\n\r]+/, '');
+            if (working[0].text) break;
+            working.shift();
+          }
+          while (working.length) {
+            const last = working[working.length - 1];
+            last.text = last.text.replace(/[ \t\n\r]+$/, '');
+            if (last.text) break;
+            working.pop();
+          }
+        }
+        working.forEach((run) => { run.text = run.text.replace(/\u00A0/g, ' '); });
+
+        const spaced = [];
+        const push = (style, text) => {
+          if (!text) return;
+          const last = spaced[spaced.length - 1];
+          if (last && sameClipboardStyle(last, style)) last.text += text;
+          else spaced.push({ ...style, text });
+        };
+        working.forEach((run) => {
+          const styled = run.bold || run.italic || run.underline || run.strike || run.href;
+          const parts = run.text.match(/^(\s*)([\s\S]*?)(\s*)$/);
+          if (!styled || !parts || !parts[2]) {
+            push(run, run.text);
+            return;
+          }
+          push(EMPTY_CLIPBOARD_STYLE, parts[1]);
+          push(run, parts[2]);
+          push(EMPTY_CLIPBOARD_STYLE, parts[3]);
+        });
+
+        // 공백만 남은 줄은 빈 줄로 봅니다. 그대로 두면 줄 앞에 공백이 생깁니다.
+        return spaced.some((run) => run.text.trim()) ? spaced : [];
+      };
+
+      // 줄 구조는 평문(text/plain)을 따르고, 서식만 HTML에서 가져와 같은 글자에
+      // 얹습니다.
+      //
+      // HTML 블록만 보고 줄을 세면 문단 사이의 빈 줄이 사라집니다. 채팅 화면에서
+      // 복사하면 평문에는 문단 사이에 빈 줄이 있는데 HTML에는 <p>가 두 개만 있기
+      // 때문입니다. 그러면 Ctrl+Shift+V로는 빈 줄이 남고 Ctrl+V로는 사라져
+      // 두 동작이 어긋납니다.
+      //
+      // 두 표현의 "공백을 뺀 글자"가 정확히 같을 때만 겹칩니다. 다르면 글자와
+      // 서식이 밀려 엉뚱한 곳이 굵어질 수 있으므로 HTML 구조를 그대로 씁니다.
+      const alignClipboardLinesToPlainText = (plain, htmlLines) => {
+        const flat = [];
+        htmlLines.forEach((line) => line.forEach((runs) => runs.forEach((run) => {
+          for (const character of run.text) flat.push({ character, style: run });
+        })));
+        const withoutSpaces = (value) => value.replace(/\s/g, '');
+        const htmlCompact = withoutSpaces(flat.map((item) => item.character).join(''));
+        if (!htmlCompact) return null;
+        const text = normalizeClipboardText(plain);
+        if (withoutSpaces(text) !== htmlCompact) return null;
+
+        let cursor = 0;
+        const takeStyle = () => {
+          while (cursor < flat.length && /\s/.test(flat[cursor].character)) cursor += 1;
+          if (cursor >= flat.length) return EMPTY_CLIPBOARD_STYLE;
+          const style = flat[cursor].style;
+          cursor += 1;
+          return style;
+        };
+
+        return text.split('\n').map((line) => {
+          const runs = [];
+          let last = EMPTY_CLIPBOARD_STYLE;
+          line.split('').forEach((character) => {
+            // 공백은 앞 글자의 서식을 따라가되, 구간 끝 공백은 아래 다듬기에서
+            // 서식 밖으로 빠집니다.
+            const style = /\s/.test(character) ? last : takeStyle();
+            last = style;
+            const tail = runs[runs.length - 1];
+            if (tail && sameClipboardStyle(tail, style)) tail.text += character;
+            else runs.push({ ...style, text: character });
+          });
+          // 평문에는 문단 안 줄바꿈이 따로 없으므로 한 줄은 한 구간뿐입니다.
+          return [finalizeClipboardRuns(runs, false)];
+        });
+      };
+
+      const clipboardSegmentText = (runs) => runs.map((run) => run.text).join('');
+
+      // 클립보드 HTML을 "문단 배열 안의 줄 배열"로 바꿉니다. 각 줄은 서식이 같은
+      // 구간(run)의 배열입니다.
       // innerText는 <p>를 두 줄로 계산하기 때문에(마진과 무관한 규격상 동작)
-      // <div>로 바꿔 눈에 보이는 줄과 개행 수를 1:1로 맞춥니다.
+      // <div>로 바꿔 눈에 보이는 줄과 개행 수를 1:1로 맞춥니다. 이 계산은 그대로
+      // 두고, 서식은 각 텍스트 노드 앞에 표식 문자를 붙여 함께 실어 보냅니다.
       const clipboardLinesFromHtml = (html) => {
         const doc = new DOMParser().parseFromString(String(html), 'text/html');
         doc.body.querySelectorAll('br').forEach((lineBreak) => {
+          // 빈 블록의 <br>은 줄바꿈이 아니라 커서를 놓기 위한 자리표시입니다.
+          // 줄바꿈으로 세면 빈 줄 하나가 두 줄로 늘어납니다.
+          const parent = lineBreak.parentElement;
+          if (parent && !parent.textContent.trim() && parent.querySelectorAll('br').length === 1) {
+            lineBreak.remove();
+            return;
+          }
           lineBreak.replaceWith(doc.createTextNode(CLIPBOARD_SOFT_BREAK));
         });
         doc.body.querySelectorAll('p').forEach((paragraph) => {
@@ -2397,26 +2796,45 @@ ${sanitizeHtml(editor.innerHTML)}
 
         doc.body.querySelectorAll('img, svg, video, audio, iframe').forEach((el) => el.remove());
 
+        const styles = [];
+        const textNodes = [];
+        const styleWalker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+        while (styleWalker.nextNode()) textNodes.push(styleWalker.currentNode);
+        textNodes.forEach((node) => {
+          // 공백만 있는 노드에는 표식을 붙이지 않습니다. 표식은 공백이 아니므로
+          // 붙이면 innerText가 그 노드를 지우지 못하고, 태그 사이 개행·들여쓰기가
+          // (Word나 손으로 정리한 HTML에 흔합니다) 전부 빈 줄로 늘어납니다.
+          if (!node.nodeValue || !node.nodeValue.trim()) return;
+          const style = clipboardStyleAt(node, doc.body);
+          let index = styles.findIndex((item) => sameClipboardStyle(item, style));
+          if (index < 0) {
+            if (styles.length >= CLIPBOARD_MARK_LIMIT) return;
+            styles.push(style);
+            index = styles.length - 1;
+          }
+          node.nodeValue = String.fromCharCode(CLIPBOARD_MARK_BASE + index) + node.nodeValue;
+        });
+
         const host = document.createElement('div');
         host.setAttribute('aria-hidden', 'true');
         host.style.cssText = 'position:fixed;left:-9999px;top:0;width:800px;pointer-events:none';
-        host.innerHTML = sanitizeHtml(doc.body.innerHTML);
         document.body.appendChild(host);
-        const measured = host.innerText;
-        host.remove();
+        let measured = '';
+        try {
+          host.innerHTML = sanitizeHtml(doc.body.innerHTML);
+          measured = host.innerText;
+        } finally {
+          // 예외가 나도 측정용 숨은 노드가 문서에 남지 않게 합니다.
+          host.remove();
+        }
 
-        // 빈 줄 자리를 채우려고 넣은 &nbsp;는 원래 없던 글자이므로 비워 둡니다.
-        // 그대로 두면 붙여넣을 때 줄 앞에 공백 한 칸이 생깁니다.
         return normalizeClipboardText(measured).split('\n').map((line) => line
           .split(CLIPBOARD_SOFT_BREAK)
-          .map((segment) => {
-            const restored = segment.replace(/\u00A0/g, ' ');
-            return restored.trim() ? restored : '';
-          }));
+          .map((segment) => clipboardRunsFromMarkedText(segment, styles)));
       };
 
       const clipboardPlainTextFromHtml = (html) => clipboardLinesFromHtml(html)
-        .map((line) => line.join('\n'))
+        .map((line) => line.map(clipboardSegmentText).join('\n'))
         .join('\n');
 
       const writeEditorClipboardData = (event) => {
@@ -2541,9 +2959,10 @@ ${sanitizeHtml(editor.innerHTML)}
         return { text, tokens, usesCodes };
       };
 
-      const getParagraphUnits = () => {
+      // root는 편집기 본체이거나, 일괄 편집용으로 분리해 둔 복제본입니다.
+      const getParagraphUnits = (root = editor) => {
         const units = [];
-        [...editor.childNodes].forEach((node) => {
+        [...root.childNodes].forEach((node) => {
           if (node.nodeType === Node.ELEMENT_NODE && ['UL', 'OL'].includes(node.tagName)) {
             [...node.children].filter((child) => child.tagName === 'LI').forEach((item) => units.push(item));
           } else if (node.nodeType === Node.ELEMENT_NODE || (node.nodeType === Node.TEXT_NODE && node.nodeValue)) {
@@ -2563,8 +2982,8 @@ ${sanitizeHtml(editor.innerHTML)}
         };
       };
 
-      const buildSpecialSearchModel = () => {
-        const units = getParagraphUnits();
+      const buildSpecialSearchModel = (root = editor) => {
+        const units = getParagraphUnits(root);
         const items = [];
 
         const addTextNode = (node) => {
@@ -2632,38 +3051,249 @@ ${sanitizeHtml(editor.innerHTML)}
         return range;
       };
 
-      const markModelMatches = (model, matches, indexKey) => [...matches]
-        .sort((a, b) => b[indexKey] - a[indexKey])
-        .reduce((marked, match) => {
-          const range = createRangeFromModel(model, match[indexKey], match.length);
-          if (!range) return marked;
+      // 모델에서 특정 지점의 문자 인덱스를 찾습니다.
+      const modelIndexAtPoint = (model, node, offset) => model.items
+        .findIndex((item) => item.start.node === node && item.start.offset === offset);
 
-          const endMarker = document.createComment('replace-end');
-          const endRange = range.cloneRange();
-          endRange.collapse(false);
-          endRange.insertNode(endMarker);
+      // ===== 일괄 편집 =====
+      // 예전에는 주석 노드로 일치 구간을 표시하고 구간마다 execCommand를 실행했습니다.
+      // 그러면 실행 취소 기록에 "주석이 박힌 중간 상태"가 저장되어, Ctrl+Z를 누르면
+      // 주석이 문서에 되살아나고 원본도 복구되지 않았습니다.
+      //
+      // 결과를 execCommand('insertHTML')로 한 번에 커밋하는 방법도 시도했지만,
+      // 문서 전체를 선택한 상태에서 넣으면 브라우저가 첫 블록 안쪽에 나머지를
+      // 중첩시켜(<h1>제목</h1><h1><p>본문</p></h1>) 구조가 망가집니다.
+      //
+      // 그래서 일괄 편집은 복제본에서 DOM을 직접 고쳐 통째로 반영하고,
+      // 실행 취소는 아래 스냅숏 방식으로 따로 관리합니다.
+      const BULK_UNDO_LIMIT = 20;
+      const bulkUndoStack = [];
+      const bulkRedoStack = [];
 
-          const startMarker = document.createComment('replace-start');
-          const startRange = range.cloneRange();
-          startRange.collapse(true);
-          startRange.insertNode(startMarker);
+      const applyBulkSnapshot = (html) => {
+        editor.innerHTML = html;
+        normalizeEmptyDocument();
+        markDocumentDirty();
+        updateCount();
+        updateFormattingControlsState();
+        hideSelectionToolbar();
+      };
 
-          marked.push({ ...match, startMarker, endMarker });
-          return marked;
-        }, []);
+      // 일괄 편집 직후 상태가 그대로일 때만 가로챕니다. 사용자가 그 뒤에 무언가
+      // 입력했다면 문서 상태가 달라지므로 브라우저 기본 실행 취소에 맡깁니다.
+      // 사용자가 자기 입력을 먼저 되돌려 다시 이 상태로 오면 그때 가로챕니다.
+      const undoBulkEdit = () => {
+        const entry = bulkUndoStack[bulkUndoStack.length - 1];
+        if (!entry || editor.innerHTML !== entry.afterHtml) return false;
+        bulkUndoStack.pop();
+        bulkRedoStack.push(entry);
+        applyBulkSnapshot(entry.beforeHtml);
+        return true;
+      };
 
-      const rangeBetweenMarkers = (match) => {
-        if (!match.startMarker.isConnected || !match.endMarker.isConnected) return null;
+      const redoBulkEdit = () => {
+        const entry = bulkRedoStack[bulkRedoStack.length - 1];
+        if (!entry || editor.innerHTML !== entry.beforeHtml) return false;
+        bulkRedoStack.pop();
+        bulkUndoStack.push(entry);
+        applyBulkSnapshot(entry.afterHtml);
+        return true;
+      };
+
+      // mutate(root)는 복제본을 직접 고치고 변경 건수를 돌려줍니다.
+      // hooks.beforeCommit은 정리까지 끝난 복제본을, hooks.afterCommit은 반영이
+      // 끝난 편집기를 받습니다. 실행 취소 스냅숏은 afterCommit 뒤에 찍으므로
+      // afterCommit에서 임시 표식을 지워도 스냅숏이 오염되지 않습니다.
+      const runBulkEdit = (mutate, hooks = {}) => {
+        const beforeHtml = editor.innerHTML;
+        const clone = editor.cloneNode(true);
+        const count = mutate(clone);
+        if (!count) return 0;
+        pruneEmptyInlineElements(clone);
+        pruneEmptyBlockContainers(clone);
+        ensureBlockPlaceholders(clone);
+        if (hooks.beforeCommit) hooks.beforeCommit(clone);
+
+        bulkEditing = true;
+        try {
+          editor.innerHTML = clone.innerHTML;
+        } finally {
+          bulkEditing = false;
+        }
+        normalizeEmptyDocument();
+        if (hooks.afterCommit) hooks.afterCommit();
+
+        bulkUndoStack.push({ beforeHtml, afterHtml: editor.innerHTML });
+        if (bulkUndoStack.length > BULK_UNDO_LIMIT) bulkUndoStack.shift();
+        bulkRedoStack.length = 0;
+
+        markDocumentDirty();
+        updateCount();
+        updateFormattingControlsState();
+        return count;
+      };
+
+      const BULK_BLOCK_TAGS = new Set([
+        'P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'PRE', 'LI', 'TD', 'TH', 'DIV'
+      ]);
+
+      const blockAncestor = (node, root) => {
+        let element = node && node.nodeType === Node.ELEMENT_NODE ? node : node?.parentNode;
+        for (; element && element !== root; element = element.parentNode) {
+          if (element.nodeType === Node.ELEMENT_NODE && BULK_BLOCK_TAGS.has(element.tagName)) return element;
+        }
+        return null;
+      };
+
+      // 내용이 사라진 목록·표 껍데기를 정리합니다.
+      const pruneEmptyBlockContainers = (root) => {
+        [...root.querySelectorAll('ul,ol')].forEach((list) => {
+          if (!list.querySelector('li')) list.remove();
+        });
+      };
+
+      // 완전히 빈 블록은 커서를 놓을 수 없으므로 자리표시 <br>을 채웁니다.
+      const ensureBlockPlaceholders = (root) => {
+        const selector = [...BULK_BLOCK_TAGS].join(',').toLowerCase();
+        [...root.querySelectorAll(selector)].forEach((block) => {
+          if (!block.childNodes.length) block.appendChild(root.ownerDocument.createElement('br'));
+        });
+      };
+
+      // 블록 경계를 넘는 범위를 지울 때는 두 블록을 하나로 합쳐야 합니다.
+      // Range.deleteContents는 경계 사이에 아무것도 없으면 블록을 그대로 두기 때문에
+      // (예: ^p 를 다른 글자로 바꾸기) 합치는 일을 직접 해 줍니다.
+      const deleteRangeMergingBlocks = (range, root) => {
+        const startBlock = blockAncestor(range.startContainer, root);
+        const endBlock = blockAncestor(range.endContainer, root);
+        range.deleteContents();
+        if (!startBlock || !endBlock || startBlock === endBlock) return;
+        // 복제본은 문서에 붙어 있지 않으므로 isConnected로 판단하면 안 됩니다.
+        // 편집 대상 트리 안에 아직 남아 있는지만 확인합니다.
+        if (!root.contains(startBlock) || !root.contains(endBlock)) return;
+
+        // 빈 문단 자리표시용 <br>은 합칠 때 방해가 되므로 지웁니다.
+        if (startBlock.lastChild?.nodeName === 'BR') startBlock.lastChild.remove();
+        const joinIndex = startBlock.childNodes.length;
+        while (endBlock.firstChild) startBlock.appendChild(endBlock.firstChild);
+        endBlock.remove();
+        range.setStart(startBlock, joinIndex);
+        range.collapse(true);
+      };
+
+      // 커서 위치에서 문단을 둘로 나눕니다. ^p 치환에 필요합니다.
+      const splitBlockAtRange = (range, root) => {
+        const block = blockAncestor(range.startContainer, root);
+        const doc = root.ownerDocument;
+        if (!block) {
+          // 나눌 문단이 없으면 줄바꿈으로 대체합니다.
+          const lineBreak = doc.createTextNode('\n');
+          range.insertNode(lineBreak);
+          range.setStartAfter(lineBreak);
+          range.collapse(true);
+          return;
+        }
+
+        const tail = doc.createRange();
+        tail.setStart(range.startContainer, range.startOffset);
+        tail.setEnd(block, block.childNodes.length);
+        const after = block.cloneNode(false);
+        after.appendChild(tail.extractContents());
+        // 빈 블록의 자리표시 <br>은 편집이 모두 끝난 뒤 한 번에 채웁니다.
+        // 여기서 미리 넣으면 곧바로 글자가 들어올 때 뒤에 빈 줄로 남습니다.
+        block.parentNode.insertBefore(after, block.nextSibling);
+        range.setStart(after, 0);
+        range.collapse(true);
+      };
+
+      // 범위를 토큰 열로 대체합니다. execCommand를 쓰지 않으므로 복제본에서도 안전합니다.
+      // 토큰이 순수한 글자뿐이면 하나의 문자열로 합칩니다. 아니면 null입니다.
+      const plainTokenText = (tokens) => (tokens.some((token) => token.type !== 'text')
+        ? null
+        : tokens.map((token) => token.value || '').join(''));
+
+      // 토큰이 지닌 인라인 서식(붙여넣기용)을 그 토큰이 만든 노드에만 적용합니다.
+      const applyTokenStyle = (node, root, style) => {
+        const apply = [];
+        const remove = [];
+        CLIPBOARD_FORMAT_KEYS.forEach(([key, format]) => {
+          (style[key] ? apply : remove).push(format);
+        });
         const range = document.createRange();
-        range.setStartAfter(match.startMarker);
-        range.setEndBefore(match.endMarker);
-        return range;
+        range.selectNode(node);
+        const next = applyFormatSettingsToRange(range, root, { apply, remove });
+        if (style.href) applyLinkToRange(next, root, style.href);
       };
 
-      const removeMatchMarkers = (match) => {
-        match.startMarker.remove();
-        match.endMarker.remove();
+      const replaceRangeWithTokens = (range, tokens, root, settings = { apply: [], remove: [] }) => {
+        const styled = tokens.some((token) => token.style);
+        // 빠른 경로: 한 텍스트 노드 안에서 글자만 바꾸는 흔한 경우입니다.
+        // 노드를 쪼개거나 새로 만들지 않으므로 한 문단에 일치가 수천 개 있어도
+        // 문단의 자식 수가 늘지 않습니다. 자식 수가 늘면 삽입 비용이 자식 수에
+        // 비례해 커져서 전체가 제곱으로 느려집니다.
+        if (!styled && !settings.apply.length && !settings.remove.length
+          && range.startContainer === range.endContainer
+          && range.startContainer.nodeType === Node.TEXT_NODE) {
+          const value = plainTokenText(tokens);
+          if (value !== null) {
+            const node = range.startContainer;
+            const start = range.startOffset;
+            node.replaceData(start, range.endOffset - start, value);
+            range.setStart(node, start + value.length);
+            range.collapse(true);
+            return;
+          }
+        }
+
+        deleteRangeMergingBlocks(range, root);
+
+        // 빈 문단의 자리표시 <br>은 글자를 넣는 순간 필요 없어집니다.
+        // 남겨 두면 붙여넣은 내용 뒤에 빈 줄이 하나 더 보입니다.
+        const targetBlock = blockAncestor(range.startContainer, root);
+        if (targetBlock
+          && targetBlock.childNodes.length === 1
+          && targetBlock.firstChild.nodeName === 'BR') {
+          targetBlock.removeChild(targetBlock.firstChild);
+          range.setStart(targetBlock, 0);
+          range.collapse(true);
+        }
+
+        const doc = root.ownerDocument;
+        const inserted = [];
+        const styledNodes = [];
+        tokens.forEach((token) => {
+          if (token.type === 'paragraph') {
+            splitBlockAtRange(range, root);
+            return;
+          }
+          let node = null;
+          // 이 편집기는 white-space: pre-wrap이므로 문단 안 줄바꿈은 <br>이 아니라
+          // 개행 문자입니다. Shift+Enter와 붙여넣기가 만드는 형태와 같습니다.
+          if (token.type === 'line') node = doc.createTextNode('\n');
+          else if (token.type === 'tab') node = doc.createTextNode('\t');
+          else if (token.type === 'text' && token.value) node = doc.createTextNode(token.value);
+          if (!node) return;
+          range.insertNode(node);
+          range.setStartAfter(node);
+          range.collapse(true);
+          inserted.push(node);
+          if (token.style) styledNodes.push({ node, style: token.style });
+        });
+
+        if (inserted.length && (settings.apply.length || settings.remove.length)) {
+          applyFormatSettingsToRange(rangeAround(inserted), root, settings);
+        }
+
+        // 서식은 글자를 모두 넣은 뒤 뒤에서부터 적용합니다. 넣는 도중에 감싸면
+        // 다음 삽입 위치가 어긋납니다.
+        [...styledNodes].reverse().forEach(({ node, style }) => {
+          applyTokenStyle(node, root, style);
+        });
+
+        // 붙여넣기에서 커서를 되돌릴 기준점으로 씁니다.
+        return inserted.length ? inserted[inserted.length - 1] : null;
       };
+      // ===== 일괄 편집 끝 =====
 
       const selectEditorRange = (range) => {
         focusEditor();
@@ -2679,10 +3309,16 @@ ${sanitizeHtml(editor.innerHTML)}
         const startIndex = sameQuery ? specialSearchState.nextIndex : 0;
         let index = model.text.indexOf(parsedQuery.text, startIndex);
         if (index < 0 && startIndex > 0) index = model.text.indexOf(parsedQuery.text);
-        if (index < 0) return false;
+        if (index < 0) {
+          showToast('찾을 수 없습니다');
+          return false;
+        }
 
         const range = createRangeFromModel(model, index, parsedQuery.text.length);
-        if (!range) return false;
+        if (!range) {
+          showToast('찾을 수 없습니다');
+          return false;
+        }
         selectEditorRange(range);
         specialSearchState = {
           query: parsedQuery.text,
@@ -2771,46 +3407,22 @@ ${sanitizeHtml(editor.innerHTML)}
         return null;
       };
 
-      const replaceRangeWithSpecialTokens = (
-        range,
-        tokens,
-        settings = { apply: [], remove: [] },
-        normalizeAfter = true
-      ) => {
-        selectEditorRange(range);
-        if (!range.collapsed) {
-          const deleted = document.execCommand('delete', false, null);
-          if (!deleted) {
-            range.deleteContents();
-            range.collapse(true);
-            selectEditorRange(range);
-          }
-        }
-
-        tokens.forEach((token) => {
-          if (token.type === 'text' && token.value) {
-            insertReplacementText(token.value, settings);
-          } else if (token.type === 'tab') {
-            insertReplacementText('\t', settings);
-          } else if (token.type === 'line') {
-            const inserted = document.execCommand('insertLineBreak', false, null);
-            if (!inserted) document.execCommand('insertHTML', false, '<br>');
-          } else if (token.type === 'paragraph') {
-            document.execCommand('insertParagraph', false, null);
-          }
-        });
-        if (normalizeAfter) normalizeEmptyDocument();
-        saveSelection();
-      };
+      const CLIPBOARD_FORMAT_KEYS = [
+        ['bold', 'bold'],
+        ['italic', 'italic'],
+        ['underline', 'underline'],
+        ['strike', 'strikeThrough']
+      ];
 
       const normalizeClipboardText = (value) => String(value).replace(/\r\n?/g, '\n');
 
-      const plainTextToSpecialTokens = (source) => {
+      // style을 주면 만들어지는 글자 토큰이 그 인라인 서식을 함께 지닙니다.
+      const plainTextToSpecialTokens = (source, style = null) => {
         const tokens = [];
         let buffer = '';
         const flushText = () => {
           if (!buffer) return;
-          tokens.push({ type: 'text', value: buffer });
+          tokens.push(style ? { type: 'text', value: buffer, style } : { type: 'text', value: buffer });
           buffer = '';
         };
 
@@ -2829,206 +3441,207 @@ ${sanitizeHtml(editor.innerHTML)}
         return tokens;
       };
 
-      const insertClipboardTokens = (tokens) => {
-        const selection = window.getSelection();
-        let range = null;
-        if (selection && selection.rangeCount && selectionIsInsideEditor()) {
-          range = selection.getRangeAt(0).cloneRange();
-        } else {
-          range = document.createRange();
-          range.selectNodeContents(editor);
-          range.collapse(false);
+      // 위치를 자식 인덱스 경로로 기록합니다. 복제본은 구조가 같으므로 같은
+      // 경로로 되찾을 수 있습니다. 검색 모델의 문자 인덱스와 달리 빈 문단처럼
+      // 글자가 없는 자리도 정확히 가리킵니다.
+      const nodePathWithin = (root, node, offset) => {
+        const path = [];
+        let current = node;
+        while (current && current !== root) {
+          const parent = current.parentNode;
+          if (!parent) return null;
+          path.unshift([...parent.childNodes].indexOf(current));
+          current = parent;
         }
-        replaceRangeWithSpecialTokens(range, tokens);
+        if (current !== root) return null;
+        return { path, offset };
+      };
+
+      const nodeAtPath = (root, path) => {
+        let node = root;
+        for (const index of path) {
+          if (!node.childNodes[index]) return null;
+          node = node.childNodes[index];
+        }
+        return node;
+      };
+
+      // 편집기 최상위를 가리키는 위치는 문단 안쪽으로 옮깁니다. 최상위에 그대로
+      // 넣으면 문단 밖에 글자가 생겨 문단 나누기도 동작하지 않습니다.
+      const moveBoundaryIntoBlock = (root, boundary) => {
+        if (!boundary || boundary.node !== root) return boundary;
+        const children = [...root.childNodes];
+        if (!children.length) return boundary;
+        const isBlock = (node) => node?.nodeType === Node.ELEMENT_NODE
+          && BULK_BLOCK_TAGS.has(node.tagName);
+        if (boundary.offset >= children.length) {
+          const last = children[children.length - 1];
+          return isBlock(last) ? { node: last, offset: last.childNodes.length } : boundary;
+        }
+        const target = children[boundary.offset];
+        return isBlock(target) ? { node: target, offset: 0 } : boundary;
+      };
+
+      const boundaryFromPath = (root, descriptor) => {
+        if (!descriptor) return null;
+        const node = nodeAtPath(root, descriptor.path);
+        if (!node) return null;
+        const limit = node.nodeType === Node.TEXT_NODE
+          ? (node.nodeValue?.length ?? 0)
+          : node.childNodes.length;
+        return moveBoundaryIntoBlock(root, { node, offset: Math.min(descriptor.offset, limit) });
+      };
+
+      // 마지막 블록 안쪽 끝을 가리킵니다. 최상위에 넣으면 문단 밖에 글자가 생깁니다.
+      const collapsedRangeAtEnd = (root) => {
+        let node = root;
+        while (node.lastChild
+          && node.lastChild.nodeType === Node.ELEMENT_NODE
+          && BULK_BLOCK_TAGS.has(node.lastChild.tagName)) {
+          node = node.lastChild;
+        }
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        range.collapse(false);
+        return range;
+      };
+
+      const PASTE_CARET_MARK = 'data-paste-caret';
+
+      // 붙여넣기도 일괄 편집과 같은 경로를 씁니다.
+      //
+      // execCommand로 한 구간씩 넣으면서 서식을 커서 상태로 토글하는 방식은
+      // 브라우저 출력을 제어할 수 없었습니다. 실제 Chromium에서 확인한 문제입니다.
+      //  - 굵은 글자 뒤에 기울임을 더하면 태그가 아니라
+      //    <i style="font-weight:bold"> 로 만들어져 마크다운·카페 복사에서 굵게가
+      //    사라집니다.
+      //  - 굵은 글자 뒤에서 문단을 나누면 커서를 서식 밖으로 옮기고 서식을 꺼도
+      //    빈 문단이 <p><b><br></b></p> 로 만들어집니다. removeFormat으로도
+      //    지워지지 않습니다.
+      //
+      // 그래서 커서 위치를 검색 모델의 문자 인덱스로 기록해 두고, 복제본에서
+      // DOM을 직접 조립한 뒤 통째로 반영하고 커서를 되돌립니다. 서식은 실제
+      // 범위에 적용하므로 결과가 예측 가능하고, 실행 취소도 한 단계입니다.
+      const insertClipboardTokens = (tokens) => {
+        if (!tokens.length) return;
+        const selection = window.getSelection();
+        let startPath = null;
+        let endPath = null;
+        if (selection && selection.rangeCount && selectionIsInsideEditor()) {
+          const live = selection.getRangeAt(0);
+          startPath = nodePathWithin(editor, live.startContainer, live.startOffset);
+          endPath = nodePathWithin(editor, live.endContainer, live.endOffset);
+        }
+
+        let lastNode = null;
+        const changed = runBulkEdit((root) => {
+          let range = null;
+          const start = boundaryFromPath(root, startPath);
+          const end = boundaryFromPath(root, endPath);
+          if (start && end) {
+            range = document.createRange();
+            range.setStart(start.node, start.offset);
+            try {
+              range.setEnd(end.node, end.offset);
+            } catch (error) {
+              range.collapse(true);
+            }
+          } else {
+            range = collapsedRangeAtEnd(root);
+          }
+
+          lastNode = replaceRangeWithTokens(range, tokens, root);
+          return 1;
+        }, {
+          // 커서 자리를 임시 표식으로 남깁니다. 자식 인덱스 경로로 기록하면
+          // innerHTML을 다시 파싱할 때 이웃한 텍스트 노드가 하나로 합쳐져
+          // 경로가 어긋나고, 커서가 문서 맨 앞으로 돌아갑니다.
+          beforeCommit(root) {
+            if (!lastNode || !root.contains(lastNode) || !lastNode.parentNode) return;
+            const mark = root.ownerDocument.createElement('span');
+            mark.setAttribute(PASTE_CARET_MARK, '1');
+            lastNode.parentNode.insertBefore(mark, lastNode.nextSibling);
+          },
+          afterCommit() {
+            const mark = editor.querySelector(`[${PASTE_CARET_MARK}]`);
+            const caret = document.createRange();
+            if (mark && mark.parentNode) {
+              const parent = mark.parentNode;
+              const index = [...parent.childNodes].indexOf(mark);
+              mark.remove();
+              caret.setStart(parent, index);
+              caret.collapse(true);
+            } else {
+              // 표식을 잃어도 맨 앞으로 돌아가지 않게 문서 끝에 둡니다.
+              const fallback = collapsedRangeAtEnd(editor);
+              caret.setStart(fallback.startContainer, fallback.startOffset);
+              caret.collapse(true);
+            }
+            selectEditorRange(caret);
+            saveSelection();
+          }
+        });
+        if (!changed) return;
         updateCount();
       };
 
       // 이 편집기에서 Enter는 새 문단, Shift+Enter는 문단 안의 줄바꿈입니다.
       // 붙여넣기도 같은 규칙을 따라야 원본과 줄 구조가 같아집니다.
-      const clipboardTokensFromLines = (lines) => {
+      // keepFormatting이 참이면 구간별 인라인 서식을 함께 싣습니다.
+      const clipboardTokensFromLines = (lines, keepFormatting = false) => {
         const tokens = [];
+        // 줄을 나누기 전에 서식을 해제합니다. 굵게가 켜진 상태로 문단을 나누면
+        // 빈 문단이 <p><b><br></b></p> 처럼 만들어집니다.
+        const resetBeforeBreak = () => {
+          if (keepFormatting) tokens.push({ type: 'style', style: EMPTY_CLIPBOARD_STYLE });
+        };
+
         lines.forEach((line, lineIndex) => {
-          if (lineIndex) tokens.push({ type: 'paragraph' });
-          line.forEach((segment, segmentIndex) => {
-            if (segmentIndex) tokens.push({ type: 'line' });
-            plainTextToSpecialTokens(segment).forEach((token) => tokens.push(token));
+          if (lineIndex) {
+            resetBeforeBreak();
+            tokens.push({ type: 'paragraph' });
+          }
+          line.forEach((runs, segmentIndex) => {
+            if (segmentIndex) {
+              resetBeforeBreak();
+              tokens.push({ type: 'line' });
+            }
+            runs.forEach((run) => {
+              plainTextToSpecialTokens(run.text, keepFormatting ? run : null)
+                .forEach((token) => tokens.push(token));
+            });
           });
         });
         return tokens;
       };
 
       const insertPlainTextPreservingBreaks = (text) => {
-        const lines = normalizeClipboardText(text).split('\n').map((line) => [line]);
+        const lines = normalizeClipboardText(text)
+          .split('\n')
+          .map((line) => [[{ ...EMPTY_CLIPBOARD_STYLE, text: line }]]);
         insertClipboardTokens(clipboardTokensFromLines(lines));
       };
 
-      const replaceAllSpecial = (parsedQuery, parsedReplacement, settings, formattingOnly) => {
-        if (!parsedQuery.text) return 0;
-        const model = buildSpecialSearchModel();
+      const MATCH_LIMIT = 10000;
+
+      // 모델 텍스트에서 일치 구간을 모읍니다. 조사 교정 계산도 여기서 함께 합니다.
+      // 단일 바꾸기와 모두 바꾸기가 같은 규칙을 쓰도록 한곳에 모았습니다.
+      const collectMatches = (model, query, { replacement = null, withParticles = false } = {}) => {
         const matches = [];
         let cursor = 0;
-        while (matches.length < 10000) {
-          const index = model.text.indexOf(parsedQuery.text, cursor);
-          if (index < 0) break;
-          matches.push({ index, length: parsedQuery.text.length });
-          cursor = index + Math.max(1, parsedQuery.text.length);
-        }
-
-        const markedMatches = markModelMatches(model, matches, 'index');
-        bulkEditing = true;
-        try {
-          markedMatches.forEach((match) => {
-            const range = rangeBetweenMarkers(match);
-            if (!range) {
-              removeMatchMarkers(match);
-              return;
-            }
-            if (formattingOnly) {
-              applyFormattingToRange(range, settings);
-            } else {
-              replaceRangeWithSpecialTokens(range, parsedReplacement.tokens, settings, false);
-            }
-            removeMatchMarkers(match);
-          });
-        } finally {
-          bulkEditing = false;
-        }
-        normalizeEmptyDocument();
-        if (markedMatches.length) markDocumentDirty();
-        specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
-        return markedMatches.length;
-      };
-
-      const replaceCurrent = () => {
-        const selection = window.getSelection();
-        const parsedQuery = parseSpecialCodes(findText.value);
-        const parsedReplacement = parseSpecialCodes(replaceText.value);
-        const settings = getReplacementFormatSettings();
-        const formattingOnly = !replaceText.value && hasReplacementFormatSettings(settings);
-        const usesSpecialCodes = parsedQuery.usesCodes || parsedReplacement.usesCodes;
         let particleCount = 0;
-        let replaced = false;
+        let truncated = false;
 
-        if (usesSpecialCodes) {
-          let range = null;
-          let matchIndex = -1;
-          if (parsedQuery.usesCodes
-            && specialSearchState.query === parsedQuery.text
-            && specialSearchState.range) {
-            range = specialSearchState.range.cloneRange();
-            matchIndex = specialSearchState.index;
-          } else if (!parsedQuery.usesCodes
-            && selection
-            && selection.rangeCount
-            && selection.toString() === parsedQuery.text
-            && selectionIsInsideEditor()) {
-            range = selection.getRangeAt(0).cloneRange();
-          }
-
-          if (range) {
-            if (formattingOnly) {
-              applyFormattingToRange(range, settings);
-            } else {
-              replaceRangeWithSpecialTokens(range, parsedReplacement.tokens, settings);
-            }
-            replaced = true;
-            if (parsedQuery.usesCodes) {
-              specialSearchState = {
-                query: parsedQuery.text,
-                nextIndex: Math.max(0, matchIndex + parsedReplacement.text.length),
-                index: -1,
-                range: null
-              };
-            }
-            updateCount();
-          }
-          findNext();
-          if (replaced) showToast('특수기호를 포함해 바꿨습니다.');
-          return;
-        }
-
-        if (selection && selection.toString() === findText.value && selectionIsInsideEditor()) {
-          if (formattingOnly) {
-            applyFormattingToRange(selection.getRangeAt(0).cloneRange(), settings);
-            updateCount();
-            replaced = true;
-            findNext();
-            showToast('글자는 유지하고 선택한 서식만 변경했습니다.');
-            return;
-          }
-
-          let insertion = replaceText.value;
-          if (adjustParticles.checked && selection.rangeCount) {
-            const range = selection.getRangeAt(0);
-            const endNode = range.endContainer;
-            if (endNode.nodeType === Node.TEXT_NODE) {
-              const suffix = endNode.nodeValue.slice(range.endOffset);
-              const adjustment = getParticleAdjustment(suffix, replaceText.value);
-              if (adjustment && adjustment.current !== adjustment.desired) {
-                range.setEnd(endNode, range.endOffset + adjustment.current.length);
-                selection.removeAllRanges();
-                selection.addRange(range);
-                insertion += adjustment.desired;
-                particleCount = 1;
-              }
-            }
-          }
-          const range = selection.getRangeAt(0).cloneRange();
-          const literalMatchIndex = specialSearchState.query === `literal:${findText.value}`
-            ? specialSearchState.index
-            : -1;
-          replaceRangeWithSpecialTokens(range, [{ type: 'text', value: insertion }], settings);
-          specialSearchState = {
-            query: `literal:${findText.value}`,
-            nextIndex: literalMatchIndex >= 0 ? literalMatchIndex + insertion.length : 0,
-            index: -1,
-            range: null
-          };
-          updateCount();
-          replaced = true;
-        }
-        findNext();
-        if (replaced && particleCount) showToast('단어와 조사를 받침에 맞게 바꿨습니다.');
-      };
-
-      const replaceAll = () => {
-        const query = findText.value;
-        const settings = getReplacementFormatSettings();
-        if (!query) {
-          if (!hasReplacementFormatSettings(settings)) {
-            showToast('찾을 내용을 입력하거나 바꿀 서식을 지정하세요.');
-            return;
-          }
-          const count = applyFormatSettingsToDocument(settings);
-          if (count) markDocumentDirty();
-          showToast(`문서 전체의 서식을 지정한 대로 변경했습니다 · 요소 ${count}개 정리.`);
-          return;
-        }
-        const parsedQuery = parseSpecialCodes(query);
-        const parsedReplacement = parseSpecialCodes(replaceText.value);
-        const formattingOnly = !replaceText.value && hasReplacementFormatSettings(settings);
-        if (parsedQuery.usesCodes || parsedReplacement.usesCodes) {
-          const count = replaceAllSpecial(parsedQuery, parsedReplacement, settings, formattingOnly);
-          updateCount();
-          showToast(formattingOnly
-            ? `${count}개 항목의 서식을 변경했습니다.`
-            : `${count}개 항목을 특수기호 규칙으로 바꿨습니다.`);
-          return;
-        }
-
-        let count = 0;
-        let particleCount = 0;
-        const replacement = formattingOnly ? query : replaceText.value;
-        const withParticles = !formattingOnly && adjustParticles.checked;
-        const model = buildSpecialSearchModel();
-        const matches = [];
-        let cursor = 0;
-        while (matches.length < 10000) {
+        for (;;) {
           const start = model.text.indexOf(query, cursor);
           if (start < 0) break;
+          if (matches.length >= MATCH_LIMIT) {
+            truncated = true;
+            break;
+          }
           let end = start + query.length;
           let insertion = replacement;
-          if (withParticles) {
+          if (withParticles && replacement !== null) {
             const adjustment = getParticleAdjustment(model.text.slice(end), replacement);
             if (adjustment && adjustment.current !== adjustment.desired) {
               end += adjustment.current.length;
@@ -3039,45 +3652,206 @@ ${sanitizeHtml(editor.innerHTML)}
           matches.push({ start, length: end - start, insertion });
           cursor = end;
         }
+        return { matches, particleCount, truncated };
+      };
 
-        const markedMatches = markModelMatches(model, matches, 'start');
-        bulkEditing = true;
-        try {
-          markedMatches.forEach((match) => {
-            const range = rangeBetweenMarkers(match);
-            if (!range) {
-              removeMatchMarkers(match);
-              return;
-            }
-            count += 1;
-            if (formattingOnly) {
-              applyFormattingToRange(range, settings);
-            } else {
-              replaceRangeWithSpecialTokens(
-                range,
-                [{ type: 'text', value: match.insertion }],
-                settings,
-                false
-              );
-            }
-            removeMatchMarkers(match);
+      // 일치 구간을 문서 뒤에서부터 처리합니다. 뒤쪽을 먼저 고치면 앞쪽 구간의
+      // (노드, 오프셋)이 그대로 유지되므로 위치 표시용 주석 마커가 필요 없습니다.
+      // Range.extractContents와 Text.splitText는 모두 원본 텍스트 노드를 남기고
+      // 앞부분을 보존하기 때문에 앞쪽 오프셋이 깨지지 않습니다.
+      const applyMatchesDescending = (model, matches, apply) => {
+        let count = 0;
+        [...matches].sort((left, right) => right.start - left.start).forEach((match) => {
+          const range = createRangeFromModel(model, match.start, match.length);
+          if (!range) return;
+          apply(range, match);
+          count += 1;
+        });
+        return count;
+      };
+
+      const replaceAllSpecial = (parsedQuery, parsedReplacement, settings, formattingOnly) => {
+        if (!parsedQuery.text) return { count: 0, truncated: false };
+        let truncated = false;
+        const count = runBulkEdit((root) => {
+          const model = buildSpecialSearchModel(root);
+          const collected = collectMatches(model, parsedQuery.text);
+          truncated = collected.truncated;
+          return applyMatchesDescending(model, collected.matches, (range) => {
+            if (formattingOnly) applyFormatSettingsToRange(range, root, settings);
+            else replaceRangeWithTokens(range, parsedReplacement.tokens, root, settings);
           });
-        } finally {
-          bulkEditing = false;
-        }
-        normalizeEmptyDocument();
-        if (count) markDocumentDirty();
+        });
         specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
-        updateCount();
+        return { count, truncated };
+      };
+
+      // 화면에서 선택된 구간이 모델의 몇 번째 일치 구간인지 찾습니다.
+      const matchIndexForSelection = (model, query) => {
+        const selection = window.getSelection();
+        if (!query || !selection || !selection.rangeCount || !selectionIsInsideEditor()) return -1;
+        const target = selection.getRangeAt(0);
+        let cursor = 0;
+        for (;;) {
+          const index = model.text.indexOf(query, cursor);
+          if (index < 0) return -1;
+          const range = createRangeFromModel(model, index, query.length);
+          try {
+            if (range && range.compareBoundaryPoints(Range.START_TO_START, target) === 0) return index;
+          } catch (error) {
+            return -1;
+          }
+          cursor = index + Math.max(1, query.length);
+        }
+      };
+
+      const replaceCurrent = () => {
+        const query = findText.value;
+        if (!query) {
+          showToast('찾을 내용을 입력하세요.');
+          return;
+        }
+        const parsedQuery = parseSpecialCodes(query);
+        const parsedReplacement = parseSpecialCodes(replaceText.value);
+        const settings = getReplacementFormatSettings();
+        const formattingOnly = !replaceText.value && hasReplacementFormatSettings(settings);
+        const stateKey = parsedQuery.usesCodes ? parsedQuery.text : `literal:${query}`;
+
+        // 바꿀 위치를 모델 인덱스로 확정합니다. 예전에는 검색 상태가 없으면 다음
+        // 검색 시작 위치를 0으로 되돌렸기 때문에, 사용자가 직접 드래그해서 바꾼
+        // 경우 방금 삽입한 문자열을 다시 찾아 같은 단어가 계속 늘어났습니다.
+        const liveModel = buildSpecialSearchModel();
+        const index = specialSearchState.query === stateKey && specialSearchState.index >= 0
+          ? specialSearchState.index
+          : matchIndexForSelection(liveModel, parsedQuery.text);
+        if (index < 0) {
+          findNext();
+          return;
+        }
+
+        let length = parsedQuery.text.length;
+        let tokens = parsedReplacement.tokens;
+        let insertedLength = parsedReplacement.text.length;
+        let particleAdjusted = false;
+
+        // 조사 교정도 모델 텍스트를 기준으로 봅니다. 예전에는 같은 텍스트 노드
+        // 안에서만 조사를 찾아, 조사가 다른 서식에 들어 있으면 단일 바꾸기에서만
+        // 교정이 빠지고 모두 바꾸기와 결과가 달라졌습니다.
+        if (!formattingOnly && !parsedReplacement.usesCodes && adjustParticles.checked) {
+          const adjustment = getParticleAdjustment(
+            liveModel.text.slice(index + length),
+            replaceText.value
+          );
+          if (adjustment && adjustment.current !== adjustment.desired) {
+            length += adjustment.current.length;
+            tokens = [...parsedReplacement.tokens, { type: 'text', value: adjustment.desired }];
+            insertedLength += adjustment.desired.length;
+            particleAdjusted = true;
+          }
+        }
+
+        const changed = runBulkEdit((root) => {
+          const model = buildSpecialSearchModel(root);
+          const range = createRangeFromModel(model, index, length);
+          if (!range) return 0;
+          if (formattingOnly) applyFormatSettingsToRange(range, root, settings);
+          else replaceRangeWithTokens(range, tokens, root, settings);
+          return 1;
+        });
+
+        specialSearchState = {
+          query: stateKey,
+          nextIndex: index + Math.max(0, formattingOnly ? length : insertedLength),
+          index: -1,
+          range: null
+        };
+        findNext();
+
+        if (!changed) return;
+        if (formattingOnly) showToast('글자는 유지하고 선택한 서식만 변경했습니다.');
+        else if (particleAdjusted) showToast('단어와 조사를 받침에 맞게 바꿨습니다.');
+        else if (parsedQuery.usesCodes || parsedReplacement.usesCodes) showToast('특수기호를 포함해 바꿨습니다.');
+      };
+
+      const truncationNotice = (truncated) => (truncated
+        ? ` 한 번에 ${MATCH_LIMIT.toLocaleString()}개까지만 처리했습니다. 남은 항목은 다시 실행하세요.`
+        : '');
+
+      const replaceAll = () => {
+        const query = findText.value;
+        const settings = getReplacementFormatSettings();
+
+        if (!query) {
+          if (!hasReplacementFormatSettings(settings)) {
+            showToast('찾을 내용을 입력하거나 바꿀 서식을 지정하세요.');
+            return;
+          }
+          const changed = runBulkEdit((root) => {
+            const range = root.ownerDocument.createRange();
+            range.selectNodeContents(root);
+            applyFormatSettingsToRange(range, root, settings);
+            return 1;
+          });
+          showToast(changed
+            ? '문서 전체의 서식을 지정한 대로 변경했습니다.'
+            : '변경할 내용이 없습니다.');
+          return;
+        }
+
+        const parsedQuery = parseSpecialCodes(query);
+        const parsedReplacement = parseSpecialCodes(replaceText.value);
+        const formattingOnly = !replaceText.value && hasReplacementFormatSettings(settings);
+
+        if (parsedQuery.usesCodes || parsedReplacement.usesCodes) {
+          const { count, truncated } = replaceAllSpecial(parsedQuery, parsedReplacement, settings, formattingOnly);
+          showToast((formattingOnly
+            ? `${count}개 항목의 서식을 변경했습니다.`
+            : `${count}개 항목을 특수기호 규칙으로 바꿨습니다.`) + truncationNotice(truncated));
+          return;
+        }
+
+        const replacement = formattingOnly ? query : replaceText.value;
+        const withParticles = !formattingOnly && adjustParticles.checked;
+        let particleCount = 0;
+        let truncated = false;
+
+        const count = runBulkEdit((root) => {
+          const model = buildSpecialSearchModel(root);
+          const collected = collectMatches(model, query, { replacement, withParticles });
+          particleCount = collected.particleCount;
+          truncated = collected.truncated;
+          return applyMatchesDescending(model, collected.matches, (range, match) => {
+            if (formattingOnly) applyFormatSettingsToRange(range, root, settings);
+            else replaceRangeWithTokens(range, [{ type: 'text', value: match.insertion }], root, settings);
+          });
+        });
+
+        specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
         const particleMessage = particleCount ? ` · 조사 ${particleCount}개 자동 교정` : '';
-        showToast(formattingOnly
+        showToast((formattingOnly
           ? `${count}개 항목의 서식을 변경했습니다.`
-          : `${count}개 항목을 바꿨습니다${particleMessage}.`);
+          : `${count}개 항목을 바꿨습니다${particleMessage}.`) + truncationNotice(truncated));
+      };
+
+      // 실행 취소·다시 실행은 일괄 편집 스냅숏을 먼저 확인한 뒤
+      // 해당하지 않으면 브라우저 기본 동작에 넘깁니다.
+      const performUndo = () => {
+        if (undoBulkEdit()) return;
+        runCommand('undo');
+      };
+
+      const performRedo = () => {
+        if (redoBulkEdit()) return;
+        runCommand('redo');
       };
 
       document.querySelectorAll('[data-command]').forEach((button) => {
         button.addEventListener('mousedown', (event) => event.preventDefault());
-        button.addEventListener('click', () => runCommand(button.dataset.command));
+        button.addEventListener('click', () => {
+          if (button.dataset.command === 'undo') performUndo();
+          else if (button.dataset.command === 'redo') performRedo();
+          else runCommand(button.dataset.command);
+        });
       });
 
       replaceFormatButtons.forEach((button) => {
@@ -3109,12 +3883,17 @@ ${sanitizeHtml(editor.innerHTML)}
         button.addEventListener('click', async () => {
           const action = button.dataset.action;
           if (action === 'new') {
-            if (editor.innerText.trim() && !window.confirm('현재 문서를 지우고 새 문서를 만들까요?')) return;
+            // 내용을 전부 지운 뒤라도 미저장 변경이면 확인을 받습니다.
+            if ((editor.innerText.trim() || draftDirty)
+              && !window.confirm('현재 문서를 지우고 새 문서를 만들까요?')) return;
             normalizeEmptyDocument(true);
             currentFileName = '새 문서';
             currentHtmlFileHandle = null;
             currentMarkdownFileHandle = null;
             currentDocxFileHandle = null;
+            // innerHTML을 직접 바꾸므로 input 이벤트가 없습니다. 초안을 명시적으로
+            // 비우지 않으면 비정상 종료 후 지운 문서가 되살아납니다.
+            markDocumentClean();
             updateCount();
             focusEditor();
           } else if (action === 'open') {
@@ -3266,12 +4045,31 @@ ${sanitizeHtml(editor.innerHTML)}
         }
       });
 
-      // 서식을 유지하는 붙여넣기는 원본 HTML의 블록 구조를 그대로 끼워 넣기 때문에
-      // 문단이 쪼개지거나 붙여넣은 내용 뒤에 빈 줄이 하나 더 생기는 문제가 있었습니다.
-      // 그래서 Ctrl+V도 Ctrl+Shift+V와 똑같이 줄바꿈만 살린 순수 텍스트로 붙여넣습니다.
-      // 단, URL 붙여넣기로 하이퍼링크를 만드는 동작은 유지합니다.
+      // Ctrl+Shift+V는 서식 없이 붙여넣기입니다. paste 이벤트만으로는 두 조작을
+      // 구분할 수 없으므로 키를 누른 시각을 기록해 판단합니다.
+      let plainPasteRequestedAt = 0;
+
+      document.addEventListener('keydown', (event) => {
+        if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'v') {
+          plainPasteRequestedAt = Date.now();
+        }
+      });
+
+      const consumePlainPasteRequest = () => {
+        const requested = Date.now() - plainPasteRequestedAt < 1000;
+        plainPasteRequestedAt = 0;
+        return requested;
+      };
+
+      // 원본 HTML의 블록 구조를 그대로 끼워 넣으면 문단이 쪼개지거나 붙여넣은
+      // 내용 뒤에 빈 줄이 하나 더 생깁니다. 그래서 줄 구조는 Ctrl+Shift+V처럼
+      // "보이는 줄 하나 = 문단 하나"로 다시 계산하고, 그 위에 굵게·기울임·밑줄·
+      // 취소선·하이퍼링크만 구간별로 되살립니다. 글꼴·글자 크기·색처럼 문서 모양을
+      // 흔드는 외부 서식은 가져오지 않습니다.
+      // Ctrl+Shift+V는 서식 없이 글자만 붙여넣습니다.
       editor.addEventListener('paste', (event) => {
         event.preventDefault();
+        const keepFormatting = !consumePlainPasteRequest();
         const selection = window.getSelection();
         const plain = event.clipboardData?.getData('text/plain') || '';
         const rich = event.clipboardData?.getData('text/html') || '';
@@ -3296,10 +4094,14 @@ ${sanitizeHtml(editor.innerHTML)}
           return;
         }
 
-        // 3) 일반 텍스트: HTML이 있으면 줄 구조를 뽑아 문단 경계를 올바르게 삽입합니다.
-        const lines = rich ? clipboardLinesFromHtml(rich) : [];
-        if (lines.some((line) => line.some((segment) => segment.trim()))) {
-          insertClipboardTokens(clipboardTokensFromLines(lines));
+        // 3) 줄 구조는 평문을 따르고, HTML에서 서식만 가져와 얹습니다.
+        const htmlLines = rich ? clipboardLinesFromHtml(rich) : [];
+        const lines = (plain && htmlLines.length
+          ? alignClipboardLinesToPlainText(plain, htmlLines)
+          : null) || htmlLines;
+        if (lines.some((line) => line.some((runs) => runs.some((run) => run.text.trim())))) {
+          insertClipboardTokens(clipboardTokensFromLines(lines, keepFormatting));
+          updateFormattingControlsState();
           return;
         }
         if (!plain) {
@@ -3348,6 +4150,14 @@ ${sanitizeHtml(editor.innerHTML)}
           return;
         }
         if (!ctrl) return;
+        if (key === 'z' && !event.shiftKey) {
+          if (undoBulkEdit()) event.preventDefault();
+          return;
+        }
+        if (key === 'y' || (key === 'z' && event.shiftKey)) {
+          if (redoBulkEdit()) event.preventDefault();
+          return;
+        }
         if (key === 'k') {
           event.preventDefault();
           saveSelection();
@@ -3393,6 +4203,7 @@ ${sanitizeHtml(editor.innerHTML)}
         }, DRAFT_SAVE_DELAY);
       };
 
+      // 파일에 실제로 기록됐음을 확인한 경우에만 복구 초안을 버립니다.
       const markDocumentClean = () => {
         cancelScheduledDraftSave();
         draftDirty = false;
@@ -3403,6 +4214,15 @@ ${sanitizeHtml(editor.innerHTML)}
         }
       };
 
+      // 블롭 다운로드는 성공 여부를 알 수 없습니다. 브라우저나 확장 프로그램이
+      // 다운로드를 조용히 차단해도 예외가 발생하지 않기 때문에, 여기서 초안을
+      // 지우면 파일도 없고 복구 수단도 없는 상태가 됩니다.
+      // 그래서 이탈 경고만 끄고 복구 초안은 남겨 둡니다.
+      const markDocumentSavedUnverified = () => {
+        saveDraft();
+        draftDirty = false;
+      };
+
       const confirmDiscardChanges = () => !draftDirty
         || window.confirm('저장하지 않은 변경 내용이 있습니다. 현재 문서를 닫고 다른 파일을 여시겠습니까?');
 
@@ -3411,12 +4231,15 @@ ${sanitizeHtml(editor.innerHTML)}
         if (!bulkEditing && !composing) scheduleDraftSave();
       };
 
+      // 복구는 조용히 일어나면 안 됩니다. 사용자가 직접 지운 내용이 되살아난
+      // 것인지, 비정상 종료에서 살아난 것인지 구분할 수 있게 알려 줍니다.
       const restoreDraft = () => {
         try {
           const saved = localStorage.getItem(DRAFT_KEY);
           if (saved && !editor.textContent.replace(/\u200B/g, '').trim()) {
             editor.innerHTML = saved;
             draftDirty = true;
+            showToast('저장하지 않은 내용을 복구했습니다.');
           }
         } catch (error) {
           // 접근 불가 시 무시합니다.
@@ -3441,6 +4264,15 @@ ${sanitizeHtml(editor.innerHTML)}
         if (document.hidden && draftDirty) saveDraft();
       });
       // ===== 자동 저장 및 이탈 경고 끝 =====
+
+      // 서식 명령이 <span style="font-weight:bold"> 대신 <b> 같은 태그를 만들게
+      // 합니다. 이 편집기의 저장·복사·찾아 바꾸기가 모두 태그를 기준으로
+      // 동작하므로 태그로 통일하는 편이 정확합니다.
+      try {
+        document.execCommand('styleWithCSS', false, false);
+      } catch (error) {
+        // 지원하지 않는 브라우저에서는 무시합니다.
+      }
 
       resetReplacementFormatStates();
       updateCount();
