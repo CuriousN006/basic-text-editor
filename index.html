@@ -2573,11 +2573,17 @@ ${sanitizeHtml(editor.innerHTML)}
         return sanitizeHtml(container.innerHTML);
       };
 
-      // innerText는 <p>를 두 줄로 계산하기 때문에(마진과 무관한 규격상 동작),
-      // 문단이 이어진 글을 그대로 담으면 줄 수가 두 배로 부풀려집니다.
-      // 그래서 <p>를 <div>로 바꿔 눈에 보이는 줄과 개행 수를 1:1로 맞춥니다.
-      const lineTextFromClipboardHtml = (html) => {
+      // <br>은 문단 나눔이 아니라 문단 안의 줄바꿈이므로 따로 표시해 둡니다.
+      const CLIPBOARD_SOFT_BREAK = '\u0001';
+
+      // 클립보드 HTML을 "문단 배열 안의 줄 배열"로 바꿉니다.
+      // innerText는 <p>를 두 줄로 계산하기 때문에(마진과 무관한 규격상 동작)
+      // <div>로 바꿔 눈에 보이는 줄과 개행 수를 1:1로 맞춥니다.
+      const clipboardLinesFromHtml = (html) => {
         const doc = new DOMParser().parseFromString(String(html), 'text/html');
+        doc.body.querySelectorAll('br').forEach((lineBreak) => {
+          lineBreak.replaceWith(doc.createTextNode(CLIPBOARD_SOFT_BREAK));
+        });
         doc.body.querySelectorAll('p').forEach((paragraph) => {
           const line = doc.createElement('div');
           [...paragraph.attributes].forEach((attribute) => line.setAttribute(attribute.name, attribute.value));
@@ -2591,10 +2597,22 @@ ${sanitizeHtml(editor.innerHTML)}
         host.style.cssText = 'position:fixed;left:-9999px;top:0;width:800px;pointer-events:none';
         host.innerHTML = sanitizeHtml(doc.body.innerHTML);
         document.body.appendChild(host);
-        const text = host.innerText;
+        const measured = host.innerText;
         host.remove();
-        return normalizeClipboardText(text);
+
+        // 빈 줄 자리를 채우려고 넣은 &nbsp;는 원래 없던 글자이므로 비워 둡니다.
+        // 그대로 두면 붙여넣을 때 줄 앞에 공백 한 칸이 생깁니다.
+        return normalizeClipboardText(measured).split('\n').map((line) => line
+          .split(CLIPBOARD_SOFT_BREAK)
+          .map((segment) => {
+            const restored = segment.replace(/\u00A0/g, ' ');
+            return restored.trim() ? restored : '';
+          }));
       };
+
+      const clipboardPlainTextFromHtml = (html) => clipboardLinesFromHtml(html)
+        .map((line) => line.join('\n'))
+        .join('\n');
 
       const writeEditorClipboardData = (event) => {
         const selection = window.getSelection();
@@ -2603,7 +2621,7 @@ ${sanitizeHtml(editor.innerHTML)}
         const html = clipboardHtmlWithExplicitBreaks(range);
         // text/html은 이미 "블록 하나 = 한 줄"로 정규화돼 있으므로
         // text/plain도 같은 구조에서 뽑아 두 형식의 줄 수를 일치시킵니다.
-        const plain = lineTextFromClipboardHtml(html);
+        const plain = clipboardPlainTextFromHtml(html);
 
         event.preventDefault();
         event.clipboardData.setData('text/plain', plain);
@@ -3009,7 +3027,7 @@ ${sanitizeHtml(editor.innerHTML)}
         return tokens;
       };
 
-      const insertPlainTextPreservingBreaks = (text) => {
+      const insertClipboardTokens = (tokens) => {
         const selection = window.getSelection();
         let range = null;
         if (selection && selection.rangeCount && selectionIsInsideEditor()) {
@@ -3019,8 +3037,27 @@ ${sanitizeHtml(editor.innerHTML)}
           range.selectNodeContents(editor);
           range.collapse(false);
         }
-        replaceRangeWithSpecialTokens(range, plainTextToSpecialTokens(text));
+        replaceRangeWithSpecialTokens(range, tokens);
         updateCount();
+      };
+
+      // 이 편집기에서 Enter는 새 문단, Shift+Enter는 문단 안의 줄바꿈입니다.
+      // 붙여넣기도 같은 규칙을 따라야 원본과 줄 구조가 같아집니다.
+      const clipboardTokensFromLines = (lines) => {
+        const tokens = [];
+        lines.forEach((line, lineIndex) => {
+          if (lineIndex) tokens.push({ type: 'paragraph' });
+          line.forEach((segment, segmentIndex) => {
+            if (segmentIndex) tokens.push({ type: 'line' });
+            plainTextToSpecialTokens(segment).forEach((token) => tokens.push(token));
+          });
+        });
+        return tokens;
+      };
+
+      const insertPlainTextPreservingBreaks = (text) => {
+        const lines = normalizeClipboardText(text).split('\n').map((line) => [line]);
+        insertClipboardTokens(clipboardTokensFromLines(lines));
       };
 
       const insertRichHtmlPreservingFormatting = (html) => {
@@ -3412,13 +3449,16 @@ ${sanitizeHtml(editor.innerHTML)}
         const rich = event.clipboardData?.getData('text/html') || '';
         // 대부분의 프로그램은 text/plain의 문단 사이에 빈 줄을 하나 더 넣습니다.
         // HTML이 함께 왔다면 거기서 줄 구조를 뽑아야 원본과 줄 수가 같아집니다.
-        const fromRich = rich ? lineTextFromClipboardHtml(rich) : '';
-        const text = fromRich.trim() ? fromRich : plain;
-        if (!text) {
+        const lines = rich ? clipboardLinesFromHtml(rich) : [];
+        if (lines.some((line) => line.some((segment) => segment.trim()))) {
+          insertClipboardTokens(clipboardTokensFromLines(lines));
+          return;
+        }
+        if (!plain) {
           showToast('붙여넣을 내용을 찾지 못했습니다.');
           return;
         }
-        insertPlainTextPreservingBreaks(text);
+        insertPlainTextPreservingBreaks(plain);
       });
 
       document.querySelectorAll('[data-find]').forEach((button) => {
