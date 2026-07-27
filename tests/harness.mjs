@@ -32,6 +32,8 @@ export async function launch() {
 // 페이지를 열고 편집기 조작용 헬퍼를 주입한다.
 export async function openEditor(browser, base, opts = {}) {
   const context = await browser.newContext({ acceptDownloads: true });
+  // 실제 클립보드를 통한 붙여넣기 검증에 필요합니다.
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
   const page = await context.newPage();
 
   // 브라우저가 다운로드를 조용히 차단한 상황을 흉내내는 스텁.
@@ -106,6 +108,27 @@ export async function openEditor(browser, base, opts = {}) {
       draft() { return localStorage.getItem('basic-text-editor-draft'); },
       toast() { return document.getElementById('toast').textContent; },
       boldTags() { return T.ed().querySelectorAll('b,strong').length; },
+      formatTags() { return T.ed().querySelectorAll('b,strong,i,em,u,s,strike,del,a').length; },
+      // 블록 구성 요약. ':빈'은 글자가 없는 블록.
+      blocks() {
+        return [...T.ed().children].map((el) => el.tagName + (el.textContent.trim() ? '' : ':빈')).join(' ');
+      },
+      // 실제 커서처럼 문단 안쪽에 캐럿을 둔다.
+      caretIn(index, atEnd) {
+        const block = T.ed().children[index] || T.ed();
+        const range = document.createRange();
+        range.selectNodeContents(block);
+        range.collapse(!atEnd);
+        T.ed().focus();
+        const s = getSelection();
+        s.removeAllRanges();
+        s.addRange(range);
+      },
+      async writeClipboard(html, text) {
+        const data = { 'text/plain': new Blob([text], { type: 'text/plain' }) };
+        if (html) data['text/html'] = new Blob([html], { type: 'text/html' });
+        await navigator.clipboard.write([new ClipboardItem(data)]);
+      },
     };
     `,
   });

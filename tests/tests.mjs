@@ -429,75 +429,126 @@ await withPage({}, async (page) => {
   r.check('R32 상한 도달을 알린다', /한 번에 10,000개까지만/.test(toast), true, toast);
 });
 
-console.log('\n--- 붙여넣기 ---');
+console.log('\n--- 붙여넣기 (실제 클립보드 + 실제 키 입력) ---');
 
-// 실제 Ctrl+Shift+V 키 입력은 브라우저 자체 붙여넣기를 먼저 발생시켜
-// 요청 표시를 소비하므로, 테스트에서는 keydown만 합성해 분리한다.
-const pasteInto = async (page, { html = '', text = '', plain = false } = {}) => {
-  await page.evaluate(({ h, t, p }) => {
-    if (p) {
-      document.dispatchEvent(new KeyboardEvent('keydown', {
-        ctrlKey: true, shiftKey: true, key: 'V', bubbles: true,
-      }));
-    }
-    const dt = new DataTransfer();
-    if (t) dt.setData('text/plain', t);
-    if (h) dt.setData('text/html', h);
-    T.ed().focus();
-    T.ed().dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
-  }, { h: html, t: text, p: plain });
-  await page.waitForTimeout(150);
+// 합성 ClipboardEvent는 브라우저가 실제로 넘겨주는 클립보드 내용을 재현하지
+// 못한다. 태그 사이 개행, 인라인 스타일 덩어리, 래퍼 요소가 모두 빠지기 때문에
+// 실제로 깨지는 경우를 하나도 못 잡는다. 그래서 진짜 클립보드에 쓰고 진짜
+// Ctrl+V / Ctrl+Shift+V 를 누른다.
+const pasteReal = async (page, { html = '', text = '', plain = false, blockIndex = 0, atEnd = true } = {}) => {
+  await page.evaluate(({ h, t }) => T.writeClipboard(h, t), { h: html, t: text });
+  await page.evaluate(({ i, e }) => T.caretIn(i, e), { i: blockIndex, e: atEnd });
+  if (plain) {
+    await page.keyboard.down('Control');
+    await page.keyboard.down('Shift');
+    await page.keyboard.press('KeyV');
+    await page.keyboard.up('Shift');
+    await page.keyboard.up('Control');
+  } else {
+    await page.keyboard.press('Control+v');
+  }
+  await page.waitForTimeout(250);
 };
 
-const RICH_SOURCE = '<p>첫 문단에 <b>굵게</b>와 <a href="https://example.com/a">링크</a>가 있습니다.</p>'
-  + '<p>둘째 문단은 <em>기울임</em>과 <span style="text-decoration:line-through">취소선</span>.</p>'
-  + '<p>셋째 줄<br>같은 문단 안 줄바꿈</p>';
+// Word가 내놓는 형태에 가깝게 태그 사이에 개행과 들여쓰기가 있다.
+const WORD_CLIP = `<html xmlns:o="urn:schemas-microsoft-com:office:office">
+<head><meta charset="utf-8"><style>p.MsoNormal{margin:0}</style></head>
+<body lang="KO">
 
-// P1. Ctrl+V는 인라인 서식을 유지하고 줄 구조는 다시 계산한다.
+<p class="MsoNormal">첫 문단에 <b>굵게</b>와 <span style='font-style:italic'>기울임</span>이 있습니다.<o:p></o:p></p>
+
+<p class="MsoNormal">둘째 문단입니다.<o:p></o:p></p>
+
+</body>
+</html>`;
+const WORD_TEXT = '첫 문단에 굵게와 기울임이 있습니다.\r\n둘째 문단입니다.';
+
+// P1. Ctrl+V: 인라인 서식 유지 + 태그 사이 공백이 빈 줄로 늘어나지 않음
 await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<p><br></p>'));
-  await pasteInto(page, { html: RICH_SOURCE, text: '무시되는 평문' });
-  r.check('P1 문단 수', await page.evaluate(() => T.ed().querySelectorAll('p').length), 3);
-  r.check('P2 서식 경계가 새지 않는다',
-    await page.evaluate(() => T.ed().querySelector('p').innerHTML),
-    '첫 문단에 <b>굵게</b>와 <a href="https://example.com/a">링크</a>가 있습니다.');
-  r.check('P3 기울임·취소선 유지',
-    await page.evaluate(() => [
-      T.ed().querySelectorAll('i,em').length,
-      T.ed().querySelectorAll('s,strike,del').length,
-    ]), [1, 1]);
-  r.check('P4 문단 안 줄바꿈 유지',
-    await page.evaluate(() => T.ed().querySelectorAll('p')[2].textContent),
-    '셋째 줄\n같은 문단 안 줄바꿈');
-  r.check('P5 붙여넣은 뒤 빈 문단이 생기지 않는다',
-    await page.evaluate(() => T.ed().querySelectorAll('p').length), 3);
+  await pasteReal(page, { html: WORD_CLIP, text: WORD_TEXT });
+  r.check('P1 문단 구성(빈 줄 없음)', await page.evaluate(() => T.blocks()), 'P P');
+  r.check('P2 결과 HTML',
+    await page.evaluate(() => T.html()),
+    '<p>첫 문단에 <b>굵게</b>와 <i>기울임</i>이 있습니다.</p><p>둘째 문단입니다.</p>');
+  r.check('P3 인라인 스타일이 아니라 태그로 표현',
+    /style=/.test(await page.evaluate(() => T.html())), false);
 });
 
-// P6. Ctrl+Shift+V는 서식을 버린다.
+// P4. Ctrl+Shift+V: 서식 없음, 줄 구조는 동일
 await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<p><br></p>'));
-  await pasteInto(page, { html: RICH_SOURCE, text: '무시되는 평문', plain: true });
-  r.check('P6 서식 태그 없음',
-    await page.evaluate(() => T.ed().querySelectorAll('b,strong,i,em,u,s,strike,del,a').length), 0,
+  await pasteReal(page, { html: WORD_CLIP, text: WORD_TEXT, plain: true });
+  r.check('P4 서식 태그 없음', await page.evaluate(() => T.formatTags()), 0,
     await page.evaluate(() => T.html()));
-  r.check('P7 줄 구조는 그대로',
-    await page.evaluate(() => T.ed().querySelectorAll('p').length), 3);
+  r.check('P5 줄 구조 동일', await page.evaluate(() => T.blocks()), 'P P');
 });
 
-// P8. 글꼴·글자 크기·색 같은 외부 서식은 가져오지 않는다.
+// P6. Google 문서의 <b style="font-weight:normal"> 래퍼에 속지 않는다.
 await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<p><br></p>'));
-  await pasteInto(page, {
+  await pasteReal(page, {
+    html: '<meta charset="utf-8"><b style="font-weight:normal" id="docs-internal-guid-1">'
+      + '<p dir="ltr"><span style="font-weight:400">보통 글자와 </span>'
+      + '<span style="font-weight:700">굵은 글자</span></p></b>',
+    text: '보통 글자와 굵은 글자',
+  });
+  r.check('P6 래퍼 때문에 전체가 굵어지지 않는다',
+    await page.evaluate(() => T.html()), '<p>보통 글자와 <b>굵은 글자</b></p>');
+});
+
+// P7. 이 편집기에서 복사한 내용을 다시 붙여넣기 (빈 줄 포함)
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>가 <b>굵게</b></p><p class="blank-line"><br></p><p>나</p>'));
+  await page.evaluate(() => {
+    const e = T.ed();
+    e.focus();
+    const range = document.createRange();
+    range.selectNodeContents(e);
+    const s = getSelection();
+    s.removeAllRanges();
+    s.addRange(range);
+  });
+  await page.keyboard.press('Control+c');
+  await page.waitForTimeout(200);
+  await page.evaluate(() => T.set('<p><br></p>'));
+  await page.evaluate(() => T.caretIn(0, true));
+  await page.keyboard.press('Control+v');
+  await page.waitForTimeout(250);
+  r.check('P7 빈 줄이 서식 껍데기 없이 유지된다',
+    await page.evaluate(() => T.html()), '<p>가 <b>굵게</b></p><p><br></p><p>나</p>');
+  r.check('P8 굵게 하나만', await page.evaluate(() => T.boldTags()), 1);
+});
+
+// P9. 글꼴·크기·색은 가져오지 않는다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p><br></p>'));
+  await pasteReal(page, {
     html: '<p style="font-family:Impact;font-size:32px">'
       + '<span style="color:red;font-size:40px">색과 크기</span> 그리고 <b>굵게</b></p>',
     text: '색과 크기 그리고 굵게',
   });
   const html = await page.evaluate(() => T.html());
-  r.check('P8 외부 글꼴·색 미반영', /font-family|font-size|color/.test(html), false, html);
-  r.check('P9 굵게는 유지', /<b>/.test(html), true, html);
+  r.check('P9 외부 글꼴·색 미반영', /font-family|font-size|color/.test(html), false, html);
+  r.check('P10 굵게는 유지', /<b>/.test(html), true, html);
 });
 
-// P10. 문단 중간에 붙여넣으면 그 자리에 들어간다.
+// P11. 중첩 서식이 인라인 스타일로 새지 않는다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p><br></p>'));
+  await pasteReal(page, {
+    html: '<div>가 <b>굵고 <i>기울임</i></b> 나</div>\n<div>둘째</div>',
+    text: '가 굵고 기울임 나\n둘째',
+  });
+  const html = await page.evaluate(() => T.html());
+  r.check('P11 중첩 서식이 태그로 표현', /style=/.test(html), false, html);
+  r.check('P12 굵게·기울임 모두 유지',
+    await page.evaluate(() => [T.ed().querySelectorAll('b').length > 0, T.ed().querySelectorAll('i').length > 0]),
+    [true, true], html);
+  r.check('P13 빈 줄이 끼지 않는다', await page.evaluate(() => T.blocks()), 'P P', html);
+});
+
+// P14. 문단 중간에 붙여넣기
 await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<p>앞뒤</p>'));
   await page.evaluate(() => {
@@ -510,63 +561,116 @@ await withPage({}, async (page) => {
     s.removeAllRanges();
     s.addRange(range);
   });
-  await pasteInto(page, { html: '<p><b>굵은</b>것</p>', text: '굵은것' });
-  r.check('P10 문단 중간 삽입', await page.evaluate(() => T.html()), '<p>앞<b>굵은</b>것뒤</p>');
+  await page.evaluate(() => T.writeClipboard('<p><b>굵은</b>것</p>', '굵은것'));
+  await page.keyboard.press('Control+v');
+  await page.waitForTimeout(250);
+  r.check('P14 문단 중간 삽입', await page.evaluate(() => T.html()), '<p>앞<b>굵은</b>것뒤</p>');
 });
 
-// P11. 평문만 있는 클립보드는 공백을 그대로 보존한다(기존 동작).
+// P15. 평문만 있는 클립보드는 연속 공백을 보존한다.
 await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<p><br></p>'));
-  await pasteInto(page, { text: '가  나 다' });
-  r.check('P11 평문 연속 공백 보존', await page.evaluate(() => T.html()), '<p>가  나 다</p>');
+  await pasteReal(page, { text: '가  나 다' });
+  r.check('P15 평문 연속 공백 보존', await page.evaluate(() => T.html()), '<p>가  나 다</p>');
 });
 
-// P12. 위험한 주소는 링크로 만들지 않는다.
+// P16. 위험한 주소는 링크로 만들지 않는다.
 await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<p><br></p>'));
-  await pasteInto(page, {
+  await pasteReal(page, {
     html: '<p><a href="javascript:alert(1)">위험</a> <a href="https://ok.example/">정상</a></p>',
     text: '위험 정상',
   });
   const html = await page.evaluate(() => T.html());
-  r.check('P12 javascript: 링크 제거', /javascript:/i.test(html), false, html);
-  r.check('P13 정상 링크 유지', /https:\/\/ok\.example\//.test(html), true, html);
+  r.check('P16 javascript: 링크 제거', /javascript:/i.test(html), false, html);
+  r.check('P17 정상 링크 유지', /href="https:\/\/ok\.example\/"/.test(html), true, html);
 });
 
-// P14. 서식 유지 붙여넣기도 실행 취소된다.
+// P18. 붙여넣기는 Ctrl+Z 한 번으로 되돌아간다.
 await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<p>원본</p>'));
-  await page.evaluate(() => {
-    const range = document.createRange();
-    range.selectNodeContents(T.ed().querySelector('p'));
-    range.collapse(false);
-    T.ed().focus();
-    const s = getSelection();
-    s.removeAllRanges();
-    s.addRange(range);
-  });
-  await pasteInto(page, { html: '<p><b>굵게</b></p>', text: '굵게' });
-  r.check('P14 붙여넣기 결과', await page.evaluate(() => T.html()), '<p>원본<b>굵게</b></p>');
+  await pasteReal(page, { html: WORD_CLIP, text: WORD_TEXT });
+  r.check('P18 붙여넣기 적용', await page.evaluate(() => T.blocks()), 'P P');
   await page.keyboard.press('Control+z');
-  await page.waitForTimeout(100);
-  r.check('P15 실행 취소', await page.evaluate(() => T.text()), '원본');
+  await page.waitForTimeout(150);
+  r.check('P19 한 번의 Ctrl+Z로 복원', await page.evaluate(() => T.html()), '<p>원본</p>');
+  await page.keyboard.press('Control+y');
+  await page.waitForTimeout(150);
+  r.check('P20 다시 실행', await page.evaluate(() => T.blocks()), 'P P');
 });
 
-// P16. URL 단독/선택 영역 붙여넣기 동작은 그대로.
+// P21. 선택 영역을 덮어쓰는 붙여넣기
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>앞 지울것 뒤</p>'));
+  await page.evaluate(() => T.writeClipboard('<p><b>새말</b></p>', '새말'));
+  await page.evaluate(() => T.select('지울것'));
+  await page.keyboard.press('Control+v');
+  await page.waitForTimeout(250);
+  r.check('P21 선택 영역 대체', await page.evaluate(() => T.html()), '<p>앞 <b>새말</b> 뒤</p>');
+});
+
+// P22. URL 붙여넣기 동작은 그대로.
 await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<p><br></p>'));
-  await pasteInto(page, { text: 'https://example.com/x' });
-  r.check('P16 URL 단독 붙여넣기는 링크',
+  await pasteReal(page, { text: 'https://example.com/x' });
+  r.check('P22 URL 단독 붙여넣기는 링크',
     await page.evaluate(() => T.ed().querySelector('a')?.getAttribute('href')),
     'https://example.com/x');
 });
 await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<p>대상</p>'));
+  await page.evaluate(() => T.writeClipboard('', 'https://example.com/y'));
   await page.evaluate(() => T.select('대상'));
-  await pasteInto(page, { text: 'https://example.com/y' });
-  r.check('P17 선택 위에 URL 붙여넣기는 링크로 감쌈',
+  await page.keyboard.press('Control+v');
+  await page.waitForTimeout(250);
+  r.check('P23 선택 위에 URL 붙여넣기는 링크로 감쌈',
     await page.evaluate(() => T.html()),
     '<p><a href="https://example.com/y">대상</a></p>');
+});
+
+// P25. 서식 뒤의 공백이 서식에 포함되지 않는다(밑줄·취소선·링크는 공백에도 선이 보인다).
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p><br></p>'));
+  await pasteReal(page, { html: '<p><u>밑줄</u> <s>취소선</s></p>', text: '밑줄 취소선' });
+  r.check('P25 밑줄·취소선 경계 공백', await page.evaluate(() => T.html()),
+    '<p><u>밑줄</u> <s>취소선</s></p>');
+});
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p><br></p>'));
+  await pasteReal(page, { html: '<p><a href="https://x.example/">링크</a> 다음</p>', text: '링크 다음' });
+  r.check('P26 링크 뒤 공백', await page.evaluate(() => T.html()),
+    '<p><a href="https://x.example/">링크</a> 다음</p>');
+});
+
+// P27. 빈 문단의 자리표시 <br>을 줄바꿈으로 세지 않는다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p><br></p>'));
+  await pasteReal(page, { html: '<p>가</p><p><br></p><p>나</p>', text: '가\n\n나' });
+  r.check('P27 빈 줄이 두 줄로 늘어나지 않는다', await page.evaluate(() => T.html()),
+    '<p>가</p><p><br></p><p>나</p>');
+});
+
+// P28. 진짜 <br>은 문단 안 줄바꿈으로 들어간다(Shift+Enter와 같은 형태).
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p><br></p>'));
+  await pasteReal(page, { html: '<p>첫<br>둘</p>', text: '첫\n둘' });
+  r.check('P28 문단 안 줄바꿈', await page.evaluate(() => T.html()), '<p>첫\n둘</p>');
+});
+
+// P29. 목록은 줄 구조를 다시 계산하므로 문단이 된다(서식은 유지).
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p><br></p>'));
+  await pasteReal(page, { html: '<ul><li>하나</li><li>둘 <b>굵게</b></li></ul>', text: '하나\n둘 굵게' });
+  r.check('P29 목록 → 문단, 서식 유지', await page.evaluate(() => T.html()),
+    '<p>하나</p><p>둘 <b>굵게</b></p>');
+});
+
+// P24. 마지막 문단에 잉여 <br>이 남지 않는다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p><br></p>'));
+  await pasteReal(page, { html: '<p>하나</p><p>둘</p><p>셋</p>', text: '하나\n둘\n셋' });
+  r.check('P24 잉여 줄바꿈 없음', await page.evaluate(() => T.html()),
+    '<p>하나</p><p>둘</p><p>셋</p>');
 });
 
 console.log('\n--- 실행 취소 메커니즘 ---');
