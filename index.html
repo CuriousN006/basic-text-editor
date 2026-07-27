@@ -2427,9 +2427,31 @@ ${sanitizeHtml(editor.innerHTML)}
         });
       };
 
+      const INLINE_COPY_TAGS = new Set([
+        'B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'DEL', 'A', 'CODE', 'SPAN', 'FONT'
+      ]);
+
+      // Range.cloneContents는 범위를 감싸고 있는 조상 태그를 포함하지 않습니다.
+      // 그래서 굵은 단어의 일부만 선택해 복사하면 굵게가 사라졌습니다.
+      // 빠진 인라인 서식 조상을 안쪽부터 다시 씌웁니다.
+      const restoreInlineAncestors = (container, range) => {
+        const chain = [];
+        let element = range.commonAncestorContainer;
+        if (element && element.nodeType !== Node.ELEMENT_NODE) element = element.parentElement;
+        for (; element && element !== editor && editor.contains(element); element = element.parentElement) {
+          if (INLINE_COPY_TAGS.has(element.tagName)) chain.push(element);
+        }
+        chain.forEach((source) => {
+          const wrapper = source.cloneNode(false);
+          while (container.firstChild) wrapper.appendChild(container.firstChild);
+          container.appendChild(wrapper);
+        });
+      };
+
       const clipboardHtmlWithExplicitBreaks = (range) => {
         const container = document.createElement('div');
         container.appendChild(range.cloneContents());
+        restoreInlineAncestors(container, range);
         const clipboardBlockTags = new Set([
           'P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'PRE',
           'UL', 'OL', 'LI', 'TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TD', 'TH', 'HR'
@@ -3025,7 +3047,10 @@ ${sanitizeHtml(editor.innerHTML)}
       };
 
       // mutate(root)는 복제본을 직접 고치고 변경 건수를 돌려줍니다.
-      const runBulkEdit = (mutate) => {
+      // hooks.beforeCommit은 정리까지 끝난 복제본을, hooks.afterCommit은 반영이
+      // 끝난 편집기를 받습니다. 실행 취소 스냅숏은 afterCommit 뒤에 찍으므로
+      // afterCommit에서 임시 표식을 지워도 스냅숏이 오염되지 않습니다.
+      const runBulkEdit = (mutate, hooks = {}) => {
         const beforeHtml = editor.innerHTML;
         const clone = editor.cloneNode(true);
         const count = mutate(clone);
@@ -3033,6 +3058,7 @@ ${sanitizeHtml(editor.innerHTML)}
         pruneEmptyInlineElements(clone);
         pruneEmptyBlockContainers(clone);
         ensureBlockPlaceholders(clone);
+        if (hooks.beforeCommit) hooks.beforeCommit(clone);
 
         bulkEditing = true;
         try {
@@ -3041,6 +3067,7 @@ ${sanitizeHtml(editor.innerHTML)}
           bulkEditing = false;
         }
         normalizeEmptyDocument();
+        if (hooks.afterCommit) hooks.afterCommit();
 
         bulkUndoStack.push({ beforeHtml, afterHtml: editor.innerHTML });
         if (bulkUndoStack.length > BULK_UNDO_LIMIT) bulkUndoStack.shift();
@@ -3425,6 +3452,8 @@ ${sanitizeHtml(editor.innerHTML)}
         return range;
       };
 
+      const PASTE_CARET_MARK = 'data-paste-caret';
+
       // 붙여넣기도 일괄 편집과 같은 경로를 씁니다.
       //
       // execCommand로 한 구간씩 넣으면서 서식을 커서 상태로 토글하는 방식은
@@ -3450,7 +3479,7 @@ ${sanitizeHtml(editor.innerHTML)}
           endPath = nodePathWithin(editor, live.endContainer, live.endOffset);
         }
 
-        let caretPath = null;
+        let lastNode = null;
         const changed = runBulkEdit((root) => {
           let range = null;
           const start = boundaryFromPath(root, startPath);
@@ -3467,21 +3496,38 @@ ${sanitizeHtml(editor.innerHTML)}
             range = collapsedRangeAtEnd(root);
           }
 
-          const lastNode = replaceRangeWithTokens(range, tokens, root);
-          if (lastNode) caretPath = nodePathWithin(root, lastNode, 0);
+          lastNode = replaceRangeWithTokens(range, tokens, root);
           return 1;
+        }, {
+          // 커서 자리를 임시 표식으로 남깁니다. 자식 인덱스 경로로 기록하면
+          // innerHTML을 다시 파싱할 때 이웃한 텍스트 노드가 하나로 합쳐져
+          // 경로가 어긋나고, 커서가 문서 맨 앞으로 돌아갑니다.
+          beforeCommit(root) {
+            if (!lastNode || !root.contains(lastNode) || !lastNode.parentNode) return;
+            const mark = root.ownerDocument.createElement('span');
+            mark.setAttribute(PASTE_CARET_MARK, '1');
+            lastNode.parentNode.insertBefore(mark, lastNode.nextSibling);
+          },
+          afterCommit() {
+            const mark = editor.querySelector(`[${PASTE_CARET_MARK}]`);
+            const caret = document.createRange();
+            if (mark && mark.parentNode) {
+              const parent = mark.parentNode;
+              const index = [...parent.childNodes].indexOf(mark);
+              mark.remove();
+              caret.setStart(parent, index);
+              caret.collapse(true);
+            } else {
+              // 표식을 잃어도 맨 앞으로 돌아가지 않게 문서 끝에 둡니다.
+              const fallback = collapsedRangeAtEnd(editor);
+              caret.setStart(fallback.startContainer, fallback.startOffset);
+              caret.collapse(true);
+            }
+            selectEditorRange(caret);
+            saveSelection();
+          }
         });
         if (!changed) return;
-
-        // 커서를 붙여넣은 내용 끝으로 되돌립니다.
-        const anchorNode = caretPath && nodeAtPath(editor, caretPath.path);
-        if (anchorNode) {
-          const caret = document.createRange();
-          caret.setStartAfter(anchorNode);
-          caret.collapse(true);
-          selectEditorRange(caret);
-          saveSelection();
-        }
         updateCount();
       };
 

@@ -124,6 +124,17 @@ export async function openEditor(browser, base, opts = {}) {
         s.removeAllRanges();
         s.addRange(range);
       },
+      // 커서가 문서 앞에서 몇 글자 뒤에 있는지. 맨 앞으로 튀는지 확인용.
+      caretOffset() {
+        const s = getSelection();
+        if (!s || !s.rangeCount) return null;
+        const probe = document.createRange();
+        probe.selectNodeContents(T.ed());
+        try { probe.setEnd(s.getRangeAt(0).endContainer, s.getRangeAt(0).endOffset); } catch (e) { return null; }
+        return probe.toString().length;
+      },
+      textLength() { return T.ed().textContent.length; },
+      selectRange(needle) { return T.select(needle); },
       async writeClipboard(html, text) {
         const data = { 'text/plain': new Blob([text], { type: 'text/plain' }) };
         if (html) data['text/html'] = new Blob([html], { type: 'text/html' });

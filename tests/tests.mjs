@@ -673,6 +673,55 @@ await withPage({}, async (page) => {
     '<p>하나</p><p>둘</p><p>셋</p>');
 });
 
+// P30~. 에디터 안에서 복사해 붙여넣을 때 서식이 유지된다.
+// Range.cloneContents는 범위를 감싼 조상 태그를 포함하지 않으므로, 서식 요소의
+// 일부만 선택해 복사하면 서식이 사라지던 문제가 있었다.
+const copyInEditorAndPaste = async (page, html, needle) => {
+  await page.evaluate((h) => T.set(h), html);
+  await page.evaluate((n) => T.select(n), needle);
+  await page.keyboard.press('Control+c');
+  await page.waitForTimeout(200);
+  await page.evaluate(() => T.set('<p><br></p>'));
+  await page.evaluate(() => T.caretIn(0, true));
+  await page.keyboard.press('Control+v');
+  await page.waitForTimeout(280);
+  return page.evaluate(() => T.html());
+};
+
+for (const [label, html, needle, expected] of [
+  ['굵은 단어 전체', '<p>앞 <b>굵게</b> 뒤</p>', '굵게', '<p><b>굵게</b></p>'],
+  ['굵은 단어 일부', '<p>앞 <b>굵은글자</b> 뒤</p>', '은글', '<p><b>은글</b></p>'],
+  ['기울임 일부', '<p>앞 <i>기울임글자</i> 뒤</p>', '임글', '<p><i>임글</i></p>'],
+  ['링크 일부', '<p>앞 <a href="https://x.example/">링크글자</a> 뒤</p>', '크글',
+    '<p><a href="https://x.example/">크글</a></p>'],
+  ['굵게+기울임 일부', '<p>앞 <b><i>둘다입니다</i></b> 뒤</p>', '다입', '<p><b><i>다입</i></b></p>'],
+  ['서식 경계 걸침', '<p><b>굵게</b>보통<i>기울임</i></p>', '게보통기',
+    '<p><b>게</b>보통<i>기</i></p>'],
+]) {
+  // eslint-disable-next-line no-await-in-loop
+  await withPage({}, async (page) => {
+    r.check(`P30 에디터 내 복붙 서식 유지 — ${label}`,
+      await copyInEditorAndPaste(page, html, needle), expected);
+  });
+}
+
+// P31~. 붙여넣은 뒤 커서가 붙여넣은 내용 끝에 있어야 한다(맨 앞으로 튀지 않음).
+for (const [label, html, text] of [
+  ['<br> 구분', '<div>가<br><br>나<br><br>다</div>', '가\n\n나\n\n다'],
+  ['<p> 구분', '<p>가</p><p>나</p><p>다</p>', '가\n나\n다'],
+  ['평문', '', '가\n나\n다'],
+  ['서식 섞인 한 줄', '<p>가 <b>굵게</b> 나</p>', '가 굵게 나'],
+]) {
+  // eslint-disable-next-line no-await-in-loop
+  await withPage({}, async (page) => {
+    await page.evaluate(() => T.set('<p>기존</p>'));
+    await pasteReal(page, { html, text });
+    const [offset, total] = await page.evaluate(() => [T.caretOffset(), T.textLength()]);
+    r.check(`P31 커서가 끝에 — ${label}`, offset, total,
+      await page.evaluate(() => T.html()));
+  });
+}
+
 console.log('\n--- 실행 취소 메커니즘 ---');
 
 // U1. 일괄 편집 되돌리기 후 다시 실행
