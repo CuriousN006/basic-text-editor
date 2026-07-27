@@ -2596,9 +2596,9 @@ ${sanitizeHtml(editor.innerHTML)}
         return normalizeClipboardText(text);
       };
 
-      const handleEditorCopy = (event) => {
+      const writeEditorClipboardData = (event) => {
         const selection = window.getSelection();
-        if (!event.clipboardData || !selection || selection.isCollapsed || !selectionIsInsideEditor()) return;
+        if (!event.clipboardData || !selection || selection.isCollapsed || !selectionIsInsideEditor()) return false;
         const range = selection.getRangeAt(0);
         const html = clipboardHtmlWithExplicitBreaks(range);
         // text/html은 이미 "블록 하나 = 한 줄"로 정규화돼 있으므로
@@ -2608,6 +2608,26 @@ ${sanitizeHtml(editor.innerHTML)}
         event.preventDefault();
         event.clipboardData.setData('text/plain', plain);
         event.clipboardData.setData('text/html', html);
+        return true;
+      };
+
+      const handleEditorCopy = (event) => {
+        writeEditorClipboardData(event);
+      };
+
+      // 잘라내기를 브라우저 기본 동작에 맡기면 정규화를 전부 건너뛰기 때문에
+      // 다른 프로그램에 붙여넣을 때 문단 사이에 빈 줄이 하나씩 더 생깁니다.
+      // 그래서 복사와 똑같은 형식으로 기록한 뒤 선택 영역을 직접 지웁니다.
+      const handleEditorCut = (event) => {
+        if (!writeEditorClipboardData(event)) return;
+        // 되돌리기(Ctrl+Z) 기록에 남도록 execCommand로 지웁니다.
+        if (!document.execCommand('delete', false, null)) {
+          const selection = window.getSelection();
+          if (selection && selection.rangeCount) selection.getRangeAt(0).deleteContents();
+        }
+        normalizeEmptyDocument();
+        updateCount();
+        updateFormattingControlsState();
       };
 
       const copyAllRich = () => {
@@ -3371,6 +3391,7 @@ ${sanitizeHtml(editor.innerHTML)}
         closeTablePicker();
       });
       document.addEventListener('copy', handleEditorCopy);
+      document.addEventListener('cut', handleEditorCut);
 
       editor.addEventListener('click', (event) => {
         const anchor = event.target.closest?.('a');
