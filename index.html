@@ -3108,12 +3108,15 @@ ${sanitizeHtml(editor.innerHTML)}
 
       editor.addEventListener('input', (event) => {
         hideSelectionToolbar();
-        if (!event.isComposing) normalizeEmptyDocument();
+        if (!event.isComposing) {
+          normalizeEmptyDocument();
+          updateFormattingControlsState();
+        }
         updateCount();
-        updateFormattingControlsState();
       });
       editor.addEventListener('compositionend', () => {
         normalizeEmptyDocument();
+        updateFormattingControlsState();
       });
       editor.addEventListener('mouseup', () => {
         saveSelection();
@@ -3342,9 +3345,14 @@ ${sanitizeHtml(editor.innerHTML)}
 
       window.addEventListener('beforeunload', (event) => {
         if (draftDirty) {
+          saveDraft();
           event.preventDefault();
           event.returnValue = '';
         }
+      });
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden && draftDirty) saveDraft();
       });
       // ===== 자동 저장 및 이탈 경고 끝 =====
 
