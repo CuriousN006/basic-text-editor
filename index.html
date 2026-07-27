@@ -1151,11 +1151,17 @@
         const url = window.prompt('연결할 주소를 입력하세요.', initial);
         if (!url) return;
 
+        const trimmed = url.trim();
+        if (!/^(https?:\/\/|mailto:|tel:)/i.test(trimmed)) {
+          showToast('http://, https://, mailto:, tel: 주소만 사용할 수 있습니다.');
+          return;
+        }
+
         restoreSelection();
         if (selection && !selection.isCollapsed) {
-          document.execCommand('createLink', false, url.trim());
+          document.execCommand('createLink', false, trimmed);
         } else {
-          const label = url.trim();
+          const label = trimmed;
           document.execCommand('insertHTML', false, `<a href="${escapeAttribute(label)}">${escapeHtml(label)}</a>`);
         }
         updateCount();
@@ -1391,240 +1397,6 @@
             }
           });
         });
-        return doc.body.innerHTML;
-      };
-
-      const normalizePastedWebUrl = (source) => {
-        const value = String(source || '').trim();
-        if (!value) return '';
-        try {
-          const base = value.startsWith('/') && !value.startsWith('//')
-            ? 'https://cafe.naver.com/'
-            : document.baseURI;
-          const resolved = new URL(value.startsWith('//') ? `https:${value}` : value, base);
-          return resolved.protocol === 'http:' || resolved.protocol === 'https:' ? resolved.href : '';
-        } catch (error) {
-          return '';
-        }
-      };
-
-      const pastedLinkUrlFromValue = (source, depth = 0) => {
-        if (depth > 4) return '';
-        const value = String(source || '').trim();
-        if (!value) return '';
-        const direct = normalizePastedWebUrl(value);
-        if (direct) return direct;
-
-        const unescaped = value.replace(/\\\//g, '/');
-        const embedded = unescaped.match(/https?:\/\/[^\s"'<>\\}]+/i)?.[0] || '';
-        if (embedded) {
-          const normalized = normalizePastedWebUrl(embedded);
-          if (normalized) return normalized;
-        }
-
-        try {
-          const decoded = decodeURIComponent(unescaped);
-          if (decoded !== unescaped) {
-            const decodedUrl = pastedLinkUrlFromValue(decoded, depth + 1);
-            if (decodedUrl) return decodedUrl;
-          }
-        } catch (error) {
-          // 인코딩되지 않은 일반 문자열은 그대로 다음 단계에서 검사합니다.
-        }
-
-        try {
-          const parsed = JSON.parse(value);
-          const queue = [parsed];
-          while (queue.length) {
-            const item = queue.shift();
-            if (typeof item === 'string') {
-              const nested = pastedLinkUrlFromValue(item, depth + 1);
-              if (nested) return nested;
-            } else if (Array.isArray(item)) {
-              queue.push(...item);
-            } else if (item && typeof item === 'object') {
-              const preferredKeys = ['href', 'url', 'link', 'linkUrl', 'linkURL', 'originalUrl'];
-              preferredKeys.forEach((key) => {
-                if (key in item) queue.unshift(item[key]);
-              });
-              Object.entries(item).forEach(([key, nested]) => {
-                if (!preferredKeys.includes(key)) queue.push(nested);
-              });
-            }
-          }
-        } catch (error) {
-          // JSON이 아닌 속성값은 링크 메타데이터가 아닙니다.
-        }
-        return '';
-      };
-
-      const pastedLinkUrlFromElement = (element) => {
-        const preferredNames = [
-          'href', 'data-href', 'data-url', 'data-link', 'data-link-url',
-          'data-original-href', 'data-original-url', 'data-linkdata', 'data-oglink'
-        ];
-        const values = [];
-        preferredNames.forEach((name) => {
-          if (element.hasAttribute(name)) values.push(element.getAttribute(name));
-        });
-        [...element.attributes].forEach((attribute) => {
-          if (preferredNames.includes(attribute.name)) return;
-          if (/(?:href|url|link)/i.test(attribute.name)) values.push(attribute.value);
-        });
-        for (const value of values) {
-          const href = pastedLinkUrlFromValue(value);
-          if (href) return href;
-        }
-        return '';
-      };
-
-      const sanitizePastedRichHtml = (html) => {
-        const doc = new DOMParser().parseFromString(String(html), 'text/html');
-        const allowedTags = new Set([
-          'A', 'B', 'BLOCKQUOTE', 'BR', 'CODE', 'DEL', 'DIV', 'EM', 'FONT', 'H1', 'H2', 'H3',
-          'HR', 'I', 'IMG', 'LI', 'MARK', 'OL', 'P', 'PRE', 'S', 'SPAN', 'STRIKE', 'STRONG',
-          'TABLE', 'TBODY', 'TD', 'TFOOT', 'TH', 'THEAD', 'TR', 'U', 'UL'
-        ]);
-        const discardedTags = new Set([
-          'BUTTON', 'CANVAS', 'EMBED', 'FORM', 'IFRAME', 'INPUT', 'LINK', 'MATH', 'META',
-          'NOSCRIPT', 'OBJECT', 'OPTION', 'SCRIPT', 'SELECT', 'STYLE', 'SVG', 'TEXTAREA'
-        ]);
-        const allowedStyles = new Set([
-          'background-color', 'border', 'border-bottom', 'border-collapse', 'border-color',
-          'border-left', 'border-right', 'border-style', 'border-top', 'border-width',
-          'color', 'font-family', 'font-size', 'font-style', 'font-weight', 'height',
-          'letter-spacing', 'line-height', 'list-style-type', 'margin-left', 'margin-right',
-          'max-width', 'padding', 'padding-left', 'padding-right', 'table-layout',
-          'text-align', 'text-decoration', 'text-decoration-color', 'text-decoration-line',
-          'text-decoration-style', 'text-indent', 'vertical-align', 'white-space', 'width'
-        ]);
-        const unsafeStyleValue = /(?:expression|javascript\s*:|url\s*\(|behavior\s*:|@import)/i;
-        const safeImageUrl = (source) => {
-          const value = String(source || '').trim();
-          if (/^data:image\/(?:png|jpe?g|gif|webp);base64,/i.test(value)) return value;
-          return normalizePastedWebUrl(value);
-        };
-        const safeInteger = (value, maximum = 1000) => {
-          const number = Number.parseInt(value, 10);
-          return Number.isFinite(number) && number >= 1 && number <= maximum ? String(number) : '';
-        };
-
-        doc.body.querySelectorAll(
-          'span[data-linkdata],span[data-href],span[data-url],span[data-link],span[data-link-url]'
-        ).forEach((span) => {
-          if (span.closest('a')) return;
-          const href = pastedLinkUrlFromElement(span);
-          if (!href) return;
-          const anchor = doc.createElement('a');
-          anchor.setAttribute('href', href);
-          span.replaceWith(anchor);
-          anchor.appendChild(span);
-        });
-
-        [...doc.body.querySelectorAll('*')].reverse().forEach((element) => {
-          if (discardedTags.has(element.tagName)) {
-            element.remove();
-            return;
-          }
-          if (!allowedTags.has(element.tagName)) {
-            element.replaceWith(...element.childNodes);
-            return;
-          }
-
-          const original = {
-            href: element.getAttribute('href'),
-            src: element.getAttribute('src'),
-            alt: element.getAttribute('alt'),
-            title: element.getAttribute('title'),
-            colspan: element.getAttribute('colspan'),
-            rowspan: element.getAttribute('rowspan'),
-            start: element.getAttribute('start'),
-            value: element.getAttribute('value'),
-            border: element.getAttribute('border'),
-            cellspacing: element.getAttribute('cellspacing'),
-            cellpadding: element.getAttribute('cellpadding'),
-            color: element.getAttribute('color'),
-            face: element.getAttribute('face'),
-            size: element.getAttribute('size'),
-            className: element.getAttribute('class'),
-            align: element.getAttribute('align'),
-            width: element.getAttribute('width'),
-            height: element.getAttribute('height'),
-            linkUrl: element.tagName === 'A' ? pastedLinkUrlFromElement(element) : ''
-          };
-          const safeStyles = [];
-          for (let index = 0; index < element.style.length; index += 1) {
-            const property = element.style[index].toLowerCase();
-            const value = element.style.getPropertyValue(property).trim();
-            if (allowedStyles.has(property)
-              && value
-              && value.length <= 300
-              && !unsafeStyleValue.test(value)) {
-              safeStyles.push([property, value]);
-            }
-          }
-          if (/^(?:left|center|right|justify)$/i.test(original.align || '')
-            && !safeStyles.some(([property]) => property === 'text-align')) {
-            safeStyles.push(['text-align', original.align.toLowerCase()]);
-          }
-          const naverAlignment = String(original.className || '')
-            .match(/(?:^|\s)se-text-paragraph-align-(left|center|right|justify)(?:\s|$)/i)?.[1];
-          if (naverAlignment && !safeStyles.some(([property]) => property === 'text-align')) {
-            safeStyles.push(['text-align', naverAlignment.toLowerCase()]);
-          }
-
-          [...element.attributes].forEach((attribute) => element.removeAttribute(attribute.name));
-          safeStyles.forEach(([property, value]) => element.style.setProperty(property, value));
-
-          if (element.tagName === 'A') {
-            const href = original.linkUrl;
-            if (!href) {
-              element.replaceWith(...element.childNodes);
-              return;
-            }
-            element.setAttribute('href', href);
-            if (original.title) element.setAttribute('title', original.title.slice(0, 300));
-          } else if (element.tagName === 'IMG') {
-            const src = safeImageUrl(original.src);
-            if (!src) {
-              element.remove();
-              return;
-            }
-            element.setAttribute('src', src);
-            if (original.alt) element.setAttribute('alt', original.alt.slice(0, 500));
-            const width = safeInteger(original.width, 10000);
-            const height = safeInteger(original.height, 10000);
-            if (width) element.setAttribute('width', width);
-            if (height) element.setAttribute('height', height);
-          } else if (element.tagName === 'TD' || element.tagName === 'TH') {
-            const colspan = safeInteger(original.colspan, 100);
-            const rowspan = safeInteger(original.rowspan, 100);
-            if (colspan) element.setAttribute('colspan', colspan);
-            if (rowspan) element.setAttribute('rowspan', rowspan);
-          } else if (element.tagName === 'OL') {
-            const start = safeInteger(original.start, 100000);
-            if (start) element.setAttribute('start', start);
-          } else if (element.tagName === 'LI') {
-            const value = safeInteger(original.value, 100000);
-            if (value) element.setAttribute('value', value);
-          } else if (element.tagName === 'TABLE') {
-            ['border', 'cellspacing', 'cellpadding'].forEach((name) => {
-              const value = safeInteger(original[name], 100);
-              if (value) element.setAttribute(name, value);
-            });
-          } else if (element.tagName === 'FONT') {
-            if (original.color && !unsafeStyleValue.test(original.color)) {
-              element.setAttribute('color', original.color.slice(0, 100));
-            }
-            if (original.face) element.setAttribute('face', original.face.slice(0, 200));
-            if (/^[1-7]$/.test(original.size || '')) element.setAttribute('size', original.size);
-          }
-
-          if (element.tagName === 'SPAN' && !element.getAttribute('style')) {
-            element.replaceWith(...element.childNodes);
-          }
-        });
-
         return doc.body.innerHTML;
       };
 
@@ -2592,6 +2364,8 @@ ${sanitizeHtml(editor.innerHTML)}
           paragraph.replaceWith(line);
         });
 
+        doc.body.querySelectorAll('img, svg, video, audio, iframe').forEach((el) => el.remove());
+
         const host = document.createElement('div');
         host.setAttribute('aria-hidden', 'true');
         host.style.cssText = 'position:fixed;left:-9999px;top:0;width:800px;pointer-events:none';
@@ -2864,6 +2638,11 @@ ${sanitizeHtml(editor.innerHTML)}
         specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
         focusEditor();
         const found = window.find(query, false, false, true, false, false, false);
+        if (found && !selectionIsInsideEditor()) {
+          window.getSelection()?.removeAllRanges();
+          showToast('찾을 수 없습니다');
+          return false;
+        }
         if (!found) {
           const range = document.createRange();
           range.setStart(editor, 0);
@@ -2871,7 +2650,17 @@ ${sanitizeHtml(editor.innerHTML)}
           const selection = window.getSelection();
           selection.removeAllRanges();
           selection.addRange(range);
-          return window.find(query, false, false, true, false, false, false);
+          const retry = window.find(query, false, false, true, false, false, false);
+          if (retry && !selectionIsInsideEditor()) {
+            window.getSelection()?.removeAllRanges();
+            showToast('찾을 수 없습니다');
+            return false;
+          }
+          if (!retry) {
+            showToast('찾을 수 없습니다');
+            return false;
+          }
+          return true;
         }
         return true;
       };
@@ -3058,34 +2847,6 @@ ${sanitizeHtml(editor.innerHTML)}
       const insertPlainTextPreservingBreaks = (text) => {
         const lines = normalizeClipboardText(text).split('\n').map((line) => [line]);
         insertClipboardTokens(clipboardTokensFromLines(lines));
-      };
-
-      const insertRichHtmlPreservingFormatting = (html) => {
-        const safeHtml = sanitizePastedRichHtml(html);
-        if (!safeHtml.trim()) return false;
-        const selection = window.getSelection();
-        if (selection && selection.rangeCount && selectionIsInsideEditor()) {
-          const anchorNode = selection.anchorNode;
-          const anchorElement = anchorNode?.nodeType === Node.ELEMENT_NODE
-            ? anchorNode
-            : anchorNode?.parentElement;
-          const emptyBlock = anchorElement?.closest?.('p,div');
-          if (emptyBlock
-            && emptyBlock !== editor
-            && editor.contains(emptyBlock)
-            && !emptyBlock.textContent.replace(/\u00A0/g, '').trim()
-            && !emptyBlock.querySelector('img,hr,table,ul,ol,blockquote,pre')) {
-            const emptyRange = document.createRange();
-            emptyRange.selectNode(emptyBlock);
-            selection.removeAllRanges();
-            selection.addRange(emptyRange);
-          }
-        }
-        document.execCommand('insertHTML', false, safeHtml);
-        normalizeEmptyDocument();
-        updateCount();
-        updateFormattingControlsState();
-        return true;
       };
 
       const replaceAllSpecial = (parsedQuery, parsedReplacement, settings, formattingOnly) => {
@@ -3516,84 +3277,44 @@ ${sanitizeHtml(editor.innerHTML)}
         }
       });
 
-      // ===== 임시 진단 도구 (붙여넣기 문제 원인 파악용, 해결 후 이 블록만 삭제하면 됩니다) =====
-      const clipboardDiagnostics = { enabled: false, panel: null, output: null };
+      // ===== 자동 저장 및 이탈 경고 =====
+      const DRAFT_KEY = 'basic-text-editor-draft';
+      let draftDirty = false;
 
-      const buildClipboardDiagnosticsPanel = () => {
-        const panel = document.createElement('section');
-        panel.style.cssText = 'position:fixed;left:16px;bottom:16px;z-index:60;display:none;'
-          + 'width:min(600px,calc(100vw - 32px));padding:10px;border:1px solid #c9d1dc;border-radius:10px;'
-          + 'background:#fff;box-shadow:0 8px 28px rgba(32,33,36,.2);font-size:12px';
-        const title = document.createElement('div');
-        title.textContent = '클립보드 진단 · Ctrl+Alt+D로 끄기';
-        title.style.cssText = 'margin-bottom:6px;font-weight:700';
-        const output = document.createElement('textarea');
-        output.readOnly = true;
-        output.spellcheck = false;
-        output.style.cssText = 'width:100%;height:240px;padding:6px;border:1px solid #d7dce3;border-radius:6px;'
-          + 'font:11px/1.45 Consolas,monospace;white-space:pre;overflow:auto';
-        const actions = document.createElement('div');
-        actions.style.cssText = 'display:flex;gap:6px;justify-content:flex-end;margin-top:6px';
-        const copyButton = document.createElement('button');
-        copyButton.type = 'button';
-        copyButton.textContent = '진단 결과 복사';
-        copyButton.style.cssText = 'padding:4px 9px;border:1px solid #c9d1dc;border-radius:6px;background:#f8fafc;cursor:pointer';
-        copyButton.addEventListener('click', async () => {
-          try {
-            await navigator.clipboard.writeText(output.value);
-            showToast('진단 결과를 복사했습니다.');
-          } catch (error) {
-            showToast('복사에 실패했습니다. 진단 칸에서 직접 선택해 복사하세요.');
+      const saveDraft = () => {
+        try {
+          localStorage.setItem(DRAFT_KEY, editor.innerHTML);
+        } catch (error) {
+          // 용량 초과 등 저장 실패 시 조용히 무시합니다.
+        }
+      };
+
+      const restoreDraft = () => {
+        try {
+          const saved = localStorage.getItem(DRAFT_KEY);
+          if (saved && !editor.textContent.replace(/\u200B/g, '').trim()) {
+            editor.innerHTML = saved;
+            draftDirty = true;
           }
-        });
-        const clearButton = document.createElement('button');
-        clearButton.type = 'button';
-        clearButton.textContent = '지우기';
-        clearButton.style.cssText = copyButton.style.cssText;
-        clearButton.addEventListener('click', () => { output.value = ''; });
-        actions.append(copyButton, clearButton);
-        panel.append(title, output, actions);
-        document.body.appendChild(panel);
-        clipboardDiagnostics.panel = panel;
-        clipboardDiagnostics.output = output;
+        } catch (error) {
+          // 접근 불가 시 무시합니다.
+        }
       };
 
-      const recordClipboardDiagnostics = (label, event) => {
-        if (!clipboardDiagnostics.enabled || !clipboardDiagnostics.output) return;
-        const data = event.clipboardData;
-        const lines = [];
-        lines.push(`===== ${label} @ ${new Date().toLocaleTimeString()} =====`);
-        lines.push(`types: ${data ? [...data.types].join(', ') : '(clipboardData 없음)'}`);
-        ['text/plain', 'text/html'].forEach((type) => {
-          lines.push(`--- ${type} ---`);
-          lines.push(JSON.stringify(data?.getData(type) || ''));
-        });
-        lines.push('--- editor.innerHTML (이벤트 직전) ---');
-        lines.push(JSON.stringify(editor.innerHTML));
-        const previous = clipboardDiagnostics.output.value;
-        clipboardDiagnostics.output.value = `${previous ? `${previous}\n\n` : ''}${lines.join('\n')}`;
-        setTimeout(() => {
-          clipboardDiagnostics.output.value += `\n--- editor.innerHTML (이벤트 직후) ---\n${JSON.stringify(editor.innerHTML)}`;
-          clipboardDiagnostics.output.scrollTop = clipboardDiagnostics.output.scrollHeight;
-        }, 0);
-      };
+      restoreDraft();
 
-      const toggleClipboardDiagnostics = () => {
-        if (!clipboardDiagnostics.panel) buildClipboardDiagnosticsPanel();
-        clipboardDiagnostics.enabled = !clipboardDiagnostics.enabled;
-        clipboardDiagnostics.panel.style.display = clipboardDiagnostics.enabled ? 'block' : 'none';
-        showToast(clipboardDiagnostics.enabled ? '클립보드 진단을 켰습니다.' : '클립보드 진단을 껐습니다.');
-      };
+      editor.addEventListener('input', () => {
+        draftDirty = true;
+        saveDraft();
+      });
 
-      editor.addEventListener('paste', (event) => recordClipboardDiagnostics('PASTE', event), true);
-      document.addEventListener('copy', (event) => recordClipboardDiagnostics('COPY', event));
-      document.addEventListener('keydown', (event) => {
-        if ((event.ctrlKey || event.metaKey) && event.altKey && event.key.toLowerCase() === 'd') {
+      window.addEventListener('beforeunload', (event) => {
+        if (draftDirty) {
           event.preventDefault();
-          toggleClipboardDiagnostics();
+          event.returnValue = '';
         }
       });
-      // ===== 임시 진단 도구 끝 =====
+      // ===== 자동 저장 및 이탈 경고 끝 =====
 
       resetReplacementFormatStates();
       updateCount();
