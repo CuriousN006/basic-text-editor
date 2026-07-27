@@ -793,6 +793,7 @@
       let hoveredLink = null;
       let specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
       let findbarReplaceMode = false;
+      let composing = false;
 
       const showToast = (message) => {
         toast.textContent = message;
@@ -3114,21 +3115,26 @@ ${sanitizeHtml(editor.innerHTML)}
         }
         updateCount();
       });
+      editor.addEventListener('compositionstart', () => { composing = true; });
       editor.addEventListener('compositionend', () => {
+        composing = false;
         normalizeEmptyDocument();
         updateFormattingControlsState();
+        saveDraft();
       });
       editor.addEventListener('mouseup', () => {
         saveSelection();
         updateFormattingControlsState();
         setTimeout(showSelectionToolbar, 0);
       });
-      editor.addEventListener('keyup', () => {
+      editor.addEventListener('keyup', (event) => {
+        if (event.isComposing) return;
         saveSelection();
         updateFormattingControlsState();
         showSelectionToolbar();
       });
       document.addEventListener('selectionchange', () => {
+        if (composing) return;
         updateFormattingControlsState();
         if (selectionToolbar.classList.contains('visible')) showSelectionToolbar();
         if (findbar.classList.contains('open')) updateReplacementFormatPreview();
@@ -3330,13 +3336,6 @@ ${sanitizeHtml(editor.innerHTML)}
       };
 
       restoreDraft();
-
-      let composing = false;
-      editor.addEventListener('compositionstart', () => { composing = true; });
-      editor.addEventListener('compositionend', () => {
-        composing = false;
-        saveDraft();
-      });
 
       editor.addEventListener('input', () => {
         draftDirty = true;
