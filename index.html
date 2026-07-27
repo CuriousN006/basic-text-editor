@@ -3211,10 +3211,15 @@ ${sanitizeHtml(editor.innerHTML)}
       };
 
       // 커서 위치에서 문단을 둘로 나눕니다. ^p 치환에 필요합니다.
+      // 표의 칸은 나눌 수 있는 블록이 아닙니다. 문단처럼 쪼개면 같은 태그의
+      // 형제가 생겨 칸 수가 늘고 표 모양이 무너집니다. 칸 안에서 Enter를 직접
+      // 누를 때도 칸이 늘지 않고 줄만 바뀌므로 붙여넣기도 그 동작에 맞춥니다.
+      const UNSPLITTABLE_BLOCK_TAGS = new Set(['TD', 'TH']);
+
       const splitBlockAtRange = (range, root) => {
         const block = blockAncestor(range.startContainer, root);
         const doc = root.ownerDocument;
-        if (!block) {
+        if (!block || UNSPLITTABLE_BLOCK_TAGS.has(block.tagName)) {
           // 나눌 문단이 없으면 줄바꿈으로 대체합니다.
           const lineBreak = doc.createTextNode('\n');
           range.insertNode(lineBreak);
