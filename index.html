@@ -792,7 +792,6 @@
       let savedRange = null;
       let hoveredLink = null;
       let specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
-      let pastePlainRequested = false;
       let findbarReplaceMode = false;
 
       const showToast = (message) => {
@@ -2574,20 +2573,79 @@ ${sanitizeHtml(editor.innerHTML)}
         return sanitizeHtml(container.innerHTML);
       };
 
-      const handleEditorCopy = (event) => {
+      // <br>은 문단 나눔이 아니라 문단 안의 줄바꿈이므로 따로 표시해 둡니다.
+      const CLIPBOARD_SOFT_BREAK = '\u0001';
+
+      // 클립보드 HTML을 "문단 배열 안의 줄 배열"로 바꿉니다.
+      // innerText는 <p>를 두 줄로 계산하기 때문에(마진과 무관한 규격상 동작)
+      // <div>로 바꿔 눈에 보이는 줄과 개행 수를 1:1로 맞춥니다.
+      const clipboardLinesFromHtml = (html) => {
+        const doc = new DOMParser().parseFromString(String(html), 'text/html');
+        doc.body.querySelectorAll('br').forEach((lineBreak) => {
+          lineBreak.replaceWith(doc.createTextNode(CLIPBOARD_SOFT_BREAK));
+        });
+        doc.body.querySelectorAll('p').forEach((paragraph) => {
+          const line = doc.createElement('div');
+          [...paragraph.attributes].forEach((attribute) => line.setAttribute(attribute.name, attribute.value));
+          while (paragraph.firstChild) line.appendChild(paragraph.firstChild);
+          if (!line.childNodes.length) line.appendChild(doc.createTextNode('\u00A0'));
+          paragraph.replaceWith(line);
+        });
+
+        const host = document.createElement('div');
+        host.setAttribute('aria-hidden', 'true');
+        host.style.cssText = 'position:fixed;left:-9999px;top:0;width:800px;pointer-events:none';
+        host.innerHTML = sanitizeHtml(doc.body.innerHTML);
+        document.body.appendChild(host);
+        const measured = host.innerText;
+        host.remove();
+
+        // 빈 줄 자리를 채우려고 넣은 &nbsp;는 원래 없던 글자이므로 비워 둡니다.
+        // 그대로 두면 붙여넣을 때 줄 앞에 공백 한 칸이 생깁니다.
+        return normalizeClipboardText(measured).split('\n').map((line) => line
+          .split(CLIPBOARD_SOFT_BREAK)
+          .map((segment) => {
+            const restored = segment.replace(/\u00A0/g, ' ');
+            return restored.trim() ? restored : '';
+          }));
+      };
+
+      const clipboardPlainTextFromHtml = (html) => clipboardLinesFromHtml(html)
+        .map((line) => line.join('\n'))
+        .join('\n');
+
+      const writeEditorClipboardData = (event) => {
         const selection = window.getSelection();
-        if (!event.clipboardData || !selection || selection.isCollapsed || !selectionIsInsideEditor()) return;
+        if (!event.clipboardData || !selection || selection.isCollapsed || !selectionIsInsideEditor()) return false;
         const range = selection.getRangeAt(0);
-        const coversWholeEditor = range.startContainer === editor
-          && range.startOffset === 0
-          && range.endContainer === editor
-          && range.endOffset === editor.childNodes.length;
-        const plain = coversWholeEditor ? editor.innerText : selection.toString();
         const html = clipboardHtmlWithExplicitBreaks(range);
+        // text/html은 이미 "블록 하나 = 한 줄"로 정규화돼 있으므로
+        // text/plain도 같은 구조에서 뽑아 두 형식의 줄 수를 일치시킵니다.
+        const plain = clipboardPlainTextFromHtml(html);
 
         event.preventDefault();
-        event.clipboardData.setData('text/plain', String(plain).replace(/\r\n?/g, '\n'));
+        event.clipboardData.setData('text/plain', plain);
         event.clipboardData.setData('text/html', html);
+        return true;
+      };
+
+      const handleEditorCopy = (event) => {
+        writeEditorClipboardData(event);
+      };
+
+      // 잘라내기를 브라우저 기본 동작에 맡기면 정규화를 전부 건너뛰기 때문에
+      // 다른 프로그램에 붙여넣을 때 문단 사이에 빈 줄이 하나씩 더 생깁니다.
+      // 그래서 복사와 똑같은 형식으로 기록한 뒤 선택 영역을 직접 지웁니다.
+      const handleEditorCut = (event) => {
+        if (!writeEditorClipboardData(event)) return;
+        // 되돌리기(Ctrl+Z) 기록에 남도록 execCommand로 지웁니다.
+        if (!document.execCommand('delete', false, null)) {
+          const selection = window.getSelection();
+          if (selection && selection.rangeCount) selection.getRangeAt(0).deleteContents();
+        }
+        normalizeEmptyDocument();
+        updateCount();
+        updateFormattingControlsState();
       };
 
       const copyAllRich = () => {
@@ -2969,7 +3027,7 @@ ${sanitizeHtml(editor.innerHTML)}
         return tokens;
       };
 
-      const insertPlainTextPreservingBreaks = (text) => {
+      const insertClipboardTokens = (tokens) => {
         const selection = window.getSelection();
         let range = null;
         if (selection && selection.rangeCount && selectionIsInsideEditor()) {
@@ -2979,8 +3037,27 @@ ${sanitizeHtml(editor.innerHTML)}
           range.selectNodeContents(editor);
           range.collapse(false);
         }
-        replaceRangeWithSpecialTokens(range, plainTextToSpecialTokens(text));
+        replaceRangeWithSpecialTokens(range, tokens);
         updateCount();
+      };
+
+      // 이 편집기에서 Enter는 새 문단, Shift+Enter는 문단 안의 줄바꿈입니다.
+      // 붙여넣기도 같은 규칙을 따라야 원본과 줄 구조가 같아집니다.
+      const clipboardTokensFromLines = (lines) => {
+        const tokens = [];
+        lines.forEach((line, lineIndex) => {
+          if (lineIndex) tokens.push({ type: 'paragraph' });
+          line.forEach((segment, segmentIndex) => {
+            if (segmentIndex) tokens.push({ type: 'line' });
+            plainTextToSpecialTokens(segment).forEach((token) => tokens.push(token));
+          });
+        });
+        return tokens;
+      };
+
+      const insertPlainTextPreservingBreaks = (text) => {
+        const lines = normalizeClipboardText(text).split('\n').map((line) => [line]);
+        insertClipboardTokens(clipboardTokensFromLines(lines));
       };
 
       const insertRichHtmlPreservingFormatting = (html) => {
@@ -3351,6 +3428,7 @@ ${sanitizeHtml(editor.innerHTML)}
         closeTablePicker();
       });
       document.addEventListener('copy', handleEditorCopy);
+      document.addEventListener('cut', handleEditorCut);
 
       editor.addEventListener('click', (event) => {
         const anchor = event.target.closest?.('a');
@@ -3362,45 +3440,20 @@ ${sanitizeHtml(editor.innerHTML)}
         }
       });
 
+      // 서식을 유지하는 붙여넣기는 원본 HTML의 블록 구조를 그대로 끼워 넣기 때문에
+      // 문단이 쪼개지거나 붙여넣은 내용 뒤에 빈 줄이 하나 더 생기는 문제가 있었습니다.
+      // 그래서 Ctrl+V도 Ctrl+Shift+V와 똑같이 줄바꿈만 살린 순수 텍스트로 붙여넣습니다.
       editor.addEventListener('paste', (event) => {
-        const selection = window.getSelection();
+        event.preventDefault();
         const plain = event.clipboardData?.getData('text/plain') || '';
         const rich = event.clipboardData?.getData('text/html') || '';
-        const uriList = event.clipboardData?.getData('text/uri-list') || '';
-        const explicitPlainPaste = pastePlainRequested;
-        const linkCandidate = plain.trim();
-        const clipboardLink = uriList
-          .split(/\r?\n/)
-          .map((line) => line.trim())
-          .find((line) => line && !line.startsWith('#')) || '';
-        pastePlainRequested = false;
-
-        if (!explicitPlainPaste
-          && selection
-          && !selection.isCollapsed
-          && isUrl(linkCandidate)
-          && selectionIsInsideEditor()) {
-          event.preventDefault();
-          document.execCommand('createLink', false, linkCandidate);
-          updateCount();
+        // 대부분의 프로그램은 text/plain의 문단 사이에 빈 줄을 하나 더 넣습니다.
+        // HTML이 함께 왔다면 거기서 줄 구조를 뽑아야 원본과 줄 수가 같아집니다.
+        const lines = rich ? clipboardLinesFromHtml(rich) : [];
+        if (lines.some((line) => line.some((segment) => segment.trim()))) {
+          insertClipboardTokens(clipboardTokensFromLines(lines));
           return;
         }
-
-        event.preventDefault();
-        const normalizedClipboardLink = !explicitPlainPaste
-          && !/[\r\n]/.test(plain)
-          ? pastedLinkUrlFromValue(clipboardLink)
-          : '';
-        const richHasLinkMetadata = /<a\b|data-(?:href|url|link|link-url|linkdata)\s*=/i.test(rich);
-        if (normalizedClipboardLink && (!rich || !richHasLinkMetadata)) {
-          const label = plain.trim() || normalizedClipboardLink;
-          document.execCommand('insertHTML', false,
-            `<a href="${escapeAttribute(normalizedClipboardLink)}">${escapeHtml(label)}</a>`);
-          updateCount();
-          updateFormattingControlsState();
-          return;
-        }
-        if (!explicitPlainPaste && rich && insertRichHtmlPreservingFormatting(rich)) return;
         if (!plain) {
           showToast('붙여넣을 내용을 찾지 못했습니다.');
           return;
@@ -3440,7 +3493,6 @@ ${sanitizeHtml(editor.innerHTML)}
       document.addEventListener('keydown', async (event) => {
         const ctrl = event.ctrlKey || event.metaKey;
         const key = event.key.toLowerCase();
-        if (ctrl && event.shiftKey && key === 'v') pastePlainRequested = true;
         if (event.key === 'Escape' && tablePicker.classList.contains('open')) {
           event.preventDefault();
           closeTablePicker();
@@ -3463,11 +3515,6 @@ ${sanitizeHtml(editor.innerHTML)}
           await saveHtmlDocument();
         }
       });
-
-      document.addEventListener('keyup', (event) => {
-        if (event.key.toLowerCase() === 'v') pastePlainRequested = false;
-      });
-      window.addEventListener('blur', () => { pastePlainRequested = false; });
 
       // ===== 임시 진단 도구 (붙여넣기 문제 원인 파악용, 해결 후 이 블록만 삭제하면 됩니다) =====
       const clipboardDiagnostics = { enabled: false, panel: null, output: null };
