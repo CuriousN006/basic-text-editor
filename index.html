@@ -2573,19 +2573,40 @@ ${sanitizeHtml(editor.innerHTML)}
         return sanitizeHtml(container.innerHTML);
       };
 
+      // innerText는 <p>를 두 줄로 계산하기 때문에(마진과 무관한 규격상 동작),
+      // 문단이 이어진 글을 그대로 담으면 줄 수가 두 배로 부풀려집니다.
+      // 그래서 <p>를 <div>로 바꿔 눈에 보이는 줄과 개행 수를 1:1로 맞춥니다.
+      const lineTextFromClipboardHtml = (html) => {
+        const doc = new DOMParser().parseFromString(String(html), 'text/html');
+        doc.body.querySelectorAll('p').forEach((paragraph) => {
+          const line = doc.createElement('div');
+          [...paragraph.attributes].forEach((attribute) => line.setAttribute(attribute.name, attribute.value));
+          while (paragraph.firstChild) line.appendChild(paragraph.firstChild);
+          if (!line.childNodes.length) line.appendChild(doc.createTextNode('\u00A0'));
+          paragraph.replaceWith(line);
+        });
+
+        const host = document.createElement('div');
+        host.setAttribute('aria-hidden', 'true');
+        host.style.cssText = 'position:fixed;left:-9999px;top:0;width:800px;pointer-events:none';
+        host.innerHTML = sanitizeHtml(doc.body.innerHTML);
+        document.body.appendChild(host);
+        const text = host.innerText;
+        host.remove();
+        return normalizeClipboardText(text);
+      };
+
       const handleEditorCopy = (event) => {
         const selection = window.getSelection();
         if (!event.clipboardData || !selection || selection.isCollapsed || !selectionIsInsideEditor()) return;
         const range = selection.getRangeAt(0);
-        const coversWholeEditor = range.startContainer === editor
-          && range.startOffset === 0
-          && range.endContainer === editor
-          && range.endOffset === editor.childNodes.length;
-        const plain = coversWholeEditor ? editor.innerText : selection.toString();
         const html = clipboardHtmlWithExplicitBreaks(range);
+        // text/html은 이미 "블록 하나 = 한 줄"로 정규화돼 있으므로
+        // text/plain도 같은 구조에서 뽑아 두 형식의 줄 수를 일치시킵니다.
+        const plain = lineTextFromClipboardHtml(html);
 
         event.preventDefault();
-        event.clipboardData.setData('text/plain', String(plain).replace(/\r\n?/g, '\n'));
+        event.clipboardData.setData('text/plain', plain);
         event.clipboardData.setData('text/html', html);
       };
 
@@ -3367,11 +3388,16 @@ ${sanitizeHtml(editor.innerHTML)}
       editor.addEventListener('paste', (event) => {
         event.preventDefault();
         const plain = event.clipboardData?.getData('text/plain') || '';
-        if (!plain) {
+        const rich = event.clipboardData?.getData('text/html') || '';
+        // 대부분의 프로그램은 text/plain의 문단 사이에 빈 줄을 하나 더 넣습니다.
+        // HTML이 함께 왔다면 거기서 줄 구조를 뽑아야 원본과 줄 수가 같아집니다.
+        const fromRich = rich ? lineTextFromClipboardHtml(rich) : '';
+        const text = fromRich.trim() ? fromRich : plain;
+        if (!text) {
           showToast('붙여넣을 내용을 찾지 못했습니다.');
           return;
         }
-        insertPlainTextPreservingBreaks(plain);
+        insertPlainTextPreservingBreaks(text);
       });
 
       document.querySelectorAll('[data-find]').forEach((button) => {
