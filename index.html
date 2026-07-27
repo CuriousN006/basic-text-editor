@@ -3106,11 +3106,14 @@ ${sanitizeHtml(editor.innerHTML)}
         }
       });
 
-      editor.addEventListener('input', () => {
+      editor.addEventListener('input', (event) => {
         hideSelectionToolbar();
-        normalizeEmptyDocument();
+        if (!event.isComposing) normalizeEmptyDocument();
         updateCount();
         updateFormattingControlsState();
+      });
+      editor.addEventListener('compositionend', () => {
+        normalizeEmptyDocument();
       });
       editor.addEventListener('mouseup', () => {
         saveSelection();
@@ -3325,9 +3328,16 @@ ${sanitizeHtml(editor.innerHTML)}
 
       restoreDraft();
 
+      let composing = false;
+      editor.addEventListener('compositionstart', () => { composing = true; });
+      editor.addEventListener('compositionend', () => {
+        composing = false;
+        saveDraft();
+      });
+
       editor.addEventListener('input', () => {
         draftDirty = true;
-        saveDraft();
+        if (!composing) saveDraft();
       });
 
       window.addEventListener('beforeunload', (event) => {
