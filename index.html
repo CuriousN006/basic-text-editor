@@ -2892,6 +2892,30 @@ ${sanitizeHtml(editor.innerHTML)}
         return { operations, particleCount };
       };
 
+      const collectEditorTextNodes = () => {
+        const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+        const nodes = [];
+        while (walker.nextNode()) nodes.push(walker.currentNode);
+        return nodes;
+      };
+
+      // 편집 영역 텍스트를 이어 붙인 기준의 절대 위치를 실제 텍스트 노드 범위로 되돌립니다.
+      const createRangeAtTextOffset = (absoluteStart, length) => {
+        let remaining = absoluteStart;
+        const nodes = collectEditorTextNodes();
+        for (const node of nodes) {
+          const nodeLength = node.nodeValue.length;
+          if (remaining < nodeLength) {
+            const range = document.createRange();
+            range.setStart(node, remaining);
+            range.setEnd(node, Math.min(remaining + length, nodeLength));
+            return range;
+          }
+          remaining -= nodeLength;
+        }
+        return null;
+      };
+
       const replaceRangeWithSpecialTokens = (range, tokens, settings = { apply: [], remove: [] }) => {
         selectEditorRange(range);
         if (!range.collapsed) {
@@ -3120,24 +3144,38 @@ ${sanitizeHtml(editor.innerHTML)}
 
         let count = 0;
         let particleCount = 0;
-        const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
-        const nodes = [];
-        while (walker.nextNode()) nodes.push(walker.currentNode);
-        nodes.reverse().forEach((node) => {
-          const replacement = formattingOnly ? query : replaceText.value;
-          const result = getLiteralReplacementOperations(node.nodeValue, query, replacement, !formattingOnly && adjustParticles.checked);
+        const replacement = formattingOnly ? query : replaceText.value;
+        const withParticles = !formattingOnly && adjustParticles.checked;
+
+        // 먼저 모든 일치 지점을 편집 영역 전체 기준의 절대 위치로 모아 둡니다.
+        // 서식을 적용하면 텍스트 노드가 쪼개지므로 노드 참조를 그대로 재사용할 수 없습니다.
+        const matches = [];
+        let base = 0;
+        collectEditorTextNodes().forEach((node) => {
+          const result = getLiteralReplacementOperations(node.nodeValue, query, replacement, withParticles);
           particleCount += result.particleCount;
-          count += result.operations.length;
-          result.operations.reverse().forEach((operation) => {
-            const range = document.createRange();
-            range.setStart(node, operation.start);
-            range.setEnd(node, operation.end);
-            if (formattingOnly) {
-              applyFormattingToRange(range, settings);
-            } else {
-              replaceRangeWithSpecialTokens(range, [{ type: 'text', value: operation.insertion }], settings);
-            }
+          result.operations.forEach((operation) => {
+            matches.push({
+              start: base + operation.start,
+              length: operation.end - operation.start,
+              insertion: operation.insertion
+            });
           });
+          base += node.nodeValue.length;
+        });
+
+        // 뒤에서부터 바꾸면 아직 처리하지 않은 앞쪽 위치는 그대로 유지됩니다.
+        // 매번 위치를 다시 찾아 해석하므로 끊어진 노드 참조를 쓰는 일이 없습니다.
+        matches.sort((a, b) => b.start - a.start);
+        matches.forEach((match) => {
+          const range = createRangeAtTextOffset(match.start, match.length);
+          if (!range) return;
+          count += 1;
+          if (formattingOnly) {
+            applyFormattingToRange(range, settings);
+          } else {
+            replaceRangeWithSpecialTokens(range, [{ type: 'text', value: match.insertion }], settings);
+          }
         });
         updateCount();
         const particleMessage = particleCount ? ` · 조사 ${particleCount}개 자동 교정` : '';
