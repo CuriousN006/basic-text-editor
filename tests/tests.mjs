@@ -468,6 +468,81 @@ await withPage({}, async (page) => {
     await page.evaluate(() => T.html()), '<p>앞《→뒤</p>');
 });
 
+// 인용구 블록 전환과 네이버 SmartEditor ONE용 복사 구조
+await withPage({}, async (page) => {
+  await page.evaluate(() => {
+    T.set('<p>인용할 문장</p>');
+    T.caretIn(0, true);
+  });
+  await page.click('[data-action="quote"]');
+  r.check('R29 인용구 블록 적용',
+    await page.evaluate(() => T.html()), '<blockquote>인용할 문장</blockquote>');
+  r.check('R29 인용구 버튼 활성 상태',
+    await page.getAttribute('#quoteButton', 'aria-pressed'), 'true');
+  r.check('R29 문단 선택에도 인용구 반영',
+    await page.inputValue('#blockFormat'), 'BLOCKQUOTE');
+
+  await page.keyboard.press('Control+z');
+  r.check('R29 인용구 전환 실행 취소',
+    await page.evaluate(() => T.html()), '<p>인용할 문장</p>');
+  await page.keyboard.press('Control+y');
+  r.check('R29 인용구 전환 다시 실행',
+    await page.evaluate(() => T.html()), '<blockquote>인용할 문장</blockquote>');
+});
+
+await withPage({}, async (page) => {
+  await page.evaluate(() => {
+    T.set('<blockquote>인용 <b>굵게</b></blockquote><p>본문</p>');
+    T.select('인용');
+  });
+  await page.keyboard.press('Control+c');
+  await page.waitForTimeout(200);
+  const quoteClipboard = await page.evaluate(async () => {
+    const [item] = await navigator.clipboard.read();
+    const html = await (await item.getType('text/html')).text();
+    const plain = await (await item.getType('text/plain')).text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    return {
+      plain,
+      text: doc.body.textContent,
+      component: Boolean(doc.querySelector('.se-component.se-quotation.se-l-quotation_line')),
+      section: Boolean(doc.querySelector('.se-section.se-section-quotation')),
+      container: Boolean(doc.querySelector('blockquote.se-quotation-container')),
+      module: Boolean(doc.querySelector('.se-module.se-module-text.se-quote')),
+    };
+  });
+  r.check('R30 인용구 일부만 복사해도 평문 보존',
+    quoteClipboard.plain, '인용');
+  r.check('R30 인용구 일부만 복사해도 HTML 글자 보존',
+    quoteClipboard.text, '인용');
+  r.check('R30 네이버 인용구 컴포넌트 구조',
+    [quoteClipboard.component, quoteClipboard.section, quoteClipboard.container, quoteClipboard.module],
+    [true, true, true, true]);
+});
+
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<blockquote>인용문</blockquote><p>일반 본문</p>'));
+  await page.keyboard.press('Control+a');
+  await page.keyboard.press('Control+c');
+  await page.waitForTimeout(200);
+  r.check('R30 일반 문단은 네이버 인용구로 잘못 감싸지지 않음',
+    await page.evaluate(async () => {
+      const [item] = await navigator.clipboard.read();
+      const html = await (await item.getType('text/html')).text();
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const quote = doc.querySelector('.se-component.se-quotation');
+      return {
+        quotes: doc.querySelectorAll('.se-component.se-quotation').length,
+        quoteText: quote?.textContent,
+        outsideText: [...doc.body.childNodes]
+          .filter((node) => node !== quote)
+          .map((node) => node.textContent)
+          .join(''),
+      };
+    }),
+    { quotes: 1, quoteText: '인용문', outsideText: '일반 본문' });
+});
+
 // 블록 병합 경계 사례
 await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<h1>제목</h1><p>본문</p>'));
