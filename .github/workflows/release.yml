@@ -77,7 +77,7 @@ jobs:
 
       - name: 테스트 의존성 설치
         working-directory: tests
-        run: npm ci
+        run: npm install
 
       - name: Chromium 설치
         working-directory: tests
