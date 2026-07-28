@@ -1,0 +1,116 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/release-request.json
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: 릴리스 요청 확인
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG="$(jq -er '.tag | select(type == "string")' .github/release-request.json)"
+          TITLE="$(jq -er '.title | select(type == "string")' .github/release-request.json)"
+          PRERELEASE="$(jq -r '.prerelease // false' .github/release-request.json)"
+
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "올바르지 않은 태그입니다: $TAG" >&2
+            exit 1
+          fi
+          if [[ "$TITLE" == *$'\n'* ]]; then
+            echo "릴리스 제목에는 줄바꿈을 넣을 수 없습니다." >&2
+            exit 1
+          fi
+          if [[ "$PRERELEASE" != "true" && "$PRERELEASE" != "false" ]]; then
+            echo "prerelease는 true 또는 false여야 합니다." >&2
+            exit 1
+          fi
+
+          ASSET="index-${TAG}.html"
+          jq -r '.notes // ""' .github/release-request.json > release-notes.md
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "title=$TITLE" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
+
+      - name: 중복 태그 및 릴리스 확인
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "이미 존재하는 태그입니다: $TAG" >&2
+            exit 1
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "이미 존재하는 릴리스입니다: $TAG" >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: 테스트 의존성 설치
+        working-directory: tests
+        run: npm ci
+
+      - name: Chromium 설치
+        working-directory: tests
+        run: npx playwright install --with-deps chromium
+
+      - name: 회귀 테스트
+        working-directory: tests
+        run: npm test
+
+      - name: 릴리스 생성
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          TITLE: ${{ steps.release.outputs.title }}
+          PRERELEASE: ${{ steps.release.outputs.prerelease }}
+          ASSET: ${{ steps.release.outputs.asset }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp index.html "$ASSET"
+
+          args=(
+            release create "$TAG"
+            "$ASSET#오프라인 리치 라이터 $TAG"
+            --target "$GITHUB_SHA"
+            --title "$TITLE"
+            --notes-file release-notes.md
+          )
+
+          if [[ "$PRERELEASE" == "true" ]]; then
+            args+=(--prerelease)
+          else
+            args+=(--latest)
+          fi
+
+          gh "${args[@]}"
