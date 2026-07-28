@@ -509,6 +509,7 @@
       align-items: center;
       gap: 5px;
       min-height: 34px;
+      margin: -1px 0 8px;
       padding: 0 4px;
       color: var(--muted);
       font-size: 12px;
@@ -682,15 +683,15 @@
   <section id="findbar" class="findbar" aria-label="찾기 및 바꾸기">
     <div class="find-row">
       <input id="findText" class="find-input" type="text" placeholder="찾을 내용" autocomplete="off" title="바꾸기에서는 찾은 글자의 현재 서식이 이 칸에 그대로 표시됩니다.">
-      <button class="toolbar-button" type="button" data-find="close" title="닫기">✕</button>
+      <button class="toolbar-button" type="button" data-find="close" tabindex="-1" title="닫기">✕</button>
     </div>
     <div id="replaceRow" class="find-row">
       <input id="replaceText" class="find-input" type="text" placeholder="바꿀 내용" autocomplete="off" title="바꿀 서식을 적용한 결과가 이 칸에 그대로 표시됩니다.">
-      <label class="particle-option" title="바꾼 단어의 받침에 맞춰 바로 뒤의 조사를 교정합니다.">
-        <input id="adjustParticles" type="checkbox" checked>
-        조사 자동 교정
-      </label>
     </div>
+    <label id="particleOption" class="particle-option" title="바꾼 단어의 받침에 맞춰 바로 뒤의 조사를 교정합니다.">
+      <input id="adjustParticles" type="checkbox" checked>
+      조사 자동 교정
+    </label>
     <div id="replaceFormats" class="replace-formats" aria-label="바꿀 내용 서식">
       <span class="replace-formats-label">바꿀 서식</span>
       <button class="mini-format-button" type="button" data-replace-format="bold" data-format-state="none"><b>B</b></button>
@@ -764,6 +765,7 @@
       const findbar = document.getElementById('findbar');
       const findText = document.getElementById('findText');
       const replaceText = document.getElementById('replaceText');
+      const particleOption = document.getElementById('particleOption');
       const replaceRow = document.getElementById('replaceRow');
       const replaceFormats = document.getElementById('replaceFormats');
       const replaceFormatButtons = [...document.querySelectorAll('[data-replace-format]')];
@@ -2945,6 +2947,7 @@ ${sanitizeHtml(editor.innerHTML)}
         if (withReplace) resetReplacementFormatStates();
         findbar.classList.add('open');
         replaceRow.style.display = withReplace ? 'grid' : 'none';
+        particleOption.style.display = withReplace ? 'flex' : 'none';
         replaceFormats.style.display = withReplace ? 'flex' : 'none';
         replaceFormatHint.style.display = withReplace ? 'block' : 'none';
         updateReplacementFormatPreview();
