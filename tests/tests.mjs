@@ -415,6 +415,59 @@ await withPage({}, async (page) => {
     await page.evaluate(() => T.ed().querySelector('table').rows.length), 2);
 });
 
+// 문자 기호 삽입: 목록 서식이 아니라 선택/커서 위치에 일반 문자로 들어간다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => {
+    T.set('<p>앞뒤</p>');
+    const text = T.ed().querySelector('p').firstChild;
+    const range = document.createRange();
+    range.setStart(text, 1);
+    range.collapse(true);
+    const selection = getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  });
+  await page.click('[data-action="symbol"]');
+  r.check('R27 기호 선택창 분류',
+    await page.evaluate(() => [...document.querySelectorAll('[data-symbol-group]')]
+      .map((group) => group.dataset.symbolGroup)),
+    ['bullets', 'works', 'arrows']);
+  r.check('R27 작품명 괄호와 화살표 제공',
+    await page.evaluate(() => ['《', '》', '〈', '〉', '『', '』', '「', '」', '←', '→', '⇒']
+      .every((symbol) => document.querySelector(`[data-symbol="${symbol}"]`))),
+    true);
+
+  await page.click('[data-symbol="•"]');
+  await page.waitForTimeout(120);
+  r.check('R27 글머리 문자는 커서 위치에 삽입',
+    await page.evaluate(() => T.html()), '<p>앞•뒤</p>');
+  r.check('R27 글머리 문자는 목록 서식을 만들지 않음',
+    await page.evaluate(() => T.ed().querySelectorAll('ul,ol,li').length), 0);
+
+  await page.keyboard.press('Control+z');
+  r.check('R27 문자 삽입 실행 취소',
+    await page.evaluate(() => T.html()), '<p>앞뒤</p>');
+  await page.keyboard.press('Control+y');
+  r.check('R27 문자 삽입 다시 실행',
+    await page.evaluate(() => T.html()), '<p>앞•뒤</p>');
+});
+
+await withPage({}, async (page) => {
+  await page.evaluate(() => {
+    T.set('<p>앞대상뒤</p>');
+    T.select('대상');
+  });
+  await page.click('[data-action="symbol"]');
+  await page.click('[data-symbol="《"]');
+  r.check('R28 선택 영역을 작품명 기호로 대체',
+    await page.evaluate(() => T.html()), '<p>앞《뒤</p>');
+
+  await page.click('[data-action="symbol"]');
+  await page.click('[data-symbol="→"]');
+  r.check('R28 연속 기호 삽입',
+    await page.evaluate(() => T.html()), '<p>앞《→뒤</p>');
+});
+
 // 블록 병합 경계 사례
 await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<h1>제목</h1><p>본문</p>'));
@@ -826,6 +879,23 @@ await withPage({}, async (page) => {
   r.check('P36 에디터 재붙여넣기는 일반 공백으로 복원',
     await page.evaluate(() => [...T.ed().textContent].map((character) => character.charCodeAt(0))),
     [44032, 32, 32, 32, 45208]);
+});
+
+// 삽입한 기호는 외부 편집기로 복사할 때도 별도 서식이 아닌 문자 그대로 남는다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>• 《작품》 →</p>'));
+  await page.keyboard.press('Control+a');
+  await page.keyboard.press('Control+c');
+  await page.waitForTimeout(200);
+  r.check('P36 기호가 HTML·평문 클립보드에 문자 그대로 보존',
+    await page.evaluate(async () => {
+      const [item] = await navigator.clipboard.read();
+      const html = await (await item.getType('text/html')).text();
+      const plain = await (await item.getType('text/plain')).text();
+      const visible = new DOMParser().parseFromString(html, 'text/html').body.textContent;
+      return { plain, visible };
+    }),
+    { plain: '• 《작품》 →', visible: '• 《작품》 →' });
 });
 
 // 굵게 같은 인라인 서식 경계에 공백이 나뉘어도 한 연속 공백으로 계산한다.
