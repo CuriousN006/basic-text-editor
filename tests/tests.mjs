@@ -361,6 +361,19 @@ await withPage({}, async (page) => {
     await page.evaluate(() => T.ed().textContent), '');
 });
 
+// Ctrl+H를 열면 찾을 내용에서 Tab 한 번으로 바꿀 내용으로 이동한다.
+await withPage({}, async (page) => {
+  await page.keyboard.press('Control+h');
+  r.check('R25 Ctrl+H 최초 포커스',
+    await page.evaluate(() => document.activeElement?.id), 'findText');
+  await page.keyboard.press('Tab');
+  r.check('R25 찾기 다음 Tab은 바꾸기',
+    await page.evaluate(() => document.activeElement?.id), 'replaceText');
+  r.check('R25 조사 자동 교정은 바꿀 내용 아래',
+    await page.evaluate(() => document.getElementById('replaceRow').nextElementSibling?.id),
+    'particleOption');
+});
+
 // 표 삽입
 await withPage({}, async (page) => {
   await page.click('#editor');
