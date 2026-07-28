@@ -1228,6 +1228,48 @@ await withPage({}, async (page) => {
     await page.evaluate(() => T.html()));
 });
 
+const copiedFirstCellLines = async (page) => {
+  await page.keyboard.press('Control+a');
+  await page.keyboard.press('Control+c');
+  await page.waitForTimeout(200);
+  return page.evaluate(async () => {
+    const [item] = await navigator.clipboard.read();
+    const html = await (await item.getType('text/html')).text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const cell = doc.querySelector('td');
+    const directLines = [...cell.children]
+      .filter((child) => child.tagName === 'DIV')
+      .map((child) => child.textContent.replace(/\u00A0/g, ' '));
+    const last = cell.lastChild;
+    const trailingBlank = last?.nodeName === 'BR'
+      || (last?.nodeType === Node.ELEMENT_NODE
+        && ['DIV', 'P'].includes(last.tagName)
+        && !last.textContent.replace(/\u00A0/g, ' ').trim());
+    return { directLines, trailingBlank: Boolean(trailingBlank), html: cell.innerHTML };
+  });
+};
+
+// 붙여넣은 텍스트 맨 끝의 개행은 셀에서 보이지 않는 커서 자리일 뿐이다.
+// 네이버로 복사할 때 실제 빈 문단으로 바뀌면 안 된다.
+await withPage({}, async (page) => {
+  await pasteInFirstCell(page, { text: '가\n나\n' });
+  const copied = await copiedFirstCellLines(page);
+  r.check('W3 셀 마지막의 보이지 않는 빈 줄은 복사에서 제거',
+    { lines: copied.directLines, trailingBlank: copied.trailingBlank },
+    { lines: ['A1가', '나'], trailingBlank: false },
+    copied.html);
+});
+
+// 중간의 빈 줄은 사용자가 볼 수 있는 원문 구조이므로 그대로 보존한다.
+await withPage({}, async (page) => {
+  await pasteInFirstCell(page, { text: '가\n\n나\n' });
+  const copied = await copiedFirstCellLines(page);
+  r.check('W4 셀 중간 빈 줄은 유지하고 마지막 빈 줄만 제거',
+    { lines: copied.directLines, trailingBlank: copied.trailingBlank },
+    { lines: ['A1가', ' ', '나'], trailingBlank: false },
+    copied.html);
+});
+
 // 칸 안에 문단이 있으면 그 문단은 나뉘어야 한다. 나눌 수 없는 것은 칸뿐이다.
 await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<table><tbody><tr><td><p>P1</p></td><td>B1</td></tr></tbody></table>'));
@@ -1243,10 +1285,10 @@ await withPage({}, async (page) => {
   });
   await page.keyboard.press('Control+v');
   await page.waitForTimeout(280);
-  r.check('W3 칸 안 문단은 나뉜다',
+  r.check('W5 칸 안 문단은 나뉜다',
     await page.evaluate(() => T.ed().querySelectorAll('td p').length), 2,
     await page.evaluate(() => T.html()));
-  r.check('W4 그래도 칸 수는 그대로', await tableShape(page), '2',
+  r.check('W6 그래도 칸 수는 그대로', await tableShape(page), '2',
     await page.evaluate(() => T.html()));
 });
 

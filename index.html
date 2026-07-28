@@ -2591,6 +2591,37 @@ ${sanitizeHtml(editor.innerHTML)}
         });
       };
 
+      // contenteditable 표 셀은 커서를 놓기 위해 마지막에 <br> 또는 빈 <div>를
+      // 남길 수 있습니다. 편집기에서는 높이를 늘리지 않는 자리표시지만 네이버
+      // SmartEditor ONE은 이를 실제 빈 문단으로 가져옵니다. 셀 중간의 빈 줄은
+      // 유지하고 맨 끝에 연속된 빈 줄만 클립보드 사본에서 제거합니다.
+      const trimTrailingClipboardCellBlanks = (container) => {
+        const isBlankLineElement = (node) => {
+          if (node.nodeType !== Node.ELEMENT_NODE) return false;
+          if (node.tagName === 'BR') return true;
+          if (!['DIV', 'P'].includes(node.tagName)) return false;
+          const text = node.textContent.replace(/\u00A0/g, ' ').trim();
+          const hasVisibleContent = Boolean(node.querySelector(
+            'img,hr,table,iframe,video,audio,canvas,svg'
+          ));
+          return !text && !hasVisibleContent;
+        };
+
+        [...container.querySelectorAll('td,th')].forEach((cell) => {
+          for (;;) {
+            const last = cell.lastChild;
+            if (!last) break;
+            if (last.nodeType === Node.TEXT_NODE && /^[\t\r\n]*$/.test(last.nodeValue || '')) {
+              last.remove();
+              continue;
+            }
+            if (!isBlankLineElement(last)) break;
+            last.remove();
+          }
+          if (!cell.childNodes.length) cell.appendChild(document.createTextNode('\u00A0'));
+        });
+      };
+
       const canonicalizeClipboardParagraphs = (container) => {
         const commentWalker = document.createTreeWalker(container, NodeFilter.SHOW_COMMENT);
         const comments = [];
@@ -2839,6 +2870,7 @@ ${sanitizeHtml(editor.innerHTML)}
         normalizeClipboardFormatting(container);
         normalizeClipboardLinks(container);
         canonicalizeClipboardParagraphs(container);
+        trimTrailingClipboardCellBlanks(container);
         applyClipboardTableStyles(container);
         preserveRepeatedSpaces(container);
         return sanitizeHtml(container.innerHTML);
