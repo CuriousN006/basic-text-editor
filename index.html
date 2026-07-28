@@ -2574,10 +2574,67 @@ ${sanitizeHtml(editor.innerHTML)}
           });
         });
 
+        // HTML의 일반 공백은 받는 편집기가 white-space: normal로 해석하면 여러
+        // 칸을 한 칸으로 접습니다. 에디터 안의 원고는 그대로 두고, 클립보드용
+        // HTML에서 연속된 일반 공백만 NBSP로 바꿔 네이버 카페 같은 외부
+        // 편집기에서도 입력한 칸 수가 유지되게 합니다. 인라인 서식 경계 양쪽에
+        // 나뉜 공백도 한 덩어리로 계산합니다.
+        const preserveRepeatedSpaces = (root) => {
+          const blockTags = new Set([
+            'P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+            'BLOCKQUOTE', 'PRE', 'LI', 'TD', 'TH'
+          ]);
+          const replacements = new Map();
+          let run = [];
+
+          const flush = () => {
+            if (run.length > 1) {
+              run.forEach(({ node, offset }) => {
+                if (!replacements.has(node)) replacements.set(node, new Set());
+                replacements.get(node).add(offset);
+              });
+            }
+            run = [];
+          };
+
+          const visit = (node, insideBlock = false) => {
+            if (node.nodeType === Node.TEXT_NODE) {
+              if (!insideBlock) {
+                flush();
+                return;
+              }
+              for (let offset = 0; offset < node.nodeValue.length; offset += 1) {
+                if (node.nodeValue[offset] === ' ') run.push({ node, offset });
+                else flush();
+              }
+              return;
+            }
+            if (node.nodeType !== Node.ELEMENT_NODE) return;
+            if (node.tagName === 'BR') {
+              flush();
+              return;
+            }
+            const isBlock = blockTags.has(node.tagName);
+            if (isBlock) flush();
+            [...node.childNodes].forEach((child) => visit(child, insideBlock || isBlock));
+            if (isBlock) flush();
+          };
+
+          [...root.childNodes].forEach((node) => visit(node));
+          flush();
+          replacements.forEach((offsets, node) => {
+            node.nodeValue = node.nodeValue
+              .split('')
+              .map((character, offset) => offsets.has(offset) ? '\u00A0' : character)
+              .join('');
+          });
+        };
+
         normalizeClipboardFormatting(container);
         normalizeClipboardLinks(container);
         canonicalizeClipboardParagraphs(container);
         applyClipboardTableStyles(container);
+        preserveRepeatedSpaces(container);
         return sanitizeHtml(container.innerHTML);
       };
 

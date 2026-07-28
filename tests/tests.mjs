@@ -800,6 +800,50 @@ for (const [label, html, needle, expected] of [
   });
 }
 
+// P36. 에디터에서 복사한 연속 공백은 외부 HTML 편집기에서도 접히지 않아야 한다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>가   나</p>'));
+  await page.keyboard.press('Control+a');
+  await page.keyboard.press('Control+c');
+  await page.waitForTimeout(200);
+  const clipboard = await page.evaluate(async () => {
+    const [item] = await navigator.clipboard.read();
+    const html = await (await item.getType('text/html')).text();
+    const plain = await (await item.getType('text/plain')).text();
+    const visible = new DOMParser().parseFromString(html, 'text/html').body.textContent;
+    return { plain, codes: [...visible].map((character) => character.charCodeAt(0)) };
+  });
+  r.check('P36 평문 클립보드는 일반 공백 유지', clipboard.plain, '가   나');
+  r.check('P36 HTML 클립보드는 연속 공백을 NBSP로 보존',
+    clipboard.codes, [44032, 160, 160, 160, 45208]);
+
+  await page.evaluate(() => {
+    T.set('<p><br></p>');
+    T.caretIn(0, true);
+  });
+  await page.keyboard.press('Control+v');
+  await page.waitForTimeout(280);
+  r.check('P36 에디터 재붙여넣기는 일반 공백으로 복원',
+    await page.evaluate(() => [...T.ed().textContent].map((character) => character.charCodeAt(0))),
+    [44032, 32, 32, 32, 45208]);
+});
+
+// 굵게 같은 인라인 서식 경계에 공백이 나뉘어도 한 연속 공백으로 계산한다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>가 <b> </b> 나</p>'));
+  await page.keyboard.press('Control+a');
+  await page.keyboard.press('Control+c');
+  await page.waitForTimeout(200);
+  r.check('P37 서식 경계를 넘는 연속 공백도 NBSP',
+    await page.evaluate(async () => {
+      const [item] = await navigator.clipboard.read();
+      const html = await (await item.getType('text/html')).text();
+      const visible = new DOMParser().parseFromString(html, 'text/html').body.textContent;
+      return [...visible].map((character) => character.charCodeAt(0));
+    }),
+    [44032, 160, 160, 160, 45208]);
+});
+
 // P31~. 붙여넣은 뒤 커서가 붙여넣은 내용 끝에 있어야 한다(맨 앞으로 튀지 않음).
 for (const [label, html, text] of [
   ['<br> 구분', '<div>가<br><br>나<br><br>다</div>', '가\n\n나\n\n다'],
