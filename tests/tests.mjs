@@ -357,8 +357,8 @@ await withPage({}, async (page) => {
   r.check('R24 글자 수 표시', await page.evaluate(() => document.getElementById('count').textContent), '3자 · 1단어');
   await page.keyboard.press('Control+z');
   await page.waitForTimeout(150);
-  r.check('R25 일반 입력 실행 취소 동작', /^(ab|)$/.test(await page.evaluate(() => T.text())), true,
-    '브라우저 기본 실행 취소 단위에 따라 ab 또는 빈 문자열');
+  r.check('R25 일반 입력 실행 취소 동작',
+    await page.evaluate(() => T.ed().textContent), '');
 });
 
 // 표 삽입
@@ -373,6 +373,33 @@ await withPage({}, async (page) => {
     const t = T.ed().querySelector('table');
     return t ? [t.rows.length, t.rows[0].cells.length] : null;
   }), [3, 2]);
+  await page.evaluate(() => T.ed().focus());
+  await page.keyboard.press('Control+z');
+  r.check('R26 표 삽입 취소', await page.evaluate(() => T.ed().querySelectorAll('table').length), 0);
+  await page.keyboard.press('Control+y');
+  r.check('R26 표 삽입 다시 실행', await page.evaluate(() => T.ed().querySelectorAll('table').length), 1);
+});
+await withPage({}, async (page) => {
+  await page.evaluate(() => {
+    T.set('<table><tbody><tr><td>A</td></tr></tbody></table>');
+    const cell = T.ed().querySelector('td');
+    const range = document.createRange();
+    range.selectNodeContents(cell);
+    range.collapse(false);
+    const selection = getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    T.ed().focus();
+  });
+  await page.keyboard.press('Tab');
+  r.check('R26 마지막 셀 Tab으로 행 추가',
+    await page.evaluate(() => T.ed().querySelector('table').rows.length), 2);
+  await page.keyboard.press('Control+z');
+  r.check('R26 Tab 행 추가 취소',
+    await page.evaluate(() => T.ed().querySelector('table').rows.length), 1);
+  await page.keyboard.press('Control+y');
+  r.check('R26 Tab 행 추가 다시 실행',
+    await page.evaluate(() => T.ed().querySelector('table').rows.length), 2);
 });
 
 // 블록 병합 경계 사례
@@ -628,6 +655,25 @@ await withPage({}, async (page) => {
     '<p><a href="https://example.com/y">대상</a></p>');
 });
 
+// P23a. 서식 없이 붙여넣는 URL은 자동 링크를 만들지 않는다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p><br></p>'));
+  await pasteReal(page, { text: 'https://example.com/plain', plain: true });
+  r.check('P23a Ctrl+Shift+V URL은 평문',
+    await page.evaluate(() => ({ text: T.text(), links: T.ed().querySelectorAll('a').length })),
+    { text: 'https://example.com/plain', links: 0 });
+});
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>대상</p>'));
+  await page.evaluate(() => T.writeClipboard('', 'https://example.com/plain-selection'));
+  await page.evaluate(() => T.select('대상'));
+  await page.keyboard.press('Control+Shift+v');
+  await page.waitForTimeout(250);
+  r.check('P23a 선택 위 Ctrl+Shift+V도 평문',
+    await page.evaluate(() => ({ text: T.text(), links: T.ed().querySelectorAll('a').length })),
+    { text: 'https://example.com/plain-selection', links: 0 });
+});
+
 // P25. 서식 뒤의 공백이 서식에 포함되지 않는다(밑줄·취소선·링크는 공백에도 선이 보인다).
 await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<p><br></p>'));
@@ -833,6 +879,36 @@ await withPage({}, async (page) => {
   r.check('U10 툴바 되돌리기 버튼', await page.evaluate(() => T.html()), '<p>가 가</p>');
 });
 
+// U11. 일반 입력 뒤에 일괄 편집을 해도 그 이전 입력까지 순서대로 취소된다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => {
+    T.set('<p><br></p>');
+    T.caretIn(0, true);
+  });
+  await page.keyboard.type('가가');
+  await openReplace(page, { find: '가', replace: '나', particles: false });
+  await page.click('[data-find="replace-all"]');
+  await page.evaluate(() => T.ed().focus());
+  await page.keyboard.press('Control+z');
+  r.check('U11 일괄 편집을 먼저 취소', await page.evaluate(() => T.text()), '가가');
+  await page.keyboard.press('Control+z');
+  r.check('U12 일괄 편집 전 입력도 취소', await page.evaluate(() => T.ed().textContent), '');
+});
+
+// U13. 새 입력을 취소한 뒤 다시 실행하면 과거 일괄 편집이 아니라 새 입력이 돌아온다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>가</p>'));
+  await openReplace(page, { find: '가', replace: '나', particles: false });
+  await page.click('[data-find="replace-all"]');
+  await page.evaluate(() => T.ed().focus());
+  await page.keyboard.press('Control+z');
+  await page.keyboard.type('X');
+  const typedHtml = await page.evaluate(() => T.html());
+  await page.keyboard.press('Control+z');
+  await page.keyboard.press('Control+y');
+  r.check('U13 최근 입력을 먼저 다시 실행', await page.evaluate(() => T.html()), typedHtml);
+});
+
 /* =================== 사용자 영역 문자 보존 =================== */
 
 // 복사·붙여넣기는 서식을 U+E300 부터의 사용자 영역 문자로 표시한다.
@@ -876,6 +952,24 @@ await withPage({}, async (page) => {
   r.check('V2 사용자 영역 문자가 있어도 굵게 유지',
     await page.evaluate(() => T.boldTags()), 1,
     await page.evaluate(() => T.html()));
+});
+
+// V3. 찾기/바꾸기의 ^p·^l 표식도 원고의 사용자 영역 문자와 충돌하지 않는다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>앞\uE000뒤</p><p>다음</p>'));
+  await openReplace(page, { find: '^p', replace: 'X', particles: false });
+  await page.click('[data-find="replace-all"]');
+  r.check('V3 ^p는 실제 문단 경계만 바꿈',
+    await page.evaluate(() => T.html()),
+    '<p>앞\uE000뒤X다음</p>');
+});
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>앞\uE000뒤</p><p>다음</p>'));
+  await openReplace(page, { find: '\uE000', replace: 'Y', particles: false });
+  await page.click('[data-find="replace-all"]');
+  r.check('V4 실제 사용자 영역 문자만 찾음',
+    await page.evaluate(() => T.html()),
+    '<p>앞Y뒤</p><p>다음</p>');
 });
 
 /* =================== 표 칸에 붙여넣기 =================== */
