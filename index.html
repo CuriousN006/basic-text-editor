@@ -719,6 +719,7 @@
       <button class="toolbar-button" type="button" data-command="justifyCenter" aria-pressed="false" title="가운데 정렬">가운데</button>
       <button class="toolbar-button" type="button" data-command="justifyRight" aria-pressed="false" title="오른쪽 정렬">오른쪽</button>
       <span class="separator" aria-hidden="true"></span>
+      <button id="quoteButton" class="toolbar-button" type="button" data-action="quote" aria-pressed="false" title="인용구 블록">❝ 인용</button>
       <button class="toolbar-button" type="button" data-command="insertUnorderedList" aria-pressed="false" title="글머리 기호 목록">• 목록</button>
       <button class="toolbar-button" type="button" data-command="insertOrderedList" aria-pressed="false" title="번호 목록">1. 목록</button>
       <button id="symbolButton" class="toolbar-button" type="button" data-action="symbol" title="문자 기호 삽입">Ω 기호</button>
@@ -852,6 +853,7 @@
 
       const adjustParticles = document.getElementById('adjustParticles');
       const blockFormat = document.getElementById('blockFormat');
+      const quoteButton = document.getElementById('quoteButton');
       const statefulCommandButtons = [...document.querySelectorAll('[data-command][aria-pressed]')];
       const supportedBlockFormats = new Set(['P', 'H1', 'H2', 'H3', 'BLOCKQUOTE', 'PRE']);
       const selectionToolbar = document.getElementById('selectionToolbar');
@@ -915,6 +917,8 @@
 
       const updateFormattingControlsState = () => {
         const selectionInside = selectionIsInsideEditor();
+        quoteButton.classList.remove('is-active');
+        quoteButton.setAttribute('aria-pressed', 'false');
         statefulCommandButtons.forEach((button) => {
           let isActive = false;
           if (selectionInside) {
@@ -939,6 +943,9 @@
         }
         if (currentBlock === 'DIV') currentBlock = 'P';
         blockFormat.value = supportedBlockFormats.has(currentBlock) ? currentBlock : 'P';
+        const isQuote = currentBlock === 'BLOCKQUOTE';
+        quoteButton.classList.toggle('is-active', isQuote);
+        quoteButton.setAttribute('aria-pressed', String(isQuote));
       };
 
       const hideSelectionToolbar = () => {
@@ -1042,6 +1049,36 @@
         breakEditorHistoryGroup();
         saveSelection();
         closeSymbolPicker();
+      };
+
+      const toggleQuoteBlock = () => {
+        restoreSelection();
+        let currentBlock = 'P';
+        try {
+          currentBlock = String(document.queryCommandValue('formatBlock') || 'P')
+            .replace(/[<>]/g, '')
+            .toUpperCase();
+        } catch (error) {
+          currentBlock = 'P';
+        }
+
+        const beforeHtml = editor.innerHTML;
+        const targetBlock = currentBlock === 'BLOCKQUOTE' ? 'P' : 'BLOCKQUOTE';
+        // formatBlock도 일부 Chromium 버전에서 beforeinput 없이 input만 발생합니다.
+        // 인용구 전환 전후를 직접 기록해 Ctrl+Z 한 번으로 되돌아가게 합니다.
+        breakEditorHistoryGroup();
+        pendingInputBeforeHtml = null;
+        pendingInputHistoryGroup = '';
+        suppressingInputHistory = true;
+        try {
+          runCommand('formatBlock', targetBlock);
+        } finally {
+          suppressingInputHistory = false;
+        }
+        pushEditorHistory(beforeHtml, editor.innerHTML);
+        breakEditorHistoryGroup();
+        saveSelection();
+        updateFormattingControlsState();
       };
 
       Object.entries(SYMBOL_GROUPS).forEach(([group, symbols]) => {
@@ -2620,10 +2657,24 @@ ${sanitizeHtml(editor.innerHTML)}
         });
       };
 
+      // 인용구 안의 글자만 드래그해 복사해도 Range에는 바깥 blockquote가 들어오지
+      // 않습니다. 선택이 한 인용구 안에만 있으면 블록 조상도 복원합니다.
+      const restoreQuoteAncestor = (container, range) => {
+        if (container.querySelector('blockquote')) return;
+        let element = range.commonAncestorContainer;
+        if (element && element.nodeType !== Node.ELEMENT_NODE) element = element.parentElement;
+        const quote = element?.closest?.('blockquote');
+        if (!quote || !editor.contains(quote)) return;
+        const wrapper = quote.cloneNode(false);
+        while (container.firstChild) wrapper.appendChild(container.firstChild);
+        container.appendChild(wrapper);
+      };
+
       const clipboardHtmlWithExplicitBreaks = (range) => {
         const container = document.createElement('div');
         container.appendChild(range.cloneContents());
         restoreInlineAncestors(container, range);
+        restoreQuoteAncestor(container, range);
         const clipboardBlockTags = new Set([
           'P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'PRE',
           'UL', 'OL', 'LI', 'TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TD', 'TH', 'HR'
@@ -2791,6 +2842,79 @@ ${sanitizeHtml(editor.innerHTML)}
         applyClipboardTableStyles(container);
         preserveRepeatedSpaces(container);
         return sanitizeHtml(container.innerHTML);
+      };
+
+      const naverClipboardId = () => {
+        const value = typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
+        return `SE-${value}`;
+      };
+
+      // SmartEditor ONE은 인용구를 일반 blockquote가 아니라 se-quotation 컴포넌트
+      // 구조로 구분합니다. 표준 blockquote는 편집기와 저장 파일에 그대로 두고,
+      // 외부로 복사하는 HTML에서만 네이버가 인용구로 알아볼 수 있는 구조를
+      // 추가합니다. 네이버가 클래스를 해석하지 않는 환경에서도 인용 모양은
+      // 유지되도록 최소한의 인라인 스타일을 함께 둡니다.
+      const naverQuoteClipboardHtml = (html) => {
+        const doc = new DOMParser().parseFromString(String(html), 'text/html');
+        [...doc.body.querySelectorAll('blockquote')].forEach((source) => {
+          if (source.closest('.se-quotation')) return;
+
+          const component = doc.createElement('div');
+          component.className = 'se-component se-quotation se-l-quotation_line';
+          component.id = naverClipboardId();
+          component.style.cssText = 'margin:20px 0;position:relative';
+
+          const content = doc.createElement('div');
+          content.className = 'se-component-content';
+          content.style.cssText = 'max-width:800px;margin:0 auto';
+
+          const section = doc.createElement('div');
+          section.className = 'se-section se-section-quotation se-l-quotation_line';
+          section.style.cssText = 'margin:0 auto;padding:10px 0';
+
+          const quotation = doc.createElement('blockquote');
+          quotation.className = 'se-quotation-container';
+          quotation.style.cssText = 'box-sizing:border-box;margin:auto;padding:8px 16px;border:0;border-left:4px solid #94a3b8;quotes:none';
+
+          const module = doc.createElement('div');
+          module.className = 'se-module se-module-text se-quote';
+
+          const appendParagraph = (nodes) => {
+            const paragraph = doc.createElement('p');
+            paragraph.className = 'se-text-paragraph se-text-paragraph-align-';
+            paragraph.id = naverClipboardId();
+            paragraph.style.cssText = 'margin:0;line-height:1.8;word-break:break-word;overflow-wrap:break-word;white-space:pre-wrap';
+            const span = doc.createElement('span');
+            span.className = 'se-fs-fs16 se-ff-';
+            span.id = naverClipboardId();
+            span.style.cssText = 'font-size:16px;line-height:inherit';
+            nodes.forEach((node) => span.appendChild(node));
+            if (!span.childNodes.length) span.appendChild(doc.createElement('br'));
+            paragraph.appendChild(span);
+            module.appendChild(paragraph);
+          };
+
+          const directBlocks = [...source.children].filter((child) => (
+            ['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(child.tagName)
+          ));
+          if (directBlocks.length && directBlocks.length === source.children.length) {
+            directBlocks.forEach((block) => {
+              appendParagraph([...block.childNodes]);
+              block.remove();
+            });
+          } else {
+            appendParagraph([...source.childNodes]);
+          }
+
+          quotation.appendChild(module);
+          section.appendChild(quotation);
+          content.appendChild(section);
+          component.appendChild(content);
+          source.replaceWith(component);
+        });
+        return doc.body.innerHTML;
       };
 
       // <br>은 문단 나눔이 아니라 문단 안의 줄바꿈이므로 따로 표시해 둡니다.
@@ -3099,10 +3223,11 @@ ${sanitizeHtml(editor.innerHTML)}
         const selection = window.getSelection();
         if (!event.clipboardData || !selection || selection.isCollapsed || !selectionIsInsideEditor()) return false;
         const range = selection.getRangeAt(0);
-        const html = clipboardHtmlWithExplicitBreaks(range);
+        const standardHtml = clipboardHtmlWithExplicitBreaks(range);
         // text/html은 이미 "블록 하나 = 한 줄"로 정규화돼 있으므로
         // text/plain도 같은 구조에서 뽑아 두 형식의 줄 수를 일치시킵니다.
-        const plain = clipboardPlainTextFromHtml(html);
+        const plain = clipboardPlainTextFromHtml(standardHtml);
+        const html = naverQuoteClipboardHtml(standardHtml);
 
         event.preventDefault();
         event.clipboardData.setData('text/plain', plain);
@@ -4255,6 +4380,8 @@ ${sanitizeHtml(editor.innerHTML)}
             insertLink();
           } else if (action === 'clear-format') {
             clearFormatting();
+          } else if (action === 'quote') {
+            toggleQuoteBlock();
           } else if (action === 'table') {
             openTablePicker();
           } else if (action === 'symbol') {
