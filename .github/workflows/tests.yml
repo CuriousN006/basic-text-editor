@@ -1,0 +1,39 @@
+name: tests
+
+# 붙여넣기와 복사는 한쪽을 고치면 다른 쪽이 깨지기 쉬운 곳입니다.
+# tests/ 가 그걸 잡으려고 있으므로, 사람이 기억해서 돌리지 않아도 되게 합니다.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 같은 PR에 새 커밋이 올라오면 이전 실행은 취소합니다.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      # package-lock.json 을 저장소에 두지 않으므로 npm ci 대신 install 입니다.
+      - name: 의존성 설치
+        working-directory: tests
+        run: npm install
+
+      - name: Chromium 설치
+        working-directory: tests
+        run: npx playwright install --with-deps chromium
+
+      - name: 테스트 실행
+        working-directory: tests
+        run: npm test

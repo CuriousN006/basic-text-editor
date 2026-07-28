@@ -833,6 +833,127 @@ await withPage({}, async (page) => {
   r.check('U10 툴바 되돌리기 버튼', await page.evaluate(() => T.html()), '<p>가 가</p>');
 });
 
+/* =================== 사용자 영역 문자 보존 =================== */
+
+// 복사·붙여넣기는 서식을 U+E300 부터의 사용자 영역 문자로 표시한다.
+// 원고에 그 구간의 문자가 들어 있으면 표식으로 오해해 글자가 사라졌다.
+// 글꼴 아이콘이나 일부 이모지 세트가 실제로 쓰는 구간이므로 실제 원고에 나온다.
+console.log('\n--- 사용자 영역 문자 보존 ---');
+
+// 실제 클립보드를 거쳐 왕복시킨다. 표식은 클립보드에 쓸 때 붙고 읽을 때
+// 떼어지므로, 합성 이벤트로는 이 경로를 재현할 수 없다.
+const copyAllAndPaste = async (page) => {
+  await page.keyboard.press('Control+a');
+  await page.keyboard.press('Control+c');
+  await page.waitForTimeout(200);
+  await page.evaluate(() => T.set('<p><br></p>'));
+  await page.evaluate(() => T.caretIn(0, true));
+  await page.keyboard.press('Control+v');
+  await page.waitForTimeout(280);
+};
+
+for (const [label, spec, expected] of [
+  ['표식 구간 첫 문자', '<p>앞뒤</p>', '앞뒤'],
+  ['표식 구간 끝 문자', '<p>앞뒤</p>', '앞뒤'],
+  ['escape 문자 자체', '<p>앞뒤</p>', '앞뒤'],
+  ['여러 개 섞임', '<p>가나다</p>', '가나다'],
+  ['서식과 함께', '<p>앞<b>굵게</b>뒤</p>', '앞굵게뒤'],
+]) {
+  // eslint-disable-next-line no-await-in-loop
+  await withPage({}, async (page) => {
+    await page.evaluate((html) => T.set(html), spec);
+    await copyAllAndPaste(page);
+    r.check(`V1 왕복 후 글자 보존 — ${label}`,
+      await page.evaluate(() => T.text()), expected,
+      await page.evaluate(() => T.html()));
+  });
+}
+
+// 표식이 살아 있어야 서식도 함께 유지된다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>앞<b>굵게</b>뒤</p>'));
+  await copyAllAndPaste(page);
+  r.check('V2 사용자 영역 문자가 있어도 굵게 유지',
+    await page.evaluate(() => T.boldTags()), 1,
+    await page.evaluate(() => T.html()));
+});
+
+/* =================== 표 칸에 붙여넣기 =================== */
+
+// 여러 줄을 붙여넣으면 줄마다 문단을 나눈다. 그 나누기가 칸에도 적용되어
+// <td>를 쪼개면 같은 행에 칸이 하나씩 늘고 표 모양이 무너졌다.
+// 칸 안에서 Enter를 직접 누를 때는 칸이 늘지 않고 줄만 바뀐다.
+console.log('\n--- 표 칸에 붙여넣기 ---');
+
+const TABLE_2X2 = '<table><tbody><tr><td>A1</td><td>B1</td></tr><tr><td>A2</td><td>B2</td></tr></tbody></table>';
+
+const tableShape = (page) => page.evaluate(() => {
+  const table = T.ed().querySelector('table');
+  return [...table.rows].map((row) => row.cells.length).join(',');
+});
+
+// 첫 칸 끝에 캐럿을 두고 실제 Ctrl+V로 붙여넣는다.
+const pasteInFirstCell = async (page, clip) => {
+  await page.evaluate((html) => T.set(html), TABLE_2X2);
+  await page.evaluate(({ text, html }) => T.writeClipboard(html, text), clip);
+  await page.evaluate(() => {
+    const cell = T.ed().querySelector('td');
+    const range = document.createRange();
+    range.selectNodeContents(cell);
+    range.collapse(false);
+    T.ed().focus();
+    const selection = getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  });
+  await page.keyboard.press('Control+v');
+  await page.waitForTimeout(280);
+};
+
+for (const [label, clip] of [
+  ['두 줄 평문', { text: '첫\n둘' }],
+  ['세 줄 평문', { text: '가\n나\n다' }],
+  ['빈 줄 포함', { text: '가\n\n나' }],
+  ['서식 있는 두 줄', { text: '첫\n둘', html: '<p><b>첫</b></p><p>둘</p>' }],
+]) {
+  // eslint-disable-next-line no-await-in-loop
+  await withPage({}, async (page) => {
+    await pasteInFirstCell(page, clip);
+    r.check(`W1 칸 수가 늘지 않는다 — ${label}`, await tableShape(page), '2,2',
+      await page.evaluate(() => T.html()));
+  });
+}
+
+// 붙여넣은 줄은 칸 안의 줄바꿈으로 들어간다.
+await withPage({}, async (page) => {
+  await pasteInFirstCell(page, { text: '가\n나' });
+  r.check('W2 칸 안에서 줄이 바뀐다',
+    await page.evaluate(() => T.ed().querySelector('td').textContent), 'A1가\n나',
+    await page.evaluate(() => T.html()));
+});
+
+// 칸 안에 문단이 있으면 그 문단은 나뉘어야 한다. 나눌 수 없는 것은 칸뿐이다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<table><tbody><tr><td><p>P1</p></td><td>B1</td></tr></tbody></table>'));
+  await page.evaluate(() => T.writeClipboard('', '가\n나'));
+  await page.evaluate(() => {
+    const range = document.createRange();
+    range.selectNodeContents(T.ed().querySelector('td p'));
+    range.collapse(false);
+    T.ed().focus();
+    const selection = getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  });
+  await page.keyboard.press('Control+v');
+  await page.waitForTimeout(280);
+  r.check('W3 칸 안 문단은 나뉜다',
+    await page.evaluate(() => T.ed().querySelectorAll('td p').length), 2,
+    await page.evaluate(() => T.html()));
+  r.check('W4 그래도 칸 수는 그대로', await tableShape(page), '2',
+    await page.evaluate(() => T.html()));
+});
+
 const failed = r.summary();
 await browser.close();
 server.close();

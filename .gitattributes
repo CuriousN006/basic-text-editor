@@ -1,0 +1,3 @@
+# 워크플로는 리눅스 러너에서 실행되므로 LF로 고정합니다.
+*.yml text eol=lf
+*.yaml text eol=lf
