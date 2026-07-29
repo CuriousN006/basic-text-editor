@@ -989,6 +989,89 @@ await withPage({}, async (page) => {
     [44032, 160, 160, 160, 45208]);
 });
 
+// P38. 인용구 안에 여러 문단을 붙여넣어도 문단마다 별도 인용구를 만들지 않는다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<blockquote>기존</blockquote><p>본문</p>'));
+  await pasteReal(page, {
+    html: '<p>첫째</p><p>둘째</p><p>셋째</p>',
+    text: '첫째\n둘째\n셋째',
+    blockIndex: 0,
+  });
+  r.check('P38 여러 문단 붙여넣기는 인용구 하나',
+    await page.evaluate(() => ({
+      html: T.html(),
+      quotes: T.ed().querySelectorAll('blockquote').length,
+      paragraphs: T.ed().querySelectorAll('blockquote > p').length,
+    })),
+    {
+      html: '<blockquote><p>기존첫째</p><p>둘째</p><p>셋째</p></blockquote><p>본문</p>',
+      quotes: 1,
+      paragraphs: 3,
+    });
+  r.check('P38 인용구 안에서도 도구막대 상태 유지',
+    await page.evaluate(() => ({
+      pressed: document.getElementById('quoteButton').getAttribute('aria-pressed'),
+      block: document.getElementById('blockFormat').value,
+    })),
+    { pressed: 'true', block: 'BLOCKQUOTE' });
+
+  await page.keyboard.press('Control+a');
+  await page.keyboard.press('Control+c');
+  await page.waitForTimeout(200);
+  r.check('P38 네이버 복사도 인용 컴포넌트 하나',
+    await page.evaluate(async () => {
+      const [item] = await navigator.clipboard.read();
+      const html = await (await item.getType('text/html')).text();
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      return {
+        quotes: doc.querySelectorAll('.se-component.se-quotation').length,
+        paragraphs: doc.querySelectorAll('.se-component.se-quotation .se-text-paragraph').length,
+      };
+    }),
+    { quotes: 1, paragraphs: 3 });
+});
+
+// Ctrl+Shift+V도 같은 문단 구조를 사용하고, 인용구 해제는 한 번에 전체 문단에 적용된다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<blockquote><br></blockquote>'));
+  await pasteReal(page, { text: '하나\n둘', plain: true });
+  r.check('P38 서식 없이 붙여넣기도 인용구 하나',
+    await page.evaluate(() => T.html()),
+    '<blockquote><p>하나</p><p>둘</p></blockquote>');
+  await page.click('[data-action="quote"]');
+  r.check('P38 여러 문단 인용구를 한 번에 해제',
+    await page.evaluate(() => T.html()),
+    '<p>하나</p><p>둘</p>');
+  await page.keyboard.press('Control+z');
+  r.check('P38 인용구 해제 실행 취소',
+    await page.evaluate(() => T.html()),
+    '<blockquote><p>하나</p><p>둘</p></blockquote>');
+});
+
+// 여러 문단을 담은 인용구는 마크다운으로 저장했다가 열어도 하나로 돌아온다.
+await withPage({ noFilePicker: true }, async (page) => {
+  await page.evaluate(() => T.set('<blockquote><p>첫 문단</p><p>둘째 문단</p></blockquote>'));
+  const markdown = (await readDownload(page, () => page.click('[data-action="save-md"]'))).toString();
+  r.check('P38 여러 문단 인용구 마크다운',
+    markdown.trim(), '> 첫 문단\n> 둘째 문단');
+  await page.setInputFiles('#fileInput', {
+    name: 'quote.md',
+    mimeType: 'text/markdown',
+    buffer: Buffer.from(markdown),
+  });
+  await page.waitForTimeout(200);
+  r.check('P38 마크다운을 열어도 인용구 하나',
+    await page.evaluate(() => {
+      const quote = T.ed().querySelector('blockquote');
+      return {
+        quotes: T.ed().querySelectorAll('blockquote').length,
+        paragraphs: quote?.querySelectorAll(':scope > p').length,
+        text: [...(quote?.querySelectorAll(':scope > p') || [])].map((p) => p.textContent),
+      };
+    }),
+    { quotes: 1, paragraphs: 2, text: ['첫 문단', '둘째 문단'] });
+});
+
 // P31~. 붙여넣은 뒤 커서가 붙여넣은 내용 끝에 있어야 한다(맨 앞으로 튀지 않음).
 for (const [label, html, text] of [
   ['<br> 구분', '<div>가<br><br>나<br><br>다</div>', '가\n\n나\n\n다'],
