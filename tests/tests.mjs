@@ -1366,7 +1366,14 @@ await withPage({}, async (page) => {
 await withPage({}, async (page) => {
   await page.evaluate(() => {
     T.set('<p>하나\n둘</p><p>하나\n둘</p>');
-    T.select('하나\n둘');
+    const text = T.ed().children[0].firstChild;
+    const range = document.createRange();
+    range.setStart(text, 0);
+    range.setEnd(text, text.nodeValue.length);
+    T.ed().focus();
+    const selection = getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
   });
   await page.keyboard.press('Control+f');
   await page.waitForTimeout(260);
