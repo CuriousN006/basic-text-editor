@@ -1381,6 +1381,61 @@ await withPage({}, async (page) => {
     await page.evaluate(() => CSS.highlights.has('find-match')), false);
 });
 
+// 본문을 고치면 검색 위치를 초기화하고 바뀐 일치 개수를 다시 센다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>사과 사과</p>'));
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', '사과');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(260);
+  r.check('X3 편집 전 검색 위치', await findCountText(page), '1 / 2');
+
+  await page.evaluate(() => T.caretIn(0, true));
+  await page.keyboard.type(' 사과');
+  await page.waitForTimeout(260);
+  r.check('X3 편집 뒤 개수 재계산', await findCountText(page), '3개');
+
+  await page.keyboard.press('F3');
+  await page.waitForTimeout(260);
+  r.check('X3 편집 뒤 검색은 처음부터', await findCountText(page), '1 / 3');
+});
+
+// 화면 아래쪽 일치는 실제 스크롤 컨테이너 안으로 이동한다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => {
+    T.set('<p>시작</p>' + '<p>중간 문단</p>'.repeat(120) + '<p>마지막표적</p>');
+    document.querySelector('.workspace').scrollTop = 0;
+  });
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', '마지막표적');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(260);
+  const result = await page.evaluate(() => {
+    const workspace = document.querySelector('.workspace');
+    const range = [...CSS.highlights.get('find-match')][0];
+    const rect = range.getBoundingClientRect();
+    const view = workspace.getBoundingClientRect();
+    return {
+      moved: workspace.scrollTop > 0,
+      visible: rect.top >= view.top && rect.bottom <= view.bottom
+    };
+  });
+  r.check('X3 화면 밖 결과로 스크롤', result, { moved: true, visible: true });
+});
+
+// Highlight API가 없는 브라우저에서는 선택 영역으로 찾은 자리를 보여 준다.
+await withPage({ noHighlightApi: true }, async (page) => {
+  await page.evaluate(() => T.set('<p>사과 배 사과</p>'));
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', '사과');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(260);
+  r.check('X3 Highlight 미지원 시 선택 표시',
+    await page.evaluate(() => T.selection()), '사과');
+  r.check('X3 Highlight 미지원 시 본문 포커스',
+    await page.evaluate(() => document.activeElement?.id), 'editor');
+});
+
 // 찾기 창을 닫으면 하이라이트도 사라진다.
 await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<p>사과 배</p>'));
