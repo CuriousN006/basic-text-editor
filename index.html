@@ -3294,6 +3294,25 @@ ${sanitizeHtml(editor.innerHTML)}
         .map((line) => line.map(clipboardSegmentText).join('\n'))
         .join('\n');
 
+      const MAX_FIND_PREFILL_LENGTH = 500;
+
+      // 선택 범위를 찾기 문법으로 바꿉니다. 기존 클립보드 구조 분석기를 재사용해
+      // 문단과 문단 안 줄바꿈을 구분하고, 원문에 있는 ^는 특수기호로 해석되지
+      // 않도록 ^^로 이스케이프합니다.
+      const findQueryFromSelection = (range) => {
+        try {
+          const html = clipboardHtmlWithExplicitBreaks(range);
+          const query = clipboardLinesFromHtml(html)
+            .map((line) => line
+              .map((runs) => clipboardSegmentText(runs).replace(/\^/g, '^^'))
+              .join('^l'))
+            .join('^p');
+          return query && query.length <= MAX_FIND_PREFILL_LENGTH ? query : '';
+        } catch (error) {
+          return '';
+        }
+      };
+
       const writeEditorClipboardData = (event) => {
         const selection = window.getSelection();
         if (!event.clipboardData || !selection || selection.isCollapsed || !selectionIsInsideEditor()) return false;
@@ -3345,16 +3364,20 @@ ${sanitizeHtml(editor.innerHTML)}
         hideSelectionToolbar();
         findbarReplaceMode = Boolean(withReplace);
         const selection = window.getSelection();
-        const selectedText = withReplace
-          && selection
+        const selectedRange = selection
           && !selection.isCollapsed
           && selectionIsInsideEditor()
-            ? selection.toString()
-            : '';
+          ? selection.getRangeAt(0)
+          : null;
+        const selectedQuery = selectedRange ? findQueryFromSelection(selectedRange) : '';
 
-        if (selectedText) {
-          savedRange = selection.getRangeAt(0).cloneRange();
-          findText.value = selectedText;
+        if (selectedQuery) {
+          savedRange = selectedRange.cloneRange();
+          findText.value = selectedQuery;
+          // 같은 검색어를 다른 곳에서 다시 선택한 경우에도 예전 위치에서 이어
+          // 찾지 않고 새 선택을 기준으로 처음부터 셉니다.
+          specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
+          clearFindHighlight();
         }
         if (withReplace) resetReplacementFormatStates();
         findbar.classList.add('open');
