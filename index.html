@@ -874,6 +874,7 @@
       'use strict';
 
       const editor = document.getElementById('editor');
+      const workspace = document.querySelector('.workspace');
       const fileInput = document.getElementById('fileInput');
       const fileNameLabel = document.getElementById('fileName');
       const countLabel = document.getElementById('count');
@@ -3615,6 +3616,7 @@ ${sanitizeHtml(editor.innerHTML)}
         pendingInputBeforeHtml = null;
         pendingInputHistoryGroup = '';
         breakEditorHistoryGroup();
+        invalidateFindResultsAfterDocumentChange();
         markDocumentDirty();
         updateCount();
         updateFormattingControlsState();
@@ -3653,9 +3655,8 @@ ${sanitizeHtml(editor.innerHTML)}
         ensureBlockPlaceholders(clone);
         if (hooks.beforeCommit) hooks.beforeCommit(clone);
 
-        // innerHTML을 갈아치우면 찾은 구간이 가리키던 노드가 사라집니다.
-        // 남은 하이라이트는 엉뚱한 자리를 칠하므로 먼저 지웁니다.
-        clearFindHighlight();
+        // innerHTML을 갈아치우면 검색 위치와 개수도 더 이상 맞지 않습니다.
+        invalidateFindResultsAfterDocumentChange();
 
         bulkEditing = true;
         try {
@@ -3864,18 +3865,22 @@ ${sanitizeHtml(editor.innerHTML)}
       const searchIsCaseSensitive = () => matchCase.checked;
 
       // 검색에 쓸 텍스트. 대소문자를 구분하면 원본을 그대로 씁니다.
-      // 대소문자를 무시할 때는 문서 전체를 접으므로, 같은 문자열이 반복해서 들어오는
-      // 모두 바꾸기 경로에서 접은 결과를 재사용합니다. 캐시가 없으면 접는 비용이
-      // 문서 길이 × 일치 개수로 커집니다.
-      let foldCacheSource = null;
-      let foldCacheResult = null;
+      // 대소문자를 무시할 때는 문서와 검색어를 동시에 기억해야 합니다. 캐시가
+      // 한 칸뿐이면 둘이 서로를 밀어내 선택 위치를 찾는 루프마다 문서 전체를 다시
+      // 접게 됩니다. 최근 문자열 네 개만 보관해 메모리는 제한합니다.
+      const FOLD_CACHE_LIMIT = 4;
+      const foldCache = new Map();
 
       const searchableText = (text) => {
-        if (searchIsCaseSensitive()) return text;
-        if (text === foldCacheSource) return foldCacheResult;
-        foldCacheSource = text;
-        foldCacheResult = foldForSearch(text);
-        return foldCacheResult;
+        const source = String(text);
+        if (searchIsCaseSensitive()) return source;
+        if (foldCache.has(source)) return foldCache.get(source);
+        const result = foldForSearch(source);
+        foldCache.set(source, result);
+        if (foldCache.size > FOLD_CACHE_LIMIT) {
+          foldCache.delete(foldCache.keys().next().value);
+        }
+        return result;
       };
 
       const searchIndexOf = (haystack, needle, from = 0) => searchableText(haystack)
@@ -3981,25 +3986,33 @@ ${sanitizeHtml(editor.innerHTML)}
       };
 
       const showFindHighlight = (range) => {
-        if (!supportsFindHighlight) return;
+        if (!supportsFindHighlight) return false;
         try {
           CSS.highlights.set(FIND_HIGHLIGHT, new Highlight(range.cloneRange()));
+          return true;
         } catch (error) {
-          // 지원하지 않는 환경에서는 선택 영역만으로 표시합니다.
+          return false;
         }
       };
 
-      // 찾은 구간을 화면에 보이게 스크롤합니다. 선택 영역과 달리 하이라이트는
-      // 브라우저가 자동으로 따라가지 않습니다.
+      const invalidateFindResultsAfterDocumentChange = () => {
+        clearFindHighlight();
+        specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
+        if (findbar.classList.contains('open')) scheduleFindCount();
+      };
+
+      // 찾은 구간을 화면에 보이게 스크롤합니다. 실제 스크롤 컨테이너는 editor가
+      // 아니라 workspace입니다. 문서 전체 경계와 비교하면 화면 밖 결과도 항상
+      // editor 안에 있으므로 스크롤이 일어나지 않습니다.
       const scrollFindRangeIntoView = (range) => {
         const rect = range.getBoundingClientRect();
         if (!rect.height && !rect.width) return;
-        const view = editor.getBoundingClientRect();
+        const view = workspace.getBoundingClientRect();
         if (rect.top >= view.top && rect.bottom <= view.bottom) return;
         const anchor = range.startContainer.nodeType === Node.ELEMENT_NODE
           ? range.startContainer
           : range.startContainer.parentElement;
-        anchor?.scrollIntoView({ block: 'center' });
+        anchor?.scrollIntoView({ block: 'center', inline: 'nearest' });
       };
 
       // 앞뒤 찾기를 한 함수로 처리합니다. 특수기호(^p·^l)가 섞인 검색도 모델
@@ -4051,14 +4064,14 @@ ${sanitizeHtml(editor.innerHTML)}
           return false;
         }
 
-        if (keepFocus) {
+        if (keepFocus && showFindHighlight(range)) {
           // contenteditable 안에 선택 영역을 만들면 브라우저가 편집기로 포커스를
           // 옮깁니다. focus()를 부르지 않아도 그렇습니다. 그래서 입력칸에 포커스를
-          // 남기려면 선택은 건드리지 않고 하이라이트만 씁니다. 바꾸기와 이어 찾기는
-          // 선택 영역이 아니라 아래 specialSearchState.index를 기준으로 동작합니다.
-          showFindHighlight(range);
+          // 남길 수 있는 환경에서는 선택을 건드리지 않고 하이라이트만 씁니다.
           scrollFindRangeIntoView(range);
         } else {
+          // Highlight API가 없거나 등록에 실패하면 포커스 유지는 포기하더라도
+          // 기존 선택 방식으로 찾은 위치를 확실하게 보여 줍니다.
           clearFindHighlight();
           selectEditorRange(range);
         }
@@ -5076,8 +5089,8 @@ ${sanitizeHtml(editor.innerHTML)}
       resetEditorHistory();
 
       editor.addEventListener('input', () => {
-        // 글자를 고치면 찾은 구간 표시는 더 이상 맞지 않습니다.
-        clearFindHighlight();
+        // 글자를 고치면 일치 개수와 다음 검색 위치를 다시 계산해야 합니다.
+        invalidateFindResultsAfterDocumentChange();
         markDocumentDirty();
       });
 
