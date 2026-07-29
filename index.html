@@ -174,6 +174,8 @@
       background: #f8fafc;
       color: #475569;
     }
+    #editor blockquote > p { margin: 0; }
+    #editor blockquote > p + p { margin-top: .75em; }
     #editor pre {
       overflow-x: auto;
       padding: 14px 16px;
@@ -963,6 +965,15 @@
         return node === editor || editor.contains(node.nodeType === Node.TEXT_NODE ? node.parentNode : node);
       };
 
+      const quoteAncestorForSelection = () => {
+        const selection = window.getSelection();
+        if (!selection || !selection.rangeCount || !selectionIsInsideEditor()) return null;
+        let element = selection.getRangeAt(0).commonAncestorContainer;
+        if (element.nodeType !== Node.ELEMENT_NODE) element = element.parentElement;
+        const quote = element?.closest?.('blockquote');
+        return quote && editor.contains(quote) ? quote : null;
+      };
+
       const updateFormattingControlsState = () => {
         const selectionInside = selectionIsInsideEditor();
         quoteButton.classList.remove('is-active');
@@ -989,6 +1000,9 @@
         } catch (error) {
           currentBlock = 'P';
         }
+        // 여러 문단을 담은 인용구 안에서는 실제 커서 블록이 P이지만 문단 서식은
+        // 여전히 인용구입니다. 조상까지 확인해야 도구막대 상태가 꺼지지 않습니다.
+        if (quoteAncestorForSelection()) currentBlock = 'BLOCKQUOTE';
         if (currentBlock === 'DIV') currentBlock = 'P';
         blockFormat.value = supportedBlockFormats.has(currentBlock) ? currentBlock : 'P';
         const isQuote = currentBlock === 'BLOCKQUOTE';
@@ -1101,6 +1115,66 @@
 
       const toggleQuoteBlock = () => {
         restoreSelection();
+        const quoteAncestor = quoteAncestorForSelection();
+        if (quoteAncestor) {
+          const beforeHtml = editor.innerHTML;
+          const selection = window.getSelection();
+          const liveRange = selection?.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
+          const startMark = document.createElement('span');
+          startMark.setAttribute('data-quote-selection-start', '1');
+          const endMark = liveRange && !liveRange.collapsed ? document.createElement('span') : null;
+          if (endMark) endMark.setAttribute('data-quote-selection-end', '1');
+
+          // 끝 표식을 먼저 넣어 같은 텍스트 노드 안의 시작 오프셋이 밀리지 않게 합니다.
+          if (liveRange && endMark) {
+            const endRange = liveRange.cloneRange();
+            endRange.collapse(false);
+            endRange.insertNode(endMark);
+          }
+          if (liveRange) {
+            const startRange = liveRange.cloneRange();
+            startRange.collapse(true);
+            startRange.insertNode(startMark);
+          }
+
+          const directBlocks = [...quoteAncestor.children];
+          const hasDirectText = [...quoteAncestor.childNodes].some((node) => (
+            node.nodeType === Node.TEXT_NODE && node.nodeValue.trim()
+          ));
+          const onlyParagraphBlocks = directBlocks.length
+            && !hasDirectText
+            && directBlocks.every((node) => ['P', 'DIV'].includes(node.tagName));
+          const replacement = document.createDocumentFragment();
+          if (onlyParagraphBlocks) {
+            directBlocks.forEach((block) => replacement.appendChild(block));
+          } else {
+            const paragraph = document.createElement('p');
+            while (quoteAncestor.firstChild) paragraph.appendChild(quoteAncestor.firstChild);
+            replacement.appendChild(paragraph);
+          }
+          quoteAncestor.replaceWith(replacement);
+
+          if (liveRange && startMark.isConnected) {
+            const restored = document.createRange();
+            restored.setStartAfter(startMark);
+            if (endMark?.isConnected) restored.setEndBefore(endMark);
+            else restored.collapse(true);
+            selection.removeAllRanges();
+            selection.addRange(restored);
+          }
+          endMark?.remove();
+          startMark.remove();
+
+          breakEditorHistoryGroup();
+          pushEditorHistory(beforeHtml, editor.innerHTML);
+          breakEditorHistoryGroup();
+          markDocumentDirty();
+          saveSelection();
+          updateCount();
+          updateFormattingControlsState();
+          return;
+        }
+
         let currentBlock = 'P';
         try {
           currentBlock = String(document.queryCommandValue('formatBlock') || 'P')
@@ -1850,6 +1924,7 @@
         const lines = String(markdown).replace(/\r\n?/g, '\n').split('\n');
         const output = [];
         let paragraph = [];
+        let quoteLines = [];
         let listType = null;
         let inCode = false;
         let codeLines = [];
@@ -1867,6 +1942,18 @@
           listType = null;
         };
 
+        const flushQuote = () => {
+          if (!quoteLines.length) return;
+          if (quoteLines.length === 1) {
+            output.push(`<blockquote>${parseInlineMarkdown(quoteLines[0])}</blockquote>`);
+          } else {
+            output.push(`<blockquote>${quoteLines.map((line) => (
+              `<p>${line ? parseInlineMarkdown(line) : '<br>'}</p>`
+            )).join('')}</blockquote>`);
+          }
+          quoteLines = [];
+        };
+
         const emitBlanks = () => {
           for (let i = 0; i < pendingBlankLines; i += 1) {
             output.push('<p class="blank-line"><br></p>');
@@ -1878,6 +1965,7 @@
           if (/^```/.test(line)) {
             flushParagraph();
             closeList();
+            flushQuote();
             if (inCode) {
               output.push(`<pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`);
               codeLines = [];
@@ -1897,6 +1985,7 @@
           if (!line.trim()) {
             flushParagraph();
             closeList();
+            flushQuote();
             pendingBlankLines += 1;
             return;
           }
@@ -1907,6 +1996,7 @@
           const quote = line.match(/^>\s?(.*)$/);
           const htmlTable = line.match(/^\s*(<table[\s\S]*<\/table>)\s*$/i);
 
+          if (!quote) flushQuote();
           flushParagraph();
           emitBlanks();
 
@@ -1937,7 +2027,7 @@
             output.push(`<li>${parseInlineMarkdown(ordered[1])}</li>`);
           } else if (quote) {
             closeList();
-            output.push(`<blockquote>${parseInlineMarkdown(quote[1])}</blockquote>`);
+            quoteLines.push(quote[1]);
           } else {
             closeList();
             paragraph.push(line);
@@ -1947,6 +2037,7 @@
         if (inCode) output.push(`<pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`);
         flushParagraph();
         closeList();
+        flushQuote();
         emitBlanks();
         return output.join('');
       };
@@ -1981,7 +2072,23 @@
             const value = inline();
             return value ? `${value}\n\n` : '\n';
           }
-          if (tag === 'blockquote') return inline().split('\n').map((line) => `> ${line}`).join('\n') + '\n\n';
+          if (tag === 'blockquote') {
+            const directBlocks = [...node.children].filter((child) => ['P', 'DIV'].includes(child.tagName));
+            const hasDirectText = [...node.childNodes].some((child) => (
+              child.nodeType === Node.TEXT_NODE && child.nodeValue.trim()
+            ));
+            if (directBlocks.length === node.children.length && !hasDirectText) {
+              return directBlocks
+                .flatMap((block) => [...block.childNodes]
+                  .map(inlineHtmlToMarkdown)
+                  .join('')
+                  .trimEnd()
+                  .split('\n'))
+                .map((line) => `> ${line}`)
+                .join('\n') + '\n\n';
+            }
+            return inline().split('\n').map((line) => `> ${line}`).join('\n') + '\n\n';
+          }
           if (tag === 'pre') return `\`\`\`\n${node.innerText.replace(/\n$/, '')}\n\`\`\`\n\n`;
           if (tag === 'hr') return '---\n\n';
           if (tag === 'table') {
@@ -2023,7 +2130,7 @@
 <title>${escapeHtml(currentFileName.replace(/\.[^.]+$/, '') || '문서')}</title>
 <style>
 body{max-width:780px;margin:40px auto;padding:0 24px;color:#202124;font-family:"Malgun Gothic","맑은 고딕",Arial,sans-serif;font-size:16px;line-height:1.75;tab-size:4;word-break:break-word}
-p,h1,h2,h3,blockquote,li,pre,th,td{white-space:pre-wrap}p{margin:0 0 1em}p.blank-line{min-height:1.75em;margin:0}h1{font-size:2em}h2{font-size:1.55em}h3{font-size:1.25em}blockquote{margin:1em 0;padding:.5em 1em;border-left:4px solid #94a3b8;background:#f8fafc;color:#475569}pre{overflow:auto;padding:14px 16px;border-radius:8px;background:#f4f5f7}code{font-family:Consolas,monospace}a{color:#1558d6}img{max-width:100%;height:auto}hr{border:0;border-top:1px solid #cdd2d9;margin:2em 0}table{width:100%;margin:.8em 0 1em;border-collapse:collapse;table-layout:fixed}th,td{padding:8px 10px;border:1px solid #9ca3af;vertical-align:top}th{background:#f1f5f9;font-weight:700}
+p,h1,h2,h3,blockquote,li,pre,th,td{white-space:pre-wrap}p{margin:0 0 1em}p.blank-line{min-height:1.75em;margin:0}h1{font-size:2em}h2{font-size:1.55em}h3{font-size:1.25em}blockquote{margin:1em 0;padding:.5em 1em;border-left:4px solid #94a3b8;background:#f8fafc;color:#475569}blockquote>p{margin:0}blockquote>p+p{margin-top:.75em}pre{overflow:auto;padding:14px 16px;border-radius:8px;background:#f4f5f7}code{font-family:Consolas,monospace}a{color:#1558d6}img{max-width:100%;height:auto}hr{border:0;border-top:1px solid #cdd2d9;margin:2em 0}table{width:100%;margin:.8em 0 1em;border-collapse:collapse;table-layout:fixed}th,td{padding:8px 10px;border:1px solid #9ca3af;vertical-align:top}th{background:#f1f5f9;font-weight:700}
 </style>
 </head>
 <body>
@@ -3495,6 +3602,16 @@ ${sanitizeHtml(editor.innerHTML)}
         [...root.childNodes].forEach((node) => {
           if (node.nodeType === Node.ELEMENT_NODE && ['UL', 'OL'].includes(node.tagName)) {
             [...node.children].filter((child) => child.tagName === 'LI').forEach((item) => units.push(item));
+          } else if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'BLOCKQUOTE') {
+            const directBlocks = [...node.children].filter((child) => ['P', 'DIV'].includes(child.tagName));
+            const hasDirectText = [...node.childNodes].some((child) => (
+              child.nodeType === Node.TEXT_NODE && child.nodeValue.trim()
+            ));
+            if (directBlocks.length === node.children.length && !hasDirectText) {
+              directBlocks.forEach((block) => units.push(block));
+            } else {
+              units.push(node);
+            }
           } else if (node.nodeType === Node.ELEMENT_NODE || (node.nodeType === Node.TEXT_NODE && node.nodeValue)) {
             units.push(node);
           }
@@ -3779,6 +3896,24 @@ ${sanitizeHtml(editor.innerHTML)}
           const lineBreak = doc.createTextNode('\n');
           range.insertNode(lineBreak);
           range.setStartAfter(lineBreak);
+          range.collapse(true);
+          return;
+        }
+
+        // 평평한 <blockquote>를 그대로 복제하면 여러 문단을 붙여넣을 때
+        // <blockquote>가 문단 수만큼 생깁니다. 첫 문단 나눔에서만 인용구 안에
+        // P 두 개를 만들고, 이후 나눔은 그 P를 분할해 하나의 인용구를 유지합니다.
+        if (block.tagName === 'BLOCKQUOTE') {
+          const tail = doc.createRange();
+          tail.setStart(range.startContainer, range.startOffset);
+          tail.setEnd(block, block.childNodes.length);
+          const afterContents = tail.extractContents();
+          const before = doc.createElement('p');
+          const after = doc.createElement('p');
+          while (block.firstChild) before.appendChild(block.firstChild);
+          after.appendChild(afterContents);
+          block.append(before, after);
+          range.setStart(after, 0);
           range.collapse(true);
           return;
         }
