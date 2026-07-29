@@ -1221,15 +1221,72 @@
 
       const clampTableSize = (value, maximum) => Math.max(1, Math.min(maximum, Number.parseInt(value, 10) || 1));
 
-      const placeCaretInCell = (cell) => {
-        if (!cell) return;
+      const TABLE_EXIT_ATTRIBUTE = 'data-table-exit';
+
+      const isEmptyTableExitParagraph = (paragraph) => (
+        paragraph?.nodeType === Node.ELEMENT_NODE
+        && paragraph.tagName === 'P'
+        && paragraph.hasAttribute(TABLE_EXIT_ATTRIBUTE)
+        && !String(paragraph.textContent || '').replace(/[\u200B\uFEFF]/g, '').length
+        && !paragraph.querySelector('img,hr,table,iframe,video,audio,canvas,svg')
+      );
+
+      // 표가 문서의 마지막 블록이면 contenteditable에는 표 바깥의 캐럿 위치가
+      // 없습니다. 편집 중에만 빈 문단을 하나 두고, 복사·저장할 때는 제거합니다.
+      const ensureTableExitParagraph = (table) => {
+        if (!table || table.parentElement !== editor) return null;
+        for (let sibling = table.nextSibling; sibling; sibling = sibling.nextSibling) {
+          if (sibling.nodeType === Node.TEXT_NODE && !sibling.nodeValue.trim()) continue;
+          if (sibling.nodeType === Node.ELEMENT_NODE
+            && sibling.tagName === 'P'
+            && sibling.hasAttribute(TABLE_EXIT_ATTRIBUTE)) {
+            return sibling;
+          }
+          return null;
+        }
+        const paragraph = document.createElement('p');
+        paragraph.setAttribute(TABLE_EXIT_ATTRIBUTE, '');
+        paragraph.innerHTML = '<br>';
+        editor.appendChild(paragraph);
+        return paragraph;
+      };
+
+      const cleanTableExitParagraphs = (root) => {
+        [...root.querySelectorAll(`p[${TABLE_EXIT_ATTRIBUTE}]`)].forEach((paragraph) => {
+          if (isEmptyTableExitParagraph(paragraph)) paragraph.remove();
+          else paragraph.removeAttribute(TABLE_EXIT_ATTRIBUTE);
+        });
+        return root;
+      };
+
+      const editorContentForExport = () => cleanTableExitParagraphs(editor.cloneNode(true));
+
+      const normalizeTableExitParagraphs = () => {
+        [...editor.querySelectorAll(`p[${TABLE_EXIT_ATTRIBUTE}]`)].forEach((paragraph) => {
+          if (!isEmptyTableExitParagraph(paragraph)) {
+            paragraph.removeAttribute(TABLE_EXIT_ATTRIBUTE);
+            return;
+          }
+          if (paragraph.parentElement !== editor
+            || paragraph.previousElementSibling?.tagName !== 'TABLE') {
+            paragraph.remove();
+          }
+        });
+      };
+
+      const placeCaretInBlock = (block, atEnd = false) => {
+        if (!block) return;
         const range = document.createRange();
-        range.selectNodeContents(cell);
-        range.collapse(true);
+        range.selectNodeContents(block);
+        range.collapse(!atEnd);
         const selection = window.getSelection();
         selection.removeAllRanges();
         selection.addRange(range);
         savedRange = range.cloneRange();
+      };
+
+      const placeCaretInCell = (cell) => {
+        placeCaretInBlock(cell);
       };
 
       const appendTableRowUndoably = (table) => {
@@ -1284,6 +1341,7 @@
           const table = editor.querySelector(`[data-insert-marker="${marker}"]`);
           if (table) {
             table.removeAttribute('data-insert-marker');
+            ensureTableExitParagraph(table);
             placeCaretInCell(table.querySelector('th,td'));
           }
         } finally {
@@ -1302,6 +1360,22 @@
         const node = selection.anchorNode;
         const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
         return element?.closest?.('th,td') || null;
+      };
+
+      const selectionIsAtEndOfCell = (cell) => {
+        const selection = window.getSelection();
+        if (!selection || !selection.rangeCount || !selection.isCollapsed) return false;
+        const range = document.createRange();
+        try {
+          range.setStart(selection.focusNode, selection.focusOffset);
+          range.selectNodeContents(cell);
+          range.setStart(selection.focusNode, selection.focusOffset);
+        } catch (error) {
+          return false;
+        }
+        const remainder = range.cloneContents();
+        return !range.toString()
+          && !remainder.querySelector?.('img,hr,table,iframe,video,audio,canvas,svg');
       };
 
       for (let row = 1; row <= 8; row += 1) {
@@ -2059,6 +2133,7 @@
       };
 
       const htmlToMarkdown = () => {
+        const exportRoot = editorContentForExport();
         const convertBlock = (node, depth = 0) => {
           if (node.nodeType === Node.TEXT_NODE) return node.nodeValue || '';
           if (node.nodeType !== Node.ELEMENT_NODE) return '';
@@ -2119,7 +2194,7 @@
           }
           return [...node.childNodes].map((child) => convertBlock(child, depth)).join('');
         };
-        return [...editor.childNodes].map((node) => convertBlock(node)).join('').replace(/\n{4,}/g, '\n\n\n').trimEnd() + '\n';
+        return [...exportRoot.childNodes].map((node) => convertBlock(node)).join('').replace(/\n{4,}/g, '\n\n\n').trimEnd() + '\n';
       };
 
       const buildStandaloneHtml = () => `<!doctype html>
@@ -2134,7 +2209,7 @@ p,h1,h2,h3,blockquote,li,pre,th,td{white-space:pre-wrap}p{margin:0 0 1em}p.blank
 </style>
 </head>
 <body>
-${sanitizeHtml(editor.innerHTML)}
+${sanitizeHtml(editorContentForExport().innerHTML)}
 </body>
 </html>`;
 
@@ -2429,7 +2504,7 @@ ${sanitizeHtml(editor.innerHTML)}
 
       const buildDocxBlob = () => {
         const context = { hyperlinks: new Map(), nextRelationshipId: 3 };
-        const body = [...editor.childNodes].map((node) => docxBlockXml(node, context)).join('');
+        const body = [...editorContentForExport().childNodes].map((node) => docxBlockXml(node, context)).join('');
         const relationships = [
           '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>',
           '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>'
@@ -2861,6 +2936,7 @@ ${sanitizeHtml(editor.innerHTML)}
         container.appendChild(range.cloneContents());
         restoreInlineAncestors(container, range);
         restoreQuoteAncestor(container, range);
+        cleanTableExitParagraphs(container);
         const clipboardBlockTags = new Set([
           'P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'PRE',
           'UL', 'OL', 'LI', 'TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TD', 'TH', 'HR'
@@ -4923,6 +4999,7 @@ ${sanitizeHtml(editor.innerHTML)}
         if (bulkEditing) return;
         hideSelectionToolbar();
         if (!event.isComposing) {
+          normalizeTableExitParagraphs();
           normalizeEmptyDocument();
           updateFormattingControlsState();
         }
@@ -4949,6 +5026,7 @@ ${sanitizeHtml(editor.innerHTML)}
       });
       editor.addEventListener('compositionend', () => {
         composing = false;
+        normalizeTableExitParagraphs();
         normalizeEmptyDocument();
         updateFormattingControlsState();
         saveDraft();
@@ -5007,12 +5085,23 @@ ${sanitizeHtml(editor.innerHTML)}
           .includes(event.key)) {
           breakEditorHistoryGroup();
         }
-        if (event.key !== 'Tab') return;
         const cell = selectedTableCell();
         if (!cell) return;
         const table = cell.closest('table');
         const cells = [...table.querySelectorAll('th,td')];
         const index = cells.indexOf(cell);
+
+        if (event.key === 'ArrowDown'
+          && index === cells.length - 1
+          && selectionIsAtEndOfCell(cell)) {
+          const exitParagraph = ensureTableExitParagraph(table);
+          if (!exitParagraph) return;
+          event.preventDefault();
+          placeCaretInBlock(exitParagraph);
+          return;
+        }
+
+        if (event.key !== 'Tab') return;
         if (event.shiftKey && index === 0) return;
 
         event.preventDefault();
@@ -5348,3 +5437,4 @@ ${sanitizeHtml(editor.innerHTML)}
   </script>
 </body>
 </html>
+
