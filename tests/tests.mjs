@@ -1292,6 +1292,424 @@ await withPage({}, async (page) => {
     await page.evaluate(() => T.html()));
 });
 
+/* =================== 찾기 개선 =================== */
+
+// 번역문 다듬기에서는 같은 용어가 몇 군데 나오는지 먼저 보고, 앞뒤로 오가며
+// 확인한다. 개수 표시·역방향 찾기·대소문자 구분이 그 흐름을 만든다.
+console.log('\n--- 찾기 개선 ---');
+
+const findCountText = (page) => page.evaluate(() => document.getElementById('findCount').textContent);
+
+// 찾을 내용을 입력하면 전체 일치 개수가 바로 보인다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>사과 배 사과 포도 사과</p>'));
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', '사과');
+  await page.waitForTimeout(260);
+  r.check('X1 입력만으로 전체 개수 표시', await findCountText(page), '3개');
+
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(260);
+  r.check('X2 첫 일치는 1 / 3', await findCountText(page), '1 / 3');
+  // Enter로 찾을 때는 선택 영역이 아니라 하이라이트로 표시한다.
+  // contenteditable에 선택을 만들면 포커스가 본문으로 끌려가기 때문이다.
+  r.check('X2 첫 일치가 하이라이트로 표시된다',
+    await page.evaluate(() => {
+      const hl = CSS.highlights.get('find-match');
+      return hl ? [...hl][0].toString() : null;
+    }), '사과');
+
+  // Enter는 입력칸에 포커스를 남기므로 계속 눌러 넘어갈 수 있다.
+  r.check('X2 Enter 후에도 포커스는 입력칸',
+    await page.evaluate(() => document.activeElement?.id), 'findText');
+
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(260);
+  r.check('X3 Enter는 다음 일치', await findCountText(page), '2 / 3');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(260);
+  r.check('X3 계속 눌러 세 번째', await findCountText(page), '3 / 3');
+  // 문서에 줄바꿈이 입력되면 안 된다.
+  r.check('X3 본문은 그대로', await page.evaluate(() => T.text()), '사과 배 사과 포도 사과');
+  r.check('X3 찾은 구간이 하이라이트로 표시된다',
+    await page.evaluate(() => CSS.highlights.has('find-match')), true);
+});
+
+// Enter로 찾은 뒤에는 선택 영역이 없다. 그 상태에서 바꾸기를 눌러도
+// 하이라이트된 그 자리를 바꿔야 한다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>사과 배 사과</p>'));
+  await openReplace(page, { find: '사과', replace: '능금', particles: false });
+  await page.focus('#findText');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(260);
+  r.check('X3 Enter 뒤 선택 영역은 없다', await page.evaluate(() => T.selection()), '');
+  r.check('X3 Enter 뒤 첫 일치가 현재 위치', await findCountText(page), '1 / 2');
+  await page.click('[data-find="replace"]');
+  await page.waitForTimeout(280);
+  r.check('X3 그래도 첫 일치를 바꾼다',
+    await page.evaluate(() => T.text()), '능금 배 사과');
+});
+
+// Enter로 이어 찾다가 마지막에서 처음으로 순환한다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>알 하나 알</p>'));
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', '알');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(260);
+  r.check('X3 두 번째', await findCountText(page), '2 / 2');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(260);
+  r.check('X3 끝에서 처음으로 순환', await findCountText(page), '1 / 2');
+});
+
+// 본문을 고치면 남은 하이라이트를 지운다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>사과 배</p>'));
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', '사과');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(260);
+  r.check('X3 하이라이트 있음',
+    await page.evaluate(() => CSS.highlights.has('find-match')), true);
+  await page.click('#editor');
+  await page.keyboard.type('짧게');
+  await page.waitForTimeout(200);
+  r.check('X3 편집하면 하이라이트 제거',
+    await page.evaluate(() => CSS.highlights.has('find-match')), false);
+});
+
+// 본문을 고치면 검색 위치를 초기화하고 바뀐 일치 개수를 다시 센다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>사과 사과</p>'));
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', '사과');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(260);
+  r.check('X3 편집 전 검색 위치', await findCountText(page), '1 / 2');
+
+  await page.evaluate(() => T.caretIn(0, true));
+  await page.keyboard.type(' 사과');
+  await page.waitForTimeout(260);
+  r.check('X3 편집 뒤 개수 재계산', await findCountText(page), '3개');
+
+  await page.keyboard.press('F3');
+  await page.waitForTimeout(260);
+  r.check('X3 편집 뒤 검색은 처음부터', await findCountText(page), '1 / 3');
+});
+
+// 화면 아래쪽 일치는 실제 스크롤 컨테이너 안으로 이동한다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => {
+    T.set('<p>시작</p>' + '<p>중간 문단</p>'.repeat(120) + '<p>마지막표적</p>');
+    document.querySelector('.workspace').scrollTop = 0;
+  });
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', '마지막표적');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(260);
+  const result = await page.evaluate(() => {
+    const workspace = document.querySelector('.workspace');
+    const range = [...CSS.highlights.get('find-match')][0];
+    const rect = range.getBoundingClientRect();
+    const view = workspace.getBoundingClientRect();
+    return {
+      moved: workspace.scrollTop > 0,
+      visible: rect.top >= view.top && rect.bottom <= view.bottom
+    };
+  });
+  r.check('X3 화면 밖 결과로 스크롤', result, { moved: true, visible: true });
+});
+
+// Highlight API가 없는 브라우저에서는 선택 영역으로 찾은 자리를 보여 준다.
+await withPage({ noHighlightApi: true }, async (page) => {
+  await page.evaluate(() => T.set('<p>사과 배 사과</p>'));
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', '사과');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(260);
+  r.check('X3 Highlight 미지원 시 선택 표시',
+    await page.evaluate(() => T.selection()), '사과');
+  r.check('X3 Highlight 미지원 시 본문 포커스',
+    await page.evaluate(() => document.activeElement?.id), 'editor');
+});
+
+// 찾기 창을 닫으면 하이라이트도 사라진다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>사과 배</p>'));
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', '사과');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(260);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+  r.check('X3 닫으면 하이라이트 제거',
+    await page.evaluate(() => CSS.highlights.has('find-match')), false);
+});
+
+// 본문을 편집하는 중에는 F3으로 이어서 찾는다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>사과 배 사과</p>'));
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', '사과');
+  await page.click('[data-find="next"]');
+  await page.waitForTimeout(260);
+  r.check('X3 버튼으로 찾으면 포커스는 본문',
+    await page.evaluate(() => document.activeElement?.id), 'editor');
+  await page.keyboard.press('F3');
+  await page.waitForTimeout(260);
+  r.check('X3 F3은 본문에서 동작', await findCountText(page), '2 / 2');
+  r.check('X3 F3 뒤에도 본문 그대로',
+    await page.evaluate(() => T.text()), '사과 배 사과');
+});
+
+// 일치가 없으면 '없음'을 눈에 띄는 색으로 알린다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>사과 배 포도</p>'));
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', '수박');
+  await page.waitForTimeout(260);
+  r.check('X4 없는 단어는 없음 표시', await findCountText(page), '없음');
+  r.check('X4 없음은 강조 클래스',
+    await page.evaluate(() => document.getElementById('findCount').classList.contains('is-empty')), true);
+});
+
+// Shift+Enter로 이전 일치로 되돌아간다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>가 하나 가 둘 가 셋</p>'));
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', '가');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(260);
+  r.check('X5 세 번째 일치', await findCountText(page), '3 / 3');
+
+  await page.keyboard.press('Shift+Enter');
+  await page.waitForTimeout(260);
+  r.check('X6 Shift+Enter는 이전 일치', await findCountText(page), '2 / 3');
+
+  await page.keyboard.press('Shift+Enter');
+  await page.waitForTimeout(260);
+  r.check('X7 계속 뒤로 이동', await findCountText(page), '1 / 3');
+
+  // 문서 앞에서 막히면 끝으로 순환한다.
+  await page.keyboard.press('Shift+Enter');
+  await page.waitForTimeout(260);
+  r.check('X8 앞에서 막히면 끝으로 순환', await findCountText(page), '3 / 3');
+
+  r.check('X8 역방향 이동 중에도 본문은 그대로',
+    await page.evaluate(() => T.text()), '가 하나 가 둘 가 셋');
+});
+
+// Ctrl+G도 같은 동작을 한다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>돌 하나 돌 둘</p>'));
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', '돌');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Control+g');
+  await page.waitForTimeout(260);
+  r.check('X8 Ctrl+G는 다음 일치', await findCountText(page), '2 / 2');
+  await page.keyboard.press('Control+Shift+g');
+  await page.waitForTimeout(260);
+  r.check('X8 Ctrl+Shift+G는 이전 일치', await findCountText(page), '1 / 2');
+});
+
+// 이전 찾기 버튼도 같은 동작을 한다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>알 하나 알 둘</p>'));
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', '알');
+  await page.click('[data-find="next"]');
+  await page.waitForTimeout(260);
+  r.check('X9 다음 찾기 버튼', await findCountText(page), '1 / 2');
+  await page.click('[data-find="previous"]');
+  await page.waitForTimeout(260);
+  r.check('X10 이전 찾기 버튼은 끝으로 순환', await findCountText(page), '2 / 2');
+});
+
+// 대소문자 구분을 끄면 Apple과 apple을 같이 잡는다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>Apple apple APPLE</p>'));
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', 'apple');
+  await page.waitForTimeout(260);
+  r.check('X11 구분하면 하나만', await findCountText(page), '1개');
+
+  await page.uncheck('#matchCase');
+  await page.waitForTimeout(260);
+  r.check('X12 구분을 끄면 세 개', await findCountText(page), '3개');
+
+  await page.click('[data-find="next"]');
+  await page.waitForTimeout(260);
+  r.check('X13 대문자 시작도 잡는다', await page.evaluate(() => T.selection()), 'Apple');
+  await page.keyboard.press('F3');
+  await page.waitForTimeout(260);
+  r.check('X13 다음은 소문자', await page.evaluate(() => T.selection()), 'apple');
+  await page.keyboard.press('F3');
+  await page.waitForTimeout(260);
+  r.check('X13 그다음은 전부 대문자', await page.evaluate(() => T.selection()), 'APPLE');
+});
+
+// 대소문자를 구분하지 않는 모두 바꾸기.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>Cat cat CAT</p>'));
+  await openReplace(page, { find: 'cat', replace: '고양이', particles: false });
+  await page.uncheck('#matchCase');
+  await page.click('[data-find="replace-all"]');
+  await page.waitForTimeout(250);
+  r.check('X14 대소문자 무시 모두 바꾸기',
+    await page.evaluate(() => T.text()), '고양이 고양이 고양이');
+});
+
+// 대소문자를 구분하면 정확히 일치하는 것만 바꾼다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>Cat cat CAT</p>'));
+  await openReplace(page, { find: 'cat', replace: '고양이', particles: false });
+  await page.click('[data-find="replace-all"]');
+  await page.waitForTimeout(250);
+  r.check('X15 구분하면 소문자만 바뀐다',
+    await page.evaluate(() => T.text()), 'Cat 고양이 CAT');
+});
+
+// 모두 바꾼 뒤 개수 표시가 갱신된다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>가 가 가</p>'));
+  await openReplace(page, { find: '가', replace: '나', particles: false });
+  await page.waitForTimeout(260);
+  r.check('X16 바꾸기 전 개수', await findCountText(page), '3개');
+  await page.click('[data-find="replace-all"]');
+  await page.waitForTimeout(250);
+  r.check('X17 모두 바꾼 뒤 없음', await findCountText(page), '없음');
+});
+
+// 특수기호 검색에서도 개수와 역방향이 동작한다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>하나</p><p>둘</p><p>셋</p>'));
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', '^p');
+  await page.waitForTimeout(260);
+  r.check('X18 ^p 개수 표시', await findCountText(page), '2개');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('F3');
+  await page.waitForTimeout(260);
+  r.check('X19 ^p 두 번째', await findCountText(page), '2 / 2');
+  await page.keyboard.press('Shift+F3');
+  await page.waitForTimeout(260);
+  r.check('X20 ^p 역방향', await findCountText(page), '1 / 2');
+});
+
+// 찾을 내용을 지우면 표시도 사라지고, 닫으면 초기화된다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>사과 사과</p>'));
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', '사과');
+  await page.waitForTimeout(260);
+  r.check('X21 개수 표시됨', await findCountText(page), '2개');
+  await page.fill('#findText', '');
+  await page.waitForTimeout(260);
+  r.check('X22 비우면 표시 없음', await findCountText(page), '');
+  await page.fill('#findText', '사과');
+  await page.waitForTimeout(260);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(260);
+  r.check('X23 닫으면 초기화', await findCountText(page), '');
+});
+
+// 개수 세기는 문서 전체를 훑으므로 글자를 칠 때마다 세면 안 된다.
+// 입력이 멈춘 뒤 한 번만 세는지 확인한다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>키워드 그리고 나머지 문장입니다.</p>'.repeat(400)));
+  await page.keyboard.press('Control+f');
+  // 한 글자씩 실제로 입력한다.
+  await page.type('#findText', '키워드', { delay: 10 });
+  r.check('X25 입력 직후에는 아직 세지 않는다', await findCountText(page), '');
+  await page.waitForTimeout(300);
+  r.check('X25 입력이 멈추면 센다', await findCountText(page), '400개');
+});
+
+// 개수 세기가 예약된 상태에서 모두 바꾸기를 눌러도 결과가 정확하다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>사과 사과 사과</p>'));
+  await openReplace(page, { find: '사과', replace: '배', particles: false });
+  // 대기 없이 바로 실행한다.
+  await page.click('[data-find="replace-all"]');
+  await page.waitForTimeout(300);
+  r.check('X26 예약 중 바꾸기도 정확', await page.evaluate(() => T.text()), '배 배 배');
+  r.check('X26 바꾼 뒤 개수 갱신', await findCountText(page), '없음');
+});
+
+// Ctrl+F는 찾기만 하는 모드다. 바꿀 내용 칸이 없으므로 바꾸기 버튼도 없어야 한다.
+// 화면에서만 숨기면 클릭·포커스·보조기술로 닿을 수 있고, 그때 빈 칸을 바꿀
+// 내용으로 읽어 찾은 글자가 조용히 지워졌다.
+const findActionButtons = (page) => page.evaluate(
+  () => [...document.querySelectorAll('#findActions button')].map((b) => b.dataset.find));
+
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>사과 배 사과</p>'));
+  await page.keyboard.press('Control+f');
+  await page.waitForTimeout(200);
+  r.check('X27 찾기 모드에는 찾기 버튼만 있다',
+    await findActionButtons(page), ['previous', 'next']);
+  r.check('X27 바꾸기 버튼은 문서에 없다',
+    await page.evaluate(() => !!document.querySelector('[data-find="replace"]')), false);
+  r.check('X27 모두 바꾸기도 문서에 없다',
+    await page.evaluate(() => !!document.querySelector('[data-find="replace-all"]')), false);
+});
+
+// Ctrl+H로 열면 바꾸기 버튼이 다시 붙고 정상 동작한다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>사과 배 사과</p>'));
+  await page.keyboard.press('Control+h');
+  await page.waitForTimeout(200);
+  r.check('X28 바꾸기 모드에는 네 버튼이 있다',
+    await findActionButtons(page), ['previous', 'next', 'replace', 'replace-all']);
+  await page.fill('#findText', '사과');
+  await page.fill('#replaceText', '능금');
+  await page.waitForTimeout(260);
+  await page.click('[data-find="replace-all"]');
+  await page.waitForTimeout(280);
+  r.check('X28 모두 바꾸기 동작', await page.evaluate(() => T.text()), '능금 배 능금');
+});
+
+// 모드를 여러 번 바꿔도 버튼 구성과 동작이 유지된다.
+// 버튼을 떼었다 붙이므로 클릭 처리기가 살아 있는지 확인한다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>가 가</p>'));
+  await page.keyboard.press('Control+f');
+  await page.waitForTimeout(150);
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Control+h');
+  await page.waitForTimeout(150);
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Control+f');
+  await page.waitForTimeout(150);
+  r.check('X29 재전환 후 찾기 모드', await findActionButtons(page), ['previous', 'next']);
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Control+h');
+  await page.waitForTimeout(150);
+  r.check('X29 재전환 후 바꾸기 모드',
+    await findActionButtons(page), ['previous', 'next', 'replace', 'replace-all']);
+  await page.fill('#findText', '가');
+  await page.fill('#replaceText', '나');
+  await page.waitForTimeout(260);
+  await page.click('[data-find="replace-all"]');
+  await page.waitForTimeout(280);
+  r.check('X29 재부착된 버튼도 동작', await page.evaluate(() => T.text()), '나 나');
+});
+
+// 서식 경계를 넘는 일치도 하나로 센다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>사<b>과</b> 사과</p>'));
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', '사과');
+  await page.waitForTimeout(260);
+  r.check('X24 서식 경계를 넘어 두 개', await findCountText(page), '2개');
+});
+
 const failed = r.summary();
 await browser.close();
 server.close();

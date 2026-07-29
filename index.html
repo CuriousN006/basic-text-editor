@@ -549,6 +549,12 @@
       margin-bottom: 7px;
     }
 
+    /* 찾을 내용 줄은 입력칸 · 일치 개수 · 닫기 버튼 세 칸입니다.
+       :has()는 문서 전체 스타일 무효화를 유발하므로 클래스로 지정합니다. */
+    .find-row.has-count {
+      grid-template-columns: 1fr auto auto;
+    }
+
     .find-row:last-child { margin-bottom: 0; }
 
     .find-input {
@@ -561,6 +567,28 @@
     }
 
     .find-input:focus { border-color: var(--accent); }
+
+    .find-count {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      min-width: 62px;
+      padding: 0 2px;
+      color: var(--muted);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+      user-select: none;
+    }
+
+    .find-count.is-empty { color: var(--danger); }
+
+    /* 찾기 입력칸에 포커스가 있는 동안 찾은 구간을 표시합니다.
+       선택 영역은 편집기가 포커스를 잃으면 그려지지 않습니다. */
+    ::highlight(find-match) {
+      background-color: #fde68a;
+      color: #202124;
+    }
 
     .particle-option {
       display: flex;
@@ -741,8 +769,9 @@
   </main>
 
   <section id="findbar" class="findbar" aria-label="찾기 및 바꾸기">
-    <div class="find-row">
+    <div class="find-row has-count">
       <input id="findText" class="find-input" type="text" placeholder="찾을 내용" autocomplete="off" title="바꾸기에서는 찾은 글자의 현재 서식이 이 칸에 그대로 표시됩니다.">
+      <span id="findCount" class="find-count" aria-live="polite" aria-atomic="true"></span>
       <button class="toolbar-button" type="button" data-find="close" tabindex="-1" title="닫기">✕</button>
     </div>
     <div id="replaceRow" class="find-row">
@@ -751,6 +780,10 @@
     <label id="particleOption" class="particle-option" title="바꾼 단어의 받침에 맞춰 바로 뒤의 조사를 교정합니다.">
       <input id="adjustParticles" type="checkbox" checked>
       조사 자동 교정
+    </label>
+    <label class="particle-option" title="끄면 영문 대문자와 소문자를 같은 글자로 봅니다.">
+      <input id="matchCase" type="checkbox" checked>
+      대소문자 구분
     </label>
     <div id="replaceFormats" class="replace-formats" aria-label="바꿀 내용 서식">
       <span class="replace-formats-label">바꿀 서식</span>
@@ -765,7 +798,11 @@
     <div class="find-specials">
       특수기호: <code>^p</code> 문단 · <code>^l</code> 줄바꿈 · <code>^t</code> 탭 · <code>^^</code> ^ 문자
     </div>
-    <div class="find-actions">
+    <div class="find-specials">
+      이어서 찾기: <code>Enter</code> 다음 · <code>Shift+Enter</code> 이전 · 본문 편집 중에는 <code>F3</code>
+    </div>
+    <div id="findActions" class="find-actions">
+      <button class="toolbar-button" type="button" data-find="previous" title="이전 일치로 이동 (Shift+Enter)">이전 찾기</button>
       <button class="toolbar-button" type="button" data-find="next">다음 찾기</button>
       <button class="toolbar-button" type="button" data-find="replace">바꾸기</button>
       <button class="toolbar-button" type="button" data-find="replace-all">모두 바꾸기</button>
@@ -837,12 +874,15 @@
       'use strict';
 
       const editor = document.getElementById('editor');
+      const workspace = document.querySelector('.workspace');
       const fileInput = document.getElementById('fileInput');
       const fileNameLabel = document.getElementById('fileName');
       const countLabel = document.getElementById('count');
       const toast = document.getElementById('toast');
       const findbar = document.getElementById('findbar');
       const findText = document.getElementById('findText');
+      const findCount = document.getElementById('findCount');
+      const matchCase = document.getElementById('matchCase');
       const replaceText = document.getElementById('replaceText');
       const particleOption = document.getElementById('particleOption');
       const replaceRow = document.getElementById('replaceRow');
@@ -850,6 +890,9 @@
       const replaceFormatButtons = [...document.querySelectorAll('[data-replace-format]')];
       const replaceFormatReset = document.getElementById('replaceFormatReset');
       const replaceFormatHint = document.getElementById('replaceFormatHint');
+      const findActions = document.getElementById('findActions');
+      // 찾기 전용 모드에서는 바꾸기 버튼을 문서에서 떼어 둡니다.
+      const replaceOnlyButtons = [...findActions.querySelectorAll('[data-find^="replace"]')];
 
       const adjustParticles = document.getElementById('adjustParticles');
       const blockFormat = document.getElementById('blockFormat');
@@ -3319,13 +3362,24 @@ ${sanitizeHtml(editor.innerHTML)}
         particleOption.style.display = withReplace ? 'flex' : 'none';
         replaceFormats.style.display = withReplace ? 'flex' : 'none';
         replaceFormatHint.style.display = withReplace ? 'block' : 'none';
+        // 찾기 전용(Ctrl+F)에는 바꿀 내용 칸이 없으므로 바꾸기 버튼도 둘 자리가
+        // 없습니다. 숨기는 대신 문서에서 떼어 냅니다. 남겨 두면 화면에 보이지
+        // 않으면서도 클릭·포커스·보조기술 탐색으로 닿을 수 있고, 빈 칸을 바꿀
+        // 내용으로 읽어 찾은 글자를 조용히 지웁니다.
+        if (withReplace) replaceOnlyButtons.forEach((button) => findActions.appendChild(button));
+        else replaceOnlyButtons.forEach((button) => button.remove());
         updateReplacementFormatPreview();
+        updateFindCount();
         findText.focus();
         findText.select();
       };
 
       const closeFindbar = () => {
         findbar.classList.remove('open');
+        cancelScheduledFindCount();
+        clearFindHighlight();
+        findCount.textContent = '';
+        findCount.classList.remove('is-empty');
         focusEditor();
       };
 
@@ -3562,6 +3616,7 @@ ${sanitizeHtml(editor.innerHTML)}
         pendingInputBeforeHtml = null;
         pendingInputHistoryGroup = '';
         breakEditorHistoryGroup();
+        invalidateFindResultsAfterDocumentChange();
         markDocumentDirty();
         updateCount();
         updateFormattingControlsState();
@@ -3599,6 +3654,9 @@ ${sanitizeHtml(editor.innerHTML)}
         pruneEmptyBlockContainers(clone);
         ensureBlockPlaceholders(clone);
         if (hooks.beforeCommit) hooks.beforeCommit(clone);
+
+        // innerHTML을 갈아치우면 검색 위치와 개수도 더 이상 맞지 않습니다.
+        invalidateFindResultsAfterDocumentChange();
 
         bulkEditing = true;
         try {
@@ -3792,65 +3850,247 @@ ${sanitizeHtml(editor.innerHTML)}
         selection.addRange(range);
       };
 
-      const findNextSpecial = (parsedQuery, markers) => {
-        if (!parsedQuery.text) return false;
-        const model = buildSpecialSearchModel(editor, markers);
-        const stateQuery = `special:${findText.value}`;
-        const sameQuery = specialSearchState.query === stateQuery;
-        const startIndex = sameQuery ? specialSearchState.nextIndex : 0;
-        let index = model.text.indexOf(parsedQuery.text, startIndex);
-        if (index < 0 && startIndex > 0) index = model.text.indexOf(parsedQuery.text);
-        if (index < 0) {
-          showToast('찾을 수 없습니다');
-          return false;
+      // ===== 대소문자 구분 없는 찾기 =====
+      // 모델 인덱스가 실제 DOM 위치로 환산되므로, 접어 만든 문자열은 원본과 길이가
+      // 같아야 합니다. 'İ'.toLowerCase()처럼 길이가 늘어나는 글자는 접지 않고 둡니다.
+      const foldForSearch = (value) => {
+        let folded = '';
+        for (const character of String(value)) {
+          const lower = character.toLowerCase();
+          folded += lower.length === character.length ? lower : character;
         }
-
-        const range = createRangeFromModel(model, index, parsedQuery.text.length);
-        if (!range) {
-          showToast('찾을 수 없습니다');
-          return false;
-        }
-        selectEditorRange(range);
-        specialSearchState = {
-          query: stateQuery,
-          nextIndex: index + Math.max(1, parsedQuery.text.length),
-          index,
-          range: range.cloneRange()
-        };
-        return true;
+        return folded;
       };
 
-      const findNext = () => {
+      const searchIsCaseSensitive = () => matchCase.checked;
+
+      // 검색에 쓸 텍스트. 대소문자를 구분하면 원본을 그대로 씁니다.
+      // 대소문자를 무시할 때는 문서와 검색어를 동시에 기억해야 합니다. 캐시가
+      // 한 칸뿐이면 둘이 서로를 밀어내 선택 위치를 찾는 루프마다 문서 전체를 다시
+      // 접게 됩니다. 최근 문자열 네 개만 보관해 메모리는 제한합니다.
+      const FOLD_CACHE_LIMIT = 4;
+      const foldCache = new Map();
+
+      const searchableText = (text) => {
+        const source = String(text);
+        if (searchIsCaseSensitive()) return source;
+        if (foldCache.has(source)) return foldCache.get(source);
+        const result = foldForSearch(source);
+        foldCache.set(source, result);
+        if (foldCache.size > FOLD_CACHE_LIMIT) {
+          foldCache.delete(foldCache.keys().next().value);
+        }
+        return result;
+      };
+
+      const searchIndexOf = (haystack, needle, from = 0) => searchableText(haystack)
+        .indexOf(searchableText(needle), from);
+
+      const searchLastIndexOf = (haystack, needle, from) => searchableText(haystack)
+        .lastIndexOf(searchableText(needle), from);
+
+      // 문서 안의 일치 개수와, 현재 위치가 그중 몇 번째인지 셉니다.
+      const countSearchMatches = (modelText, needle, currentIndex) => {
+        if (!needle) return { total: 0, ordinal: 0 };
+        const haystack = searchableText(modelText);
+        const target = searchableText(needle);
+        const step = Math.max(1, target.length);
+        let total = 0;
+        let ordinal = 0;
+        let cursor = 0;
+        for (;;) {
+          const index = haystack.indexOf(target, cursor);
+          if (index < 0) break;
+          total += 1;
+          if (index === currentIndex) ordinal = total;
+          if (total >= MATCH_LIMIT) break;
+          cursor = index + step;
+        }
+        return { total, ordinal };
+      };
+
+      // 일치 개수 표시를 갱신합니다. 찾을 내용이 비면 아무것도 보이지 않습니다.
+      const updateFindCountNow = () => {
+        const query = findText.value;
+        if (!findbar.classList.contains('open') || !query) {
+          findCount.textContent = '';
+          findCount.classList.remove('is-empty');
+          return;
+        }
+        let total = 0;
+        let ordinal = 0;
+        try {
+          const markers = pickSpecialSearchMarkers(editor, [query, replaceText.value]);
+          const parsedQuery = parseSpecialCodes(query, markers);
+          if (parsedQuery.text) {
+            const model = buildSpecialSearchModel(editor, markers);
+            const stateKey = parsedQuery.usesCodes ? `special:${query}` : `literal:${query}`;
+            const current = specialSearchState.query === stateKey ? specialSearchState.index : -1;
+            ({ total, ordinal } = countSearchMatches(model.text, parsedQuery.text, current));
+          }
+        } catch (error) {
+          // 표식을 만들 수 없는 극단적인 문서에서는 개수 표시를 생략합니다.
+          findCount.textContent = '';
+          findCount.classList.remove('is-empty');
+          return;
+        }
+        findCount.classList.toggle('is-empty', total === 0);
+        if (!total) {
+          findCount.textContent = '없음';
+          return;
+        }
+        const shown = total >= MATCH_LIMIT ? `${MATCH_LIMIT.toLocaleString()}+` : total.toLocaleString();
+        findCount.textContent = ordinal ? `${ordinal} / ${shown}` : `${shown}개`;
+      };
+
+      // 개수 세기는 문서 전체 검색 모델을 다시 만들기 때문에 긴 문서에서는
+      // 한 번에 수백 밀리초가 듭니다. 글자를 칠 때마다 세면 입력이 밀리고,
+      // 예약된 세기가 바로 뒤에 오는 바꾸기 작업과 겹쳐 그쪽까지 느려집니다.
+      // 그래서 입력이 멈춘 뒤에 한 번만 셉니다.
+      const FIND_COUNT_DELAY = 180;
+      let findCountTimer = null;
+
+      const cancelScheduledFindCount = () => {
+        if (findCountTimer === null) return;
+        clearTimeout(findCountTimer);
+        findCountTimer = null;
+      };
+
+      const scheduleFindCount = () => {
+        cancelScheduledFindCount();
+        findCountTimer = setTimeout(() => {
+          findCountTimer = null;
+          updateFindCountNow();
+        }, FIND_COUNT_DELAY);
+      };
+
+      // 찾기·바꾸기 같은 명시적 동작 뒤에는 곧바로 갱신합니다.
+      const updateFindCount = () => {
+        cancelScheduledFindCount();
+        updateFindCountNow();
+      };
+
+      // ===== 찾은 구간 표시 =====
+      // 찾기 입력칸에서 Enter를 계속 누르려면 포커스가 입력칸에 남아야 합니다.
+      // 그런데 편집기 밖으로 포커스가 나가면 선택 영역은 그려지지 않습니다.
+      // CSS Custom Highlight API로 DOM을 건드리지 않고 구간만 칠합니다.
+      // <mark>를 넣는 방식은 실행 취소 기록과 검색 모델을 오염시킵니다.
+      const FIND_HIGHLIGHT = 'find-match';
+      const supportsFindHighlight = typeof CSS !== 'undefined'
+        && !!CSS.highlights
+        && typeof Highlight === 'function';
+
+      const clearFindHighlight = () => {
+        if (!supportsFindHighlight) return;
+        CSS.highlights.delete(FIND_HIGHLIGHT);
+      };
+
+      const showFindHighlight = (range) => {
+        if (!supportsFindHighlight) return false;
+        try {
+          CSS.highlights.set(FIND_HIGHLIGHT, new Highlight(range.cloneRange()));
+          return true;
+        } catch (error) {
+          return false;
+        }
+      };
+
+      const invalidateFindResultsAfterDocumentChange = () => {
+        clearFindHighlight();
+        specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
+        if (findbar.classList.contains('open')) scheduleFindCount();
+      };
+
+      // 찾은 구간을 화면에 보이게 스크롤합니다. 실제 스크롤 컨테이너는 editor가
+      // 아니라 workspace입니다. 문서 전체 경계와 비교하면 화면 밖 결과도 항상
+      // editor 안에 있으므로 스크롤이 일어나지 않습니다.
+      const scrollFindRangeIntoView = (range) => {
+        const rect = range.getBoundingClientRect();
+        if (!rect.height && !rect.width) return;
+        const view = workspace.getBoundingClientRect();
+        if (rect.top >= view.top && rect.bottom <= view.bottom) return;
+        const anchor = range.startContainer.nodeType === Node.ELEMENT_NODE
+          ? range.startContainer
+          : range.startContainer.parentElement;
+        anchor?.scrollIntoView({ block: 'center', inline: 'nearest' });
+      };
+
+      // 앞뒤 찾기를 한 함수로 처리합니다. 특수기호(^p·^l)가 섞인 검색도 모델
+      // 텍스트에서는 한 글자짜리 표식이 되므로 일반 검색과 같은 경로를 씁니다.
+      // direction: 1은 다음, -1은 이전.
+      // keepFocus를 주면 편집기로 포커스를 옮기지 않아 입력칸에서 Enter를
+      // 계속 누를 수 있습니다.
+      const findInDirection = (direction, { keepFocus = false } = {}) => {
         const query = findText.value;
         if (!query) return false;
-        const markers = pickSpecialSearchMarkers(editor, [query]);
+        const markers = pickSpecialSearchMarkers(editor, [query, replaceText.value]);
         const parsedQuery = parseSpecialCodes(query, markers);
-        if (parsedQuery.usesCodes) return findNextSpecial(parsedQuery, markers);
+        const needle = parsedQuery.text;
+        if (!needle) return false;
 
         const model = buildSpecialSearchModel(editor, markers);
-        const stateQuery = `literal:${query}`;
-        const startIndex = specialSearchState.query === stateQuery ? specialSearchState.nextIndex : 0;
-        let index = model.text.indexOf(query, startIndex);
-        if (index < 0 && startIndex > 0) index = model.text.indexOf(query);
+        const stateQuery = parsedQuery.usesCodes ? `special:${query}` : `literal:${query}`;
+        const sameQuery = specialSearchState.query === stateQuery;
+        let index;
+
+        if (direction < 0) {
+          // 현재 일치 구간의 바로 앞에서부터 뒤로 찾습니다. 검색 상태가 없으면
+          // 화면에서 선택된 구간을 기준으로 삼아, 직접 드래그한 뒤에도 이어집니다.
+          const anchor = sameQuery && specialSearchState.index >= 0
+            ? specialSearchState.index
+            : matchIndexForSelection(model, needle);
+          const from = anchor >= 0 ? anchor - 1 : model.text.length;
+          index = from < 0 ? -1 : searchLastIndexOf(model.text, needle, from);
+          // 문서 앞에서 막히면 끝으로 순환합니다.
+          if (index < 0) index = searchLastIndexOf(model.text, needle, model.text.length);
+        } else {
+          const startIndex = sameQuery ? specialSearchState.nextIndex : 0;
+          index = searchIndexOf(model.text, needle, startIndex);
+          if (index < 0 && startIndex > 0) index = searchIndexOf(model.text, needle, 0);
+        }
+
         if (index < 0) {
           showToast('찾을 수 없습니다');
+          clearFindHighlight();
+          updateFindCount();
           return false;
         }
 
-        const range = createRangeFromModel(model, index, query.length);
+        const range = createRangeFromModel(model, index, needle.length);
         if (!range) {
           showToast('찾을 수 없습니다');
+          clearFindHighlight();
+          updateFindCount();
           return false;
         }
-        selectEditorRange(range);
+
+        if (keepFocus && showFindHighlight(range)) {
+          // contenteditable 안에 선택 영역을 만들면 브라우저가 편집기로 포커스를
+          // 옮깁니다. focus()를 부르지 않아도 그렇습니다. 그래서 입력칸에 포커스를
+          // 남길 수 있는 환경에서는 선택을 건드리지 않고 하이라이트만 씁니다.
+          scrollFindRangeIntoView(range);
+        } else {
+          // Highlight API가 없거나 등록에 실패하면 포커스 유지는 포기하더라도
+          // 기존 선택 방식으로 찾은 위치를 확실하게 보여 줍니다.
+          clearFindHighlight();
+          selectEditorRange(range);
+        }
+
         specialSearchState = {
           query: stateQuery,
-          nextIndex: index + Math.max(1, query.length),
+          nextIndex: index + Math.max(1, needle.length),
           index,
           range: range.cloneRange()
         };
+        updateFindCount();
         return true;
       };
+
+      const findNext = () => findInDirection(1);
+      const findPrevious = () => findInDirection(-1);
+      // 입력칸에서 Enter로 이어 찾을 때 씁니다.
+      const findNextKeepingFocus = () => findInDirection(1, { keepFocus: true });
+      const findPreviousKeepingFocus = () => findInDirection(-1, { keepFocus: true });
 
       const particlePairs = [
         { consonant: '으로부터', vowel: '로부터', rieul: '로부터' },
@@ -4123,9 +4363,12 @@ ${sanitizeHtml(editor.innerHTML)}
         let cursor = 0;
         let particleCount = 0;
         let truncated = false;
+        // 일치마다 다시 접지 않도록 검색 문자열을 미리 준비합니다.
+        const haystack = searchableText(model.text);
+        const needle = searchableText(query);
 
         for (;;) {
-          const start = model.text.indexOf(query, cursor);
+          const start = haystack.indexOf(needle, cursor);
           if (start < 0) break;
           if (matches.length >= MATCH_LIMIT) {
             truncated = true;
@@ -4185,7 +4428,7 @@ ${sanitizeHtml(editor.innerHTML)}
         const target = selection.getRangeAt(0);
         let cursor = 0;
         for (;;) {
-          const index = model.text.indexOf(query, cursor);
+          const index = searchIndexOf(model.text, query, cursor);
           if (index < 0) return -1;
           const range = createRangeFromModel(model, index, query.length);
           try {
@@ -4307,6 +4550,7 @@ ${sanitizeHtml(editor.innerHTML)}
           showToast((formattingOnly
             ? `${count}개 항목의 서식을 변경했습니다.`
             : `${count}개 항목을 특수기호 규칙으로 바꿨습니다.`) + truncationNotice(truncated));
+          updateFindCount();
           return;
         }
 
@@ -4331,6 +4575,7 @@ ${sanitizeHtml(editor.innerHTML)}
         showToast((formattingOnly
           ? `${count}개 항목의 서식을 변경했습니다.`
           : `${count}개 항목을 바꿨습니다${particleMessage}.`) + truncationNotice(truncated));
+        updateFindCount();
       };
 
       // 일반 입력과 일괄 편집을 같은 순서로 실행 취소·다시 실행합니다.
@@ -4673,15 +4918,19 @@ ${sanitizeHtml(editor.innerHTML)}
           const action = button.dataset.find;
           if (action === 'close') closeFindbar();
           if (action === 'next') findNext();
+          if (action === 'previous') findPrevious();
           if (action === 'replace') replaceCurrent();
           if (action === 'replace-all') replaceAll();
         });
       });
 
+      // Enter는 입력칸에 포커스를 남기므로 계속 눌러 다음 일치로 넘어갈 수 있습니다.
+      // 찾은 자리에서 바로 고치려면 Tab이나 클릭으로 본문에 들어가거나 F3을 씁니다.
       findText.addEventListener('keydown', (event) => {
         if (event.key === 'Enter') {
           event.preventDefault();
-          findNext();
+          if (event.shiftKey) findPreviousKeepingFocus();
+          else findNextKeepingFocus();
         }
         if (event.key === 'Escape') closeFindbar();
       });
@@ -4694,8 +4943,21 @@ ${sanitizeHtml(editor.innerHTML)}
         if (event.key === 'Escape') closeFindbar();
       });
 
-      replaceText.addEventListener('input', updateReplacementFormatSummary);
-      findText.addEventListener('input', updateReplacementFormatPreview);
+      replaceText.addEventListener('input', () => {
+        updateReplacementFormatSummary();
+        scheduleFindCount();
+      });
+      findText.addEventListener('input', () => {
+        // 찾을 내용이 바뀌면 이전 검색 위치는 의미가 없습니다.
+        specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
+        updateReplacementFormatPreview();
+        scheduleFindCount();
+      });
+
+      matchCase.addEventListener('change', () => {
+        specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
+        updateFindCount();
+      });
 
       document.addEventListener('keydown', async (event) => {
         const ctrl = event.ctrlKey || event.metaKey;
@@ -4712,7 +4974,21 @@ ${sanitizeHtml(editor.innerHTML)}
           focusEditor();
           return;
         }
+        // 찾기는 일치 구간을 편집기에서 선택하므로 포커스가 본문으로 갑니다.
+        // 그 상태에서 Enter는 줄바꿈이어야 하니, 이어서 찾을 때는 F3을 씁니다.
+        if (event.key === 'F3' && findText.value) {
+          event.preventDefault();
+          if (event.shiftKey) findPrevious();
+          else findNext();
+          return;
+        }
         if (!ctrl) return;
+        if (key === 'g' && findText.value) {
+          event.preventDefault();
+          if (event.shiftKey) findPrevious();
+          else findNext();
+          return;
+        }
         if (key === 'z' && !event.shiftKey) {
           if (undoEditorHistory()) event.preventDefault();
           return;
@@ -4813,6 +5089,8 @@ ${sanitizeHtml(editor.innerHTML)}
       resetEditorHistory();
 
       editor.addEventListener('input', () => {
+        // 글자를 고치면 일치 개수와 다음 검색 위치를 다시 계산해야 합니다.
+        invalidateFindResultsAfterDocumentChange();
         markDocumentDirty();
       });
 
