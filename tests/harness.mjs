@@ -53,6 +53,14 @@ export async function openEditor(browser, base, opts = {}) {
       delete window.showOpenFilePicker;
     });
   }
+  if (opts.noHighlightApi) {
+    await page.addInitScript(() => {
+      Object.defineProperty(window, 'Highlight', {
+        configurable: true,
+        value: undefined
+      });
+    });
+  }
   if (opts.seedDraft !== undefined) {
     await page.addInitScript((html) => {
       localStorage.setItem('basic-text-editor-draft', html);
