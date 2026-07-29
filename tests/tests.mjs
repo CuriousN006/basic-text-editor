@@ -24,6 +24,21 @@ const readDownload = async (page, action) => {
   return Buffer.concat(chunks);
 };
 
+const readStoredZipEntry = (buffer, wantedName) => {
+  let offset = 0;
+  while (offset + 30 <= buffer.length && buffer.readUInt32LE(offset) === 0x04034b50) {
+    const compressedSize = buffer.readUInt32LE(offset + 18);
+    const fileNameLength = buffer.readUInt16LE(offset + 26);
+    const extraLength = buffer.readUInt16LE(offset + 28);
+    const nameStart = offset + 30;
+    const dataStart = nameStart + fileNameLength + extraLength;
+    const name = buffer.subarray(nameStart, nameStart + fileNameLength).toString();
+    if (name === wantedName) return buffer.subarray(dataStart, dataStart + compressedSize);
+    offset = dataStart + compressedSize;
+  }
+  return null;
+};
+
 /* =================== 수정 검증 =================== */
 
 console.log('\n--- 수정 검증 ---');
@@ -386,6 +401,38 @@ await withPage({}, async (page) => {
     const t = T.ed().querySelector('table');
     return t ? [t.rows.length, t.rows[0].cells.length] : null;
   }), [3, 2]);
+  r.check('R26 마지막 표 뒤에 탈출 문단 생성',
+    await page.evaluate(() => T.blocks()), 'TABLE:빈 P:빈');
+  r.check('R26 탈출 문단은 편집 전용 표시',
+    await page.evaluate(() => T.ed().lastElementChild?.hasAttribute('data-table-exit')), true);
+
+  await page.evaluate(() => {
+    const cell = T.ed().querySelector('tr:last-child td:last-child');
+    const range = document.createRange();
+    range.selectNodeContents(cell);
+    range.collapse(false);
+    const selection = getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    T.ed().focus();
+  });
+  await page.keyboard.press('ArrowDown');
+  r.check('R26 마지막 셀 끝에서 아래 화살표로 표 탈출',
+    await page.evaluate(() => {
+      const node = getSelection()?.anchorNode;
+      const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+      return element?.closest?.('p')?.hasAttribute('data-table-exit') || false;
+    }), true);
+
+  await page.keyboard.type('표 밖');
+  r.check('R26 탈출 문단에 쓰면 일반 문단으로 전환',
+    await page.evaluate(() => ({
+      text: T.ed().lastElementChild?.textContent,
+      marked: T.ed().lastElementChild?.hasAttribute('data-table-exit'),
+    })), { text: '표 밖', marked: false });
+
+  // 다시 비어 있는 탈출 문단을 가진 표를 만들어 실행 취소 범위를 확인합니다.
+  await page.keyboard.press('Control+z');
   await page.evaluate(() => T.ed().focus());
   await page.keyboard.press('Control+z');
   r.check('R26 표 삽입 취소', await page.evaluate(() => T.ed().querySelectorAll('table').length), 0);
@@ -413,6 +460,45 @@ await withPage({}, async (page) => {
   await page.keyboard.press('Control+y');
   r.check('R26 Tab 행 추가 다시 실행',
     await page.evaluate(() => T.ed().querySelector('table').rows.length), 2);
+});
+
+// 마지막 표의 빈 탈출 문단은 편집 화면에만 있고 외부 결과에는 섞이지 않는다.
+await withPage({ noFilePicker: true }, async (page) => {
+  await page.click('#editor');
+  await page.click('[data-action="table"]');
+  await page.fill('#tableRows', '1');
+  await page.fill('#tableColumns', '1');
+  await page.click('[data-table-action="insert"]');
+  await page.waitForTimeout(120);
+
+  await page.keyboard.press('Control+a');
+  await page.keyboard.press('Control+c');
+  await page.waitForTimeout(160);
+  r.check('R26 전체 복사에서 빈 탈출 문단 제외',
+    await page.evaluate(async () => {
+      const [item] = await navigator.clipboard.read();
+      const html = await (await item.getType('text/html')).text();
+      const body = new DOMParser().parseFromString(html, 'text/html').body;
+      return {
+        tables: body.querySelectorAll('table').length,
+        marked: body.querySelectorAll('[data-table-exit]').length,
+        trailingBlocks: [...body.children].filter((element) => element.tagName !== 'TABLE').length,
+      };
+    }),
+    { tables: 1, marked: 0, trailingBlocks: 0 });
+
+  const html = (await readDownload(page, () => page.click('[data-action="save-html"]'))).toString();
+  r.check('R26 HTML 저장에서 빈 탈출 문단 제외',
+    /data-table-exit|<\/table>\s*<p(?:\s|>)/i.test(html), false);
+
+  const markdown = (await readDownload(page, () => page.click('[data-action="save-md"]'))).toString();
+  r.check('R26 MD 저장은 표 바로 뒤에서 끝남',
+    /<\/table>\n$/.test(markdown), true, JSON.stringify(markdown.slice(-40)));
+
+  const docx = await readDownload(page, () => page.click('[data-action="save-docx"]'));
+  const documentXml = readStoredZipEntry(docx, 'word/document.xml')?.toString() || '';
+  r.check('R26 DOCX 저장에서 표 뒤 빈 문단 제외',
+    /<\/w:tbl><w:p[\s>]/.test(documentXml), false);
 });
 
 // 문자 기호 삽입: 목록 서식이 아니라 선택/커서 위치에 일반 문자로 들어간다.
@@ -1925,3 +2011,4 @@ const failed = r.summary();
 await browser.close();
 server.close();
 process.exit(failed ? 1 : 0);
+
