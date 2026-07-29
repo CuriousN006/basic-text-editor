@@ -1300,6 +1300,106 @@ console.log('\n--- 찾기 개선 ---');
 
 const findCountText = (page) => page.evaluate(() => document.getElementById('findCount').textContent);
 
+// 선택한 낱말은 Ctrl+F의 찾을 내용으로 들어가고 바로 개수를 센다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => {
+    T.set('<p>사과 배 사과</p>');
+    T.select('사과');
+  });
+  await page.keyboard.press('Control+f');
+  await page.waitForTimeout(260);
+  r.check('X0 Ctrl+F 선택 글자 자동 입력',
+    await page.inputValue('#findText'), '사과');
+  r.check('X0 선택 글자 일치 개수', await findCountText(page), '2개');
+  r.check('X0 입력칸에서도 전체 선택',
+    await page.evaluate(() => {
+      const input = document.getElementById('findText');
+      return [input.selectionStart, input.selectionEnd];
+    }), [0, 2]);
+});
+
+// Ctrl+H도 같은 변환 경로를 사용한다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => {
+    T.set('<p>사과 배 사과</p>');
+    T.select('사과');
+  });
+  await page.keyboard.press('Control+h');
+  await page.waitForTimeout(260);
+  r.check('X0 Ctrl+H 선택 글자 자동 입력',
+    await page.inputValue('#findText'), '사과');
+});
+
+// 선택이 없으면 방금 사용한 검색어를 그대로 유지한다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>사과 배</p>'));
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', '배');
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => T.caretIn(0, true));
+  await page.keyboard.press('Control+f');
+  r.check('X0 선택 없으면 검색어 유지',
+    await page.inputValue('#findText'), '배');
+});
+
+// 여러 문단 선택은 ^p로 직렬화하고 같은 문단 묶음의 개수를 센다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => {
+    T.set('<p>하나</p><p>둘</p><p>하나</p><p>둘</p>');
+    const blocks = T.ed().children;
+    const range = document.createRange();
+    range.setStart(blocks[0].firstChild, 0);
+    range.setEnd(blocks[1].firstChild, blocks[1].firstChild.nodeValue.length);
+    T.ed().focus();
+    const selection = getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  });
+  await page.keyboard.press('Control+f');
+  await page.waitForTimeout(260);
+  r.check('X0 문단 경계는 ^p',
+    await page.inputValue('#findText'), '하나^p둘');
+  r.check('X0 여러 문단 선택 개수', await findCountText(page), '2개');
+});
+
+// 문단 안 줄바꿈은 ^l로 직렬화한다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => {
+    T.set('<p>하나\n둘</p><p>하나\n둘</p>');
+    T.select('하나\n둘');
+  });
+  await page.keyboard.press('Control+f');
+  await page.waitForTimeout(260);
+  r.check('X0 문단 안 줄바꿈은 ^l',
+    await page.inputValue('#findText'), '하나^l둘');
+  r.check('X0 문단 안 줄바꿈 선택 개수', await findCountText(page), '2개');
+});
+
+// 원문의 실제 ^는 ^^로 이스케이프해 특수기호와 구분한다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => {
+    T.set('<p>^p 설명 ^p</p>');
+    T.select('^p');
+  });
+  await page.keyboard.press('Control+f');
+  await page.waitForTimeout(260);
+  r.check('X0 실제 ^ 이스케이프',
+    await page.inputValue('#findText'), '^^p');
+  r.check('X0 실제 ^p 글자 개수', await findCountText(page), '2개');
+});
+
+// 너무 긴 선택은 기존 검색어를 덮어쓰지 않는다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>' + '가'.repeat(501) + '</p>'));
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', '유지');
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => T.select('가'.repeat(501)));
+  await page.keyboard.press('Control+f');
+  r.check('X0 긴 선택은 검색어 유지',
+    await page.inputValue('#findText'), '유지');
+});
+
 // 찾을 내용을 입력하면 전체 일치 개수가 바로 보인다.
 await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<p>사과 배 사과 포도 사과</p>'));
