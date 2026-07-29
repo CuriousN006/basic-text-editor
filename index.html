@@ -583,10 +583,15 @@
 
     .find-count.is-empty { color: var(--danger); }
 
-    /* 찾기 입력칸에 포커스가 있는 동안 찾은 구간을 표시합니다.
-       선택 영역은 편집기가 포커스를 잃으면 그려지지 않습니다. */
+    /* 찾기 입력칸에 포커스가 있어도 모든 일치와 현재 위치를 함께 표시합니다.
+       현재 위치는 더 진한 색으로 구분합니다. */
+    ::highlight(find-all-matches) {
+      background-color: #fef3c7;
+      color: #202124;
+    }
+
     ::highlight(find-match) {
-      background-color: #fde68a;
+      background-color: #fb923c;
       color: #202124;
     }
 
@@ -3925,36 +3930,39 @@ ${sanitizeHtml(editor.innerHTML)}
       const searchLastIndexOf = (haystack, needle, from) => searchableText(haystack)
         .lastIndexOf(searchableText(needle), from);
 
-      // 문서 안의 일치 개수와, 현재 위치가 그중 몇 번째인지 셉니다.
+      // 문서 안의 일치 위치와, 현재 위치가 그중 몇 번째인지 한 번에 모읍니다.
+      // 같은 결과를 개수 표시와 전체 하이라이트가 함께 써 문서를 두 번 찾지 않습니다.
       const countSearchMatches = (modelText, needle, currentIndex) => {
-        if (!needle) return { total: 0, ordinal: 0 };
+        if (!needle) return { total: 0, ordinal: 0, indexes: [] };
         const haystack = searchableText(modelText);
         const target = searchableText(needle);
         const step = Math.max(1, target.length);
-        let total = 0;
+        const indexes = [];
         let ordinal = 0;
         let cursor = 0;
         for (;;) {
           const index = haystack.indexOf(target, cursor);
           if (index < 0) break;
-          total += 1;
-          if (index === currentIndex) ordinal = total;
-          if (total >= MATCH_LIMIT) break;
+          indexes.push(index);
+          if (index === currentIndex) ordinal = indexes.length;
+          if (indexes.length >= MATCH_LIMIT) break;
           cursor = index + step;
         }
-        return { total, ordinal };
+        return { total: indexes.length, ordinal, indexes };
       };
 
       // 일치 개수 표시를 갱신합니다. 찾을 내용이 비면 아무것도 보이지 않습니다.
       const updateFindCountNow = () => {
         const query = findText.value;
         if (!findbar.classList.contains('open') || !query) {
+          clearFindHighlight();
           findCount.textContent = '';
           findCount.classList.remove('is-empty');
           return;
         }
         let total = 0;
         let ordinal = 0;
+        let indexes = [];
         try {
           const markers = pickSpecialSearchMarkers(editor, [query, replaceText.value]);
           const parsedQuery = parseSpecialCodes(query, markers);
@@ -3962,10 +3970,21 @@ ${sanitizeHtml(editor.innerHTML)}
             const model = buildSpecialSearchModel(editor, markers);
             const stateKey = parsedQuery.usesCodes ? `special:${query}` : `literal:${query}`;
             const current = specialSearchState.query === stateKey ? specialSearchState.index : -1;
-            ({ total, ordinal } = countSearchMatches(model.text, parsedQuery.text, current));
+            ({ total, ordinal, indexes } = countSearchMatches(model.text, parsedQuery.text, current));
+            showAllFindHighlights(model, parsedQuery.text.length, indexes, current);
+            if (current >= 0) {
+              const currentRange = createRangeFromModel(model, current, parsedQuery.text.length);
+              if (currentRange) showFindHighlight(currentRange);
+              else clearCurrentFindHighlight();
+            } else {
+              clearCurrentFindHighlight();
+            }
+          } else {
+            clearFindHighlight();
           }
         } catch (error) {
           // 표식을 만들 수 없는 극단적인 문서에서는 개수 표시를 생략합니다.
+          clearFindHighlight();
           findCount.textContent = '';
           findCount.classList.remove('is-empty');
           return;
@@ -4011,19 +4030,52 @@ ${sanitizeHtml(editor.innerHTML)}
       // 그런데 편집기 밖으로 포커스가 나가면 선택 영역은 그려지지 않습니다.
       // CSS Custom Highlight API로 DOM을 건드리지 않고 구간만 칠합니다.
       // <mark>를 넣는 방식은 실행 취소 기록과 검색 모델을 오염시킵니다.
+      const FIND_ALL_HIGHLIGHTS = 'find-all-matches';
       const FIND_HIGHLIGHT = 'find-match';
       const supportsFindHighlight = typeof CSS !== 'undefined'
         && !!CSS.highlights
         && typeof Highlight === 'function';
 
-      const clearFindHighlight = () => {
+      const clearAllFindHighlights = () => {
+        if (!supportsFindHighlight) return;
+        CSS.highlights.delete(FIND_ALL_HIGHLIGHTS);
+      };
+
+      const clearCurrentFindHighlight = () => {
         if (!supportsFindHighlight) return;
         CSS.highlights.delete(FIND_HIGHLIGHT);
+      };
+
+      const clearFindHighlight = () => {
+        if (!supportsFindHighlight) return;
+        clearAllFindHighlights();
+        clearCurrentFindHighlight();
+      };
+
+      const showAllFindHighlights = (model, length, indexes, currentIndex) => {
+        if (!supportsFindHighlight) return false;
+        clearAllFindHighlights();
+        try {
+          const highlight = new Highlight();
+          indexes.forEach((index) => {
+            // 현재 결과는 별도의 진한 하이라이트로 표시합니다.
+            if (index === currentIndex) return;
+            const range = createRangeFromModel(model, index, length);
+            if (range) highlight.add(range);
+          });
+          if (!highlight.size) return true;
+          CSS.highlights.set(FIND_ALL_HIGHLIGHTS, highlight);
+          return true;
+        } catch (error) {
+          clearAllFindHighlights();
+          return false;
+        }
       };
 
       const showFindHighlight = (range) => {
         if (!supportsFindHighlight) return false;
         try {
+          clearCurrentFindHighlight();
           CSS.highlights.set(FIND_HIGHLIGHT, new Highlight(range.cloneRange()));
           return true;
         } catch (error) {
@@ -4986,12 +5038,14 @@ ${sanitizeHtml(editor.innerHTML)}
       findText.addEventListener('input', () => {
         // 찾을 내용이 바뀌면 이전 검색 위치는 의미가 없습니다.
         specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
+        clearFindHighlight();
         updateReplacementFormatPreview();
         scheduleFindCount();
       });
 
       matchCase.addEventListener('change', () => {
         specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
+        clearFindHighlight();
         updateFindCount();
       });
 

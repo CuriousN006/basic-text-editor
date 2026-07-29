@@ -1414,6 +1414,10 @@ await withPage({}, async (page) => {
   await page.fill('#findText', '사과');
   await page.waitForTimeout(260);
   r.check('X1 입력만으로 전체 개수 표시', await findCountText(page), '3개');
+  r.check('X1 입력만으로 모든 일치 하이라이트',
+    await page.evaluate(() => CSS.highlights.get('find-all-matches')?.size || 0), 3);
+  r.check('X1 현재 결과는 아직 없음',
+    await page.evaluate(() => CSS.highlights.has('find-match')), false);
 
   await page.keyboard.press('Enter');
   await page.waitForTimeout(260);
@@ -1425,6 +1429,19 @@ await withPage({}, async (page) => {
       const hl = CSS.highlights.get('find-match');
       return hl ? [...hl][0].toString() : null;
     }), '사과');
+  r.check('X2 나머지 일치도 계속 하이라이트',
+    await page.evaluate(() => CSS.highlights.get('find-all-matches')?.size || 0), 2);
+  r.check('X2 현재 결과는 더 진한 색',
+    await page.evaluate(() => {
+      for (const sheet of document.styleSheets) {
+        for (const rule of sheet.cssRules) {
+          if (rule.selectorText === '::highlight(find-match)') {
+            return rule.style.backgroundColor;
+          }
+        }
+      }
+      return '';
+    }), 'rgb(251, 146, 60)');
 
   // Enter는 입력칸에 포커스를 남기므로 계속 눌러 넘어갈 수 있다.
   r.check('X2 Enter 후에도 포커스는 입력칸',
@@ -1483,9 +1500,11 @@ await withPage({}, async (page) => {
     await page.evaluate(() => CSS.highlights.has('find-match')), true);
   await page.click('#editor');
   await page.keyboard.type('짧게');
-  await page.waitForTimeout(200);
+  await page.waitForTimeout(260);
   r.check('X3 편집하면 하이라이트 제거',
     await page.evaluate(() => CSS.highlights.has('find-match')), false);
+  r.check('X3 편집 뒤 전체 일치는 다시 표시',
+    await page.evaluate(() => CSS.highlights.get('find-all-matches')?.size || 0), 1);
 });
 
 // 본문을 고치면 검색 위치를 초기화하고 바뀐 일치 개수를 다시 센다.
@@ -1554,6 +1573,8 @@ await withPage({}, async (page) => {
   await page.waitForTimeout(200);
   r.check('X3 닫으면 하이라이트 제거',
     await page.evaluate(() => CSS.highlights.has('find-match')), false);
+  r.check('X3 닫으면 전체 하이라이트도 제거',
+    await page.evaluate(() => CSS.highlights.has('find-all-matches')), false);
 });
 
 // 본문을 편집하는 중에는 F3으로 이어서 찾는다.
