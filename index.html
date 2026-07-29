@@ -3294,6 +3294,38 @@ ${sanitizeHtml(editor.innerHTML)}
         .map((line) => line.map(clipboardSegmentText).join('\n'))
         .join('\n');
 
+      const MAX_FIND_PREFILL_LENGTH = 500;
+
+      // 선택 범위를 찾기 문법으로 바꿉니다. 검색 모델의 각 글자가 선택 범위 안에
+      // 완전히 들어오는지 DOM 위치로 확인하므로 문단 경계와 문단 안 줄바꿈을
+      // 정확히 구분합니다. 원문의 ^는 특수기호로 해석되지 않도록 ^^로 바꿉니다.
+      const findQueryFromSelection = (range) => {
+        try {
+          const markers = pickSpecialSearchMarkers(editor);
+          const model = buildSpecialSearchModel(editor, markers);
+          let query = '';
+
+          for (const item of model.items) {
+            const startPosition = range.comparePoint(item.start.node, item.start.offset);
+            const endPosition = range.comparePoint(item.end.node, item.end.offset);
+            if (startPosition === 0 && endPosition === 0) {
+              if (item.character === markers.paragraph) query += '^p';
+              else if (item.character === markers.line) query += '^l';
+              else if (item.character === '\t') query += '^t';
+              else if (item.character === '^') query += '^^';
+              else query += item.character;
+              if (query.length > MAX_FIND_PREFILL_LENGTH) return '';
+            } else if (query && startPosition > 0) {
+              break;
+            }
+          }
+
+          return query;
+        } catch (error) {
+          return '';
+        }
+      };
+
       const writeEditorClipboardData = (event) => {
         const selection = window.getSelection();
         if (!event.clipboardData || !selection || selection.isCollapsed || !selectionIsInsideEditor()) return false;
@@ -3345,16 +3377,20 @@ ${sanitizeHtml(editor.innerHTML)}
         hideSelectionToolbar();
         findbarReplaceMode = Boolean(withReplace);
         const selection = window.getSelection();
-        const selectedText = withReplace
-          && selection
+        const selectedRange = selection
           && !selection.isCollapsed
           && selectionIsInsideEditor()
-            ? selection.toString()
-            : '';
+          ? selection.getRangeAt(0)
+          : null;
+        const selectedQuery = selectedRange ? findQueryFromSelection(selectedRange) : '';
 
-        if (selectedText) {
-          savedRange = selection.getRangeAt(0).cloneRange();
-          findText.value = selectedText;
+        if (selectedQuery) {
+          savedRange = selectedRange.cloneRange();
+          findText.value = selectedQuery;
+          // 같은 검색어를 다른 곳에서 다시 선택한 경우에도 예전 위치에서 이어
+          // 찾지 않고 새 선택을 기준으로 처음부터 셉니다.
+          specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
+          clearFindHighlight();
         }
         if (withReplace) resetReplacementFormatStates();
         findbar.classList.add('open');
