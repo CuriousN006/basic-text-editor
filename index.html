@@ -854,6 +854,14 @@
       <span class="symbol-category-title">화살표</span>
       <div class="symbol-grid" data-symbol-group="arrows"></div>
     </div>
+    <div class="symbol-category">
+      <span class="symbol-category-title">위첨자 숫자</span>
+      <div class="symbol-grid" data-symbol-group="superscriptNumbers"></div>
+    </div>
+    <div class="symbol-category">
+      <span class="symbol-category-title">아래첨자 숫자</span>
+      <div class="symbol-grid" data-symbol-group="subscriptNumbers"></div>
+    </div>
   </section>
 
   <!-- 글자 수가 바뀔 때마다 읽어 주면 입력을 방해하므로 aria-live를 두지 않습니다. -->
@@ -1017,7 +1025,9 @@
       const SYMBOL_GROUPS = {
         bullets: ['•', '◦', '▪', '▫', '‣', '⁃', '·', '※', '◆', '◇', '★', '☆', '✓', '✔'],
         works: ['《', '》', '〈', '〉', '『', '』', '「', '」', '【', '】', '〔', '〕'],
-        arrows: ['←', '↑', '→', '↓', '↔', '↕', '↖', '↗', '↘', '↙', '⇐', '⇒', '⇔', '➜', '➝', '➞', '➡']
+        arrows: ['←', '↑', '→', '↓', '↔', '↕', '↖', '↗', '↘', '↙', '⇐', '⇒', '⇔', '➜', '➝', '➞', '➡'],
+        superscriptNumbers: ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'],
+        subscriptNumbers: ['₀', '₁', '₂', '₃', '₄', '₅', '₆', '₇', '₈', '₉']
       };
 
       const closeSymbolPicker = () => {
