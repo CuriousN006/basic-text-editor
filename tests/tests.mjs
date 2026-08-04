@@ -313,6 +313,45 @@ await withPage({}, async (page) => {
   r.check('R15 서식 경계 넘는 조사 교정(단일)', await page.evaluate(() => T.text()), '책을 먹다');
 });
 
+
+// 닫는 따옴표·괄호가 단어와 조사 사이에 있어도 조사를 함께 교정한다.
+await withPage({}, async (page) => {
+  const original = [
+    "'사과'를", '"사과"를', '‘사과’를', '“사과”를',
+    '(사과)를', '[사과]를', '{사과}를',
+    '〈사과〉를', '《사과》를', '「사과」를', '『사과』를',
+    '“《사과》”를'
+  ].join(' ');
+  const expected = [
+    "'책'을", '"책"을', '‘책’을', '“책”을',
+    '(책)을', '[책]을', '{책}을',
+    '〈책〉을', '《책》을', '「책」을', '『책』을',
+    '“《책》”을'
+  ].join(' ');
+  await page.evaluate((text) => T.set(`<p>${text}</p>`), original);
+  await openReplace(page, { find: '사과', replace: '책' });
+  await page.click('[data-find="replace-all"]');
+  await page.waitForTimeout(120);
+  r.check('R15 닫는 따옴표·괄호 뒤 조사 교정(모두)', await page.evaluate(() => T.text()), expected);
+});
+
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p><b>사과</b><i>”</i><u>를</u> 먹다</p>'));
+  await openReplace(page, { find: '사과', replace: '책' });
+  await page.evaluate(() => T.select('사과'));
+  await page.click('[data-find="replace"]');
+  await page.waitForTimeout(120);
+  r.check('R15 문장부호·서식 경계 뒤 조사 교정(단일)', await page.evaluate(() => T.text()), '책”을 먹다');
+});
+
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>사과,를 사과 를</p>'));
+  await openReplace(page, { find: '사과', replace: '책' });
+  await page.click('[data-find="replace-all"]');
+  await page.waitForTimeout(120);
+  r.check('R15 쉼표·공백 너머 조사는 교정하지 않음', await page.evaluate(() => T.text()), '책,를 책 를');
+});
+
 // 일치가 없으면 문서를 건드리지 않는다 (불필요한 실행 취소 단계도 만들지 않는다).
 await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<p>내용</p>'));
