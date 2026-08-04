@@ -784,7 +784,7 @@
     <div id="replaceRow" class="find-row">
       <input id="replaceText" class="find-input" type="text" placeholder="바꿀 내용" autocomplete="off" title="바꿀 서식을 적용한 결과가 이 칸에 그대로 표시됩니다.">
     </div>
-    <label id="particleOption" class="particle-option" title="바꾼 단어의 받침에 맞춰 바로 뒤의 조사를 교정합니다.">
+    <label id="particleOption" class="particle-option" title="바꾼 단어의 받침에 맞춰 바로 뒤 또는 닫는 따옴표·괄호 뒤의 조사를 교정합니다.">
       <input id="adjustParticles" type="checkbox" checked>
       조사 자동 교정
     </label>
@@ -4419,9 +4419,27 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
 
       const isParticleBoundary = (character) => !character || !/[\p{L}\p{N}]/u.test(character);
 
+      // 인용된 낱말 뒤의 조사는 닫는 문장부호 다음에 붙습니다.
+      // 쉼표·마침표·공백까지 건너뛰면 뒤 문장의 조사를 잘못 바꿀 수 있으므로
+      // 실제로 한 쌍을 닫는 따옴표와 괄호만 허용합니다.
+      const particleClosingMarks = new Set([
+        "'", '"', '’', '”', 'ʼ',
+        ')', ']', '}', '）', '］', '｝',
+        '〉', '》', '」', '』', '】', '〕', '〗', '〙', '〛',
+        '›', '»'
+      ]);
+
+      const particleClosingPrefix = (suffix) => {
+        let length = 0;
+        while (length < suffix.length && particleClosingMarks.has(suffix[length])) length += 1;
+        return suffix.slice(0, length);
+      };
+
       const getParticleAdjustment = (suffix, replacement) => {
         const ending = getHangulEnding(replacement);
         if (!ending) return null;
+        const prefix = particleClosingPrefix(suffix);
+        const particleSuffix = suffix.slice(prefix.length);
 
         for (const pair of particlePairs) {
           const desired = ending.hasFinal
@@ -4430,8 +4448,8 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           const currentForms = [...new Set([pair.consonant, pair.vowel, pair.rieul].filter(Boolean))]
             .sort((left, right) => right.length - left.length);
           for (const current of currentForms) {
-            if (suffix.startsWith(current) && isParticleBoundary(suffix[current.length])) {
-              return { current, desired };
+            if (particleSuffix.startsWith(current) && isParticleBoundary(particleSuffix[current.length])) {
+              return { prefix, current, desired };
             }
           }
         }
@@ -4678,8 +4696,8 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           if (withParticles && replacement !== null) {
             const adjustment = getParticleAdjustment(model.text.slice(end), replacement);
             if (adjustment && adjustment.current !== adjustment.desired) {
-              end += adjustment.current.length;
-              insertion += adjustment.desired;
+              end += adjustment.prefix.length + adjustment.current.length;
+              insertion += adjustment.prefix + adjustment.desired;
               particleCount += 1;
             }
           }
@@ -4778,9 +4796,12 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
             replaceText.value
           );
           if (adjustment && adjustment.current !== adjustment.desired) {
-            length += adjustment.current.length;
-            tokens = [...parsedReplacement.tokens, { type: 'text', value: adjustment.desired }];
-            insertedLength += adjustment.desired.length;
+            length += adjustment.prefix.length + adjustment.current.length;
+            tokens = [...parsedReplacement.tokens, {
+              type: 'text',
+              value: adjustment.prefix + adjustment.desired
+            }];
+            insertedLength += adjustment.prefix.length + adjustment.desired.length;
             particleAdjusted = true;
           }
         }
