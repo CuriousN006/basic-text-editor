@@ -556,9 +556,13 @@ await withPage({}, async (page) => {
   r.check('R27 기호 선택창 분류',
     await page.evaluate(() => [...document.querySelectorAll('[data-symbol-group]')]
       .map((group) => group.dataset.symbolGroup)),
-    ['bullets', 'works', 'arrows']);
+    ['bullets', 'works', 'arrows', 'superscriptNumbers', 'subscriptNumbers']);
   r.check('R27 작품명 괄호와 화살표 제공',
     await page.evaluate(() => ['《', '》', '〈', '〉', '『', '』', '「', '」', '←', '→', '⇒']
+      .every((symbol) => document.querySelector(`[data-symbol="${symbol}"]`))),
+    true);
+  r.check('R27 위첨자·아래첨자 숫자 제공',
+    await page.evaluate(() => [...'⁰¹²³⁴⁵⁶⁷⁸⁹₀₁₂₃₄₅₆₇₈₉']
       .every((symbol) => document.querySelector(`[data-symbol="${symbol}"]`))),
     true);
 
@@ -575,6 +579,23 @@ await withPage({}, async (page) => {
   await page.keyboard.press('Control+y');
   r.check('R27 문자 삽입 다시 실행',
     await page.evaluate(() => T.html()), '<p>앞•뒤</p>');
+
+  await page.evaluate(() => {
+    T.set('<p>앞뒤</p>');
+    const text = T.ed().querySelector('p').firstChild;
+    const range = document.createRange();
+    range.setStart(text, 1);
+    range.collapse(true);
+    const selection = getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  });
+  await page.click('[data-action="symbol"]');
+  await page.click('[data-symbol="²"]');
+  await page.click('[data-action="symbol"]');
+  await page.click('[data-symbol="₂"]');
+  r.check('R27 위첨자·아래첨자 숫자는 일반 문자로 삽입',
+    await page.evaluate(() => T.html()), '<p>앞²₂뒤</p>');
 });
 
 await withPage({}, async (page) => {
