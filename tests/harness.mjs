@@ -155,11 +155,18 @@ export async function openEditor(browser, base, opts = {}) {
 }
 
 // 찾기/바꾸기 창을 열고 값을 채운다. formats: { bold: 'remove' } 등
-export async function openReplace(page, { find = '', replace = '', formats = {}, particles = true } = {}) {
+export async function openReplace(page, {
+  find = '',
+  replace = '',
+  formats = {},
+  particles = true,
+  scope = 'all'
+} = {}) {
   await page.click('[data-action="replace"]');
   if (find !== null) await page.fill('#findText', find);
   await page.fill('#replaceText', replace);
   if (!particles) await page.uncheck('#adjustParticles');
+  if (scope !== 'all') await page.selectOption('#replaceScope', scope);
   const order = ['none', 'apply', 'remove'];
   for (const [name, want] of Object.entries(formats)) {
     const sel = `[data-replace-format="${name}"]`;

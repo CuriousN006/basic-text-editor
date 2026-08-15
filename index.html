@@ -616,6 +616,32 @@
       accent-color: var(--accent);
     }
 
+    .replace-scope {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 34px;
+      margin: -1px 0 8px;
+      padding: 0 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .replace-scope select {
+      min-height: 30px;
+      padding: 4px 28px 4px 8px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel);
+      color: var(--text);
+      cursor: pointer;
+    }
+
+    .replace-scope select:focus-visible {
+      border-color: var(--accent);
+      outline: none;
+    }
+
     .find-specials {
       margin: 1px 0 8px;
       color: var(--muted);
@@ -792,6 +818,14 @@
       <input id="matchCase" type="checkbox" checked>
       대소문자 구분
     </label>
+    <label id="replaceScopeOption" class="replace-scope" title="전체는 문서 전체, 아래쪽과 위쪽은 현재 커서 또는 찾은 위치를 기준으로 바꿉니다.">
+      <span>바꾸기 범위</span>
+      <select id="replaceScope">
+        <option value="all" selected>전체</option>
+        <option value="down">아래쪽</option>
+        <option value="up">위쪽</option>
+      </select>
+    </label>
     <div id="replaceFormats" class="replace-formats" aria-label="바꿀 내용 서식">
       <span class="replace-formats-label">바꿀 서식</span>
       <button class="mini-format-button" type="button" data-replace-format="bold" data-format-state="none"><b>B</b></button>
@@ -900,6 +934,8 @@
       const matchCase = document.getElementById('matchCase');
       const replaceText = document.getElementById('replaceText');
       const particleOption = document.getElementById('particleOption');
+      const replaceScopeOption = document.getElementById('replaceScopeOption');
+      const replaceScope = document.getElementById('replaceScope');
       const replaceRow = document.getElementById('replaceRow');
       const replaceFormats = document.getElementById('replaceFormats');
       const replaceFormatButtons = [...document.querySelectorAll('[data-replace-format]')];
@@ -3594,6 +3630,8 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         findbar.classList.add('open');
         replaceRow.style.display = withReplace ? 'grid' : 'none';
         particleOption.style.display = withReplace ? 'flex' : 'none';
+        replaceScopeOption.style.display = withReplace ? 'flex' : 'none';
+        if (withReplace) replaceScope.value = 'all';
         replaceFormats.style.display = withReplace ? 'flex' : 'none';
         replaceFormatHint.style.display = withReplace ? 'block' : 'none';
         // 찾기 전용(Ctrl+F)에는 바꿀 내용 칸이 없으므로 바꾸기 버튼도 둘 자리가
@@ -4703,15 +4741,17 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           }
           let end = start + query.length;
           let insertion = replacement;
+          let particleAdjusted = false;
           if (withParticles && replacement !== null) {
             const adjustment = getParticleAdjustment(model.text.slice(end), replacement);
             if (adjustment && adjustment.current !== adjustment.desired) {
               end += adjustment.prefix.length + adjustment.current.length;
               insertion += adjustment.prefix + adjustment.desired;
               particleCount += 1;
+              particleAdjusted = true;
             }
           }
-          matches.push({ start, length: end - start, insertion });
+          matches.push({ start, length: end - start, insertion, particleAdjusted });
           cursor = end;
         }
         return { matches, particleCount, truncated };
@@ -4732,14 +4772,79 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         return count;
       };
 
-      const replaceAllSpecial = (parsedQuery, parsedReplacement, settings, formattingOnly, markers) => {
+      // 아래쪽·위쪽 범위는 바꾸기 창을 열기 전 커서 또는 현재 찾은 결과를
+      // 기준으로 합니다. 입력칸으로 포커스가 옮겨져도 savedRange에는 본문 위치가
+      // 남아 있으므로 Word처럼 현재 위치를 기준으로 일부만 일괄 치환할 수 있습니다.
+      const modelIndexAtRangeStart = (model, range) => {
+        if (!range || !editor.contains(range.startContainer)) return -1;
+        const anchor = range.cloneRange();
+        anchor.collapse(true);
+        for (let index = 0; index < model.items.length; index += 1) {
+          try {
+            if (anchor.comparePoint(
+              model.items[index].start.node,
+              model.items[index].start.offset
+            ) >= 0) return index;
+          } catch (error) {
+            return -1;
+          }
+        }
+        return model.items.length;
+      };
+
+      const replacementScopeAnchor = (model, stateKey = '') => {
+        if (replaceScope.value === 'all') return { index: 0, includeAtAnchor: false };
+        if (stateKey
+          && specialSearchState.query === stateKey
+          && specialSearchState.index >= 0) {
+          return { index: specialSearchState.index, includeAtAnchor: true };
+        }
+        const index = modelIndexAtRangeStart(model, savedRange);
+        if (index >= 0) return { index, includeAtAnchor: false };
+        return {
+          index: replaceScope.value === 'up' ? model.items.length : 0,
+          includeAtAnchor: false
+        };
+      };
+
+      const matchesInReplacementScope = (matches, anchor) => {
+        if (replaceScope.value === 'all') return matches;
+        if (replaceScope.value === 'down') {
+          return matches.filter((match) => match.start >= anchor.index);
+        }
+        return matches.filter((match) => (
+          match.start < anchor.index || (anchor.includeAtAnchor && match.start === anchor.index)
+        ));
+      };
+
+      const replacementScopeRange = (model, anchor) => {
+        const start = replaceScope.value === 'down' ? anchor.index : 0;
+        const end = replaceScope.value === 'down' ? model.items.length : anchor.index;
+        return end > start ? createRangeFromModel(model, start, end - start) : null;
+      };
+
+      const replacementScopeLabel = () => ({
+        all: '문서 전체',
+        down: '현재 위치 아래쪽',
+        up: '현재 위치 위쪽'
+      }[replaceScope.value] || '문서 전체');
+
+      const replaceAllSpecial = (
+        parsedQuery,
+        parsedReplacement,
+        settings,
+        formattingOnly,
+        markers,
+        anchor
+      ) => {
         if (!parsedQuery.text) return { count: 0, truncated: false };
         let truncated = false;
         const count = runBulkEdit((root) => {
           const model = buildSpecialSearchModel(root, markers);
           const collected = collectMatches(model, parsedQuery.text);
           truncated = collected.truncated;
-          return applyMatchesDescending(model, collected.matches, (range) => {
+          const matches = matchesInReplacementScope(collected.matches, anchor);
+          return applyMatchesDescending(model, matches, (range) => {
             if (formattingOnly) applyFormatSettingsToRange(range, root, settings);
             else replaceRangeWithTokens(range, parsedReplacement.tokens, root, settings);
           });
@@ -4852,14 +4957,20 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
             showToast('찾을 내용을 입력하거나 바꿀 서식을 지정하세요.');
             return;
           }
+          const liveModel = buildSpecialSearchModel(editor);
+          const anchor = replacementScopeAnchor(liveModel);
           const changed = runBulkEdit((root) => {
-            const range = root.ownerDocument.createRange();
-            range.selectNodeContents(root);
+            const model = buildSpecialSearchModel(root);
+            const range = replaceScope.value === 'all'
+              ? root.ownerDocument.createRange()
+              : replacementScopeRange(model, anchor);
+            if (!range) return 0;
+            if (replaceScope.value === 'all') range.selectNodeContents(root);
             applyFormatSettingsToRange(range, root, settings);
             return 1;
           });
           showToast(changed
-            ? '문서 전체의 서식을 지정한 대로 변경했습니다.'
+            ? `${replacementScopeLabel()}의 서식을 지정한 대로 변경했습니다.`
             : '변경할 내용이 없습니다.');
           return;
         }
@@ -4868,6 +4979,9 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         const parsedQuery = parseSpecialCodes(query, markers);
         const parsedReplacement = parseSpecialCodes(replaceText.value, markers);
         const formattingOnly = !replaceText.value && hasReplacementFormatSettings(settings);
+        const stateKey = parsedQuery.usesCodes ? `special:${query}` : `literal:${query}`;
+        const liveModel = buildSpecialSearchModel(editor, markers);
+        const anchor = replacementScopeAnchor(liveModel, stateKey);
 
         if (parsedQuery.usesCodes || parsedReplacement.usesCodes) {
           const { count, truncated } = replaceAllSpecial(
@@ -4875,7 +4989,8 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
             parsedReplacement,
             settings,
             formattingOnly,
-            markers
+            markers,
+            anchor
           );
           showToast((formattingOnly
             ? `${count}개 항목의 서식을 변경했습니다.`
@@ -4892,9 +5007,10 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         const count = runBulkEdit((root) => {
           const model = buildSpecialSearchModel(root, markers);
           const collected = collectMatches(model, query, { replacement, withParticles });
-          particleCount = collected.particleCount;
           truncated = collected.truncated;
-          return applyMatchesDescending(model, collected.matches, (range, match) => {
+          const matches = matchesInReplacementScope(collected.matches, anchor);
+          particleCount = matches.filter((match) => match.particleAdjusted).length;
+          return applyMatchesDescending(model, matches, (range, match) => {
             if (formattingOnly) applyFormatSettingsToRange(range, root, settings);
             else replaceRangeWithTokens(range, [{ type: 'text', value: match.insertion }], root, settings);
           });

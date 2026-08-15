@@ -1922,6 +1922,62 @@ await withPage({}, async (page) => {
     await page.evaluate(() => T.text()), '고양이 고양이 고양이');
 });
 
+// 바꾸기 범위의 기본값은 문서 전체다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>사과 사과</p>'));
+  await openReplace(page, { find: '사과', replace: '배', particles: false });
+  r.check('X14 범위 기본값은 전체', await page.inputValue('#replaceScope'), 'all');
+  await page.click('[data-find="replace-all"]');
+  await page.waitForTimeout(250);
+  r.check('X14 기본 범위는 모두 바꿈', await page.evaluate(() => T.text()), '배 배');
+});
+
+// 아래쪽은 바꾸기 창을 열 때의 커서부터 문서 끝까지만 바꾼다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => {
+    T.set('<p>사과 첫째</p><p>사과 둘째</p><p>사과 셋째</p>');
+    T.caretIn(1, false);
+  });
+  await openReplace(page, {
+    find: '사과', replace: '배', particles: false, scope: 'down'
+  });
+  await page.click('[data-find="replace-all"]');
+  await page.waitForTimeout(250);
+  r.check('X14 아래쪽 범위', await page.evaluate(() => T.text()), '사과 첫째\n\n배 둘째\n\n배 셋째');
+  await page.keyboard.press('Control+z');
+  r.check('X14 아래쪽 바꾸기도 한 번에 취소',
+    await page.evaluate(() => T.text()), '사과 첫째\n\n사과 둘째\n\n사과 셋째');
+});
+
+// 위쪽은 현재 커서 앞에서 문서 시작까지 바꾼다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => {
+    T.set('<p>사과 첫째</p><p>사과 둘째</p><p>사과 셋째</p>');
+    T.caretIn(2, false);
+  });
+  await openReplace(page, {
+    find: '사과', replace: '배', particles: false, scope: 'up'
+  });
+  await page.click('[data-find="replace-all"]');
+  await page.waitForTimeout(250);
+  r.check('X14 위쪽 범위', await page.evaluate(() => T.text()), '배 첫째\n\n배 둘째\n\n사과 셋째');
+});
+
+// 특수기호 치환도 같은 방향 범위를 따른다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => {
+    T.set('<p>하나</p><p>둘</p><p>셋</p>');
+    T.caretIn(1, false);
+  });
+  await openReplace(page, {
+    find: '^p', replace: '^l', particles: false, scope: 'down'
+  });
+  await page.click('[data-find="replace-all"]');
+  await page.waitForTimeout(250);
+  r.check('X14 특수기호 아래쪽 범위', await page.evaluate(() => T.text()), '하나\n\n둘\n셋');
+  r.check('X14 앞쪽 문단 경계는 유지', await page.evaluate(() => T.blocks()), 'P P');
+});
+
 // 대소문자를 구분하면 정확히 일치하는 것만 바꾼다.
 await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<p>Cat cat CAT</p>'));
