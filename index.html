@@ -124,8 +124,116 @@
 
     .workspace {
       flex: 1 1 auto;
+      min-width: 0;
       overflow: auto;
       padding: 28px 16px 80px;
+    }
+
+    .editor-shell {
+      display: flex;
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+
+    .find-results-panel {
+      display: none;
+      flex: 0 0 310px;
+      min-width: 0;
+      overflow: hidden;
+      border-right: 1px solid var(--line);
+      background: var(--panel);
+      box-shadow: 4px 0 16px rgba(32, 33, 36, .06);
+      z-index: 14;
+    }
+
+    .find-results-panel.open {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .find-results-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 46px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--line);
+      font-weight: 700;
+    }
+
+    .find-results-summary {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 400;
+      white-space: nowrap;
+    }
+
+    .find-results-list {
+      flex: 1 1 auto;
+      overflow: auto;
+      padding: 8px;
+    }
+
+    .find-result-item {
+      display: block;
+      width: 100%;
+      margin: 0 0 6px;
+      padding: 9px 10px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--text);
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .find-result-item:hover,
+    .find-result-item:focus-visible {
+      border-color: var(--line);
+      background: #f8fafc;
+      outline: none;
+    }
+
+    .find-result-item[aria-current="true"] {
+      border-color: #93c5fd;
+      background: var(--accent-soft);
+    }
+
+    .find-result-location {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .find-result-sentence {
+      display: block;
+      overflow: hidden;
+      font-size: 13px;
+      line-height: 1.5;
+      text-overflow: ellipsis;
+    }
+
+    .find-result-sentence mark {
+      padding: 0 1px;
+      border-radius: 2px;
+      background: #fed7aa;
+      color: inherit;
+    }
+
+    .find-results-empty,
+    .find-results-limit {
+      padding: 18px 10px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+      text-align: center;
+    }
+
+    .find-results-limit {
+      padding: 10px;
+      border-top: 1px solid var(--line);
     }
 
     .page {
@@ -727,7 +835,17 @@
 
     @media (max-width: 720px) {
       .brand { width: 100%; }
-      .workspace { padding: 0 0 70px; }
+      .editor-shell { flex-direction: column; }
+      .find-results-panel {
+        order: 2;
+        flex: 0 0 min(34vh, 260px);
+        width: 100%;
+        border-top: 1px solid var(--line);
+        border-right: 0;
+        box-shadow: 0 -4px 16px rgba(32, 33, 36, .06);
+        z-index: 19;
+      }
+      .workspace { order: 1; padding: 0 0 70px; }
       .page {
         min-height: 100%;
         padding: 40px 24px 90px;
@@ -738,7 +856,8 @@
 
     @media print {
       body { display: block; overflow: visible; background: white; }
-      .topbar, .findbar, .selection-toolbar, .table-picker, .symbol-picker, .statusbar, .toast { display: none !important; }
+      .topbar, .findbar, .find-results-panel, .selection-toolbar, .table-picker, .symbol-picker, .statusbar, .toast { display: none !important; }
+      .editor-shell { display: block; }
       .workspace { overflow: visible; padding: 0; }
       .page { width: auto; min-height: auto; padding: 0; box-shadow: none; }
       #editor { min-height: auto; }
@@ -795,11 +914,21 @@
     </div>
   </header>
 
-  <main class="workspace">
-    <article class="page">
-      <div id="editor" contenteditable="true" spellcheck="true" aria-label="문서 편집 영역"><p><br></p></div>
-    </article>
-  </main>
+  <div class="editor-shell">
+    <aside id="findResultsPanel" class="find-results-panel" aria-label="검색 결과" aria-hidden="true">
+      <div class="find-results-header">
+        <span>검색 결과</span>
+        <span id="findResultsSummary" class="find-results-summary" aria-live="polite"></span>
+      </div>
+      <div id="findResultsList" class="find-results-list" role="list"></div>
+      <div id="findResultsLimit" class="find-results-limit" hidden></div>
+    </aside>
+    <main class="workspace">
+      <article class="page">
+        <div id="editor" contenteditable="true" spellcheck="true" aria-label="문서 편집 영역"><p><br></p></div>
+      </article>
+    </main>
+  </div>
 
   <section id="findbar" class="findbar" aria-label="찾기 및 바꾸기">
     <div class="find-row has-count">
@@ -931,6 +1060,10 @@
       const findbar = document.getElementById('findbar');
       const findText = document.getElementById('findText');
       const findCount = document.getElementById('findCount');
+      const findResultsPanel = document.getElementById('findResultsPanel');
+      const findResultsSummary = document.getElementById('findResultsSummary');
+      const findResultsList = document.getElementById('findResultsList');
+      const findResultsLimit = document.getElementById('findResultsLimit');
       const matchCase = document.getElementById('matchCase');
       const replaceText = document.getElementById('replaceText');
       const particleOption = document.getElementById('particleOption');
@@ -3628,6 +3761,8 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         }
         if (withReplace) resetReplacementFormatStates();
         findbar.classList.add('open');
+        findResultsPanel.classList.add('open');
+        findResultsPanel.setAttribute('aria-hidden', 'false');
         replaceRow.style.display = withReplace ? 'grid' : 'none';
         particleOption.style.display = withReplace ? 'flex' : 'none';
         replaceScopeOption.style.display = withReplace ? 'flex' : 'none';
@@ -3648,6 +3783,8 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
 
       const closeFindbar = () => {
         findbar.classList.remove('open');
+        findResultsPanel.classList.remove('open');
+        findResultsPanel.setAttribute('aria-hidden', 'true');
         cancelScheduledFindCount();
         clearFindHighlight();
         findCount.textContent = '';
@@ -4210,6 +4347,93 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         return { total: indexes.length, ordinal, indexes };
       };
 
+      const FIND_RESULTS_PANEL_LIMIT = 200;
+
+      const displaySearchContext = (value, markers) => String(value)
+        .replaceAll(markers.paragraph, ' ¶ ')
+        .replaceAll(markers.line, ' ↵ ')
+        .replace(/\s+/g, ' ');
+
+      // 검색어가 들어 있는 문장을 우선 보여 주고, 문장부호가 없는 긴 문단은
+      // 검색어 앞뒤의 일정 길이를 잘라 문맥을 제공합니다.
+      const searchResultContext = (text, index, length, markers) => {
+        const isBoundary = (character) => (
+          character === markers.paragraph
+          || character === markers.line
+          || /[.!?。！？]/.test(character || '')
+        );
+        const startLimit = Math.max(0, index - 72);
+        const endLimit = Math.min(text.length, index + length + 96);
+        let start = index;
+        let end = index + length;
+
+        while (start > startLimit && !isBoundary(text[start - 1])) start -= 1;
+        while (end < endLimit && !isBoundary(text[end])) end += 1;
+        if (end < text.length && /[.!?。！？]/.test(text[end])) end += 1;
+
+        return {
+          before: `${start > 0 && !isBoundary(text[start - 1]) ? '…' : ''}${displaySearchContext(text.slice(start, index), markers).trimStart()}`,
+          match: displaySearchContext(text.slice(index, index + length), markers),
+          after: `${displaySearchContext(text.slice(index + length, end), markers).trimEnd()}${end < text.length && !isBoundary(text[end - 1]) ? '…' : ''}`,
+          paragraph: text.slice(0, index).split(markers.paragraph).length
+        };
+      };
+
+      const renderFindResults = (model, needle, indexes, currentIndex, markers) => {
+        findResultsList.replaceChildren();
+        findResultsLimit.hidden = true;
+        findResultsLimit.textContent = '';
+
+        if (!needle) {
+          findResultsSummary.textContent = '';
+          const empty = document.createElement('div');
+          empty.className = 'find-results-empty';
+          empty.textContent = '찾을 내용을 입력하면 문장별 검색 결과가 여기에 표시됩니다.';
+          findResultsList.appendChild(empty);
+          return;
+        }
+
+        findResultsSummary.textContent = indexes.length >= MATCH_LIMIT
+          ? `${MATCH_LIMIT.toLocaleString()}+`
+          : `${indexes.length.toLocaleString()}개`;
+        if (!indexes.length) {
+          const empty = document.createElement('div');
+          empty.className = 'find-results-empty';
+          empty.textContent = '일치하는 문장이 없습니다.';
+          findResultsList.appendChild(empty);
+          return;
+        }
+
+        indexes.slice(0, FIND_RESULTS_PANEL_LIMIT).forEach((index, ordinal) => {
+          const context = searchResultContext(model.text, index, needle.length, markers);
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'find-result-item';
+          button.dataset.findResultIndex = String(index);
+          button.setAttribute('role', 'listitem');
+          button.setAttribute('aria-current', index === currentIndex ? 'true' : 'false');
+          button.setAttribute('aria-label', `${ordinal + 1}번째 검색 결과, ${context.paragraph}번째 문단`);
+
+          const location = document.createElement('span');
+          location.className = 'find-result-location';
+          location.textContent = `${ordinal + 1}번째 · ${context.paragraph}번째 문단`;
+          const sentence = document.createElement('span');
+          sentence.className = 'find-result-sentence';
+          if (context.before) sentence.appendChild(document.createTextNode(context.before));
+          const mark = document.createElement('mark');
+          mark.textContent = context.match || findText.value;
+          sentence.appendChild(mark);
+          if (context.after) sentence.appendChild(document.createTextNode(context.after));
+          button.append(location, sentence);
+          findResultsList.appendChild(button);
+        });
+
+        if (indexes.length > FIND_RESULTS_PANEL_LIMIT) {
+          findResultsLimit.hidden = false;
+          findResultsLimit.textContent = `앞의 ${FIND_RESULTS_PANEL_LIMIT.toLocaleString()}개 결과만 표시합니다. 다음·이전 찾기로 나머지 결과도 이동할 수 있습니다.`;
+        }
+      };
+
       // 일치 개수 표시를 갱신합니다. 찾을 내용이 비면 아무것도 보이지 않습니다.
       const updateFindCountNow = () => {
         const query = findText.value;
@@ -4217,6 +4441,10 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           clearFindHighlight();
           findCount.textContent = '';
           findCount.classList.remove('is-empty');
+          if (findbar.classList.contains('open')) {
+            const markers = pickSpecialSearchMarkers(editor, [replaceText.value]);
+            renderFindResults(buildSpecialSearchModel(editor, markers), '', [], -1, markers);
+          }
           return;
         }
         let total = 0;
@@ -4231,6 +4459,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
             const current = specialSearchState.query === stateKey ? specialSearchState.index : -1;
             ({ total, ordinal, indexes } = countSearchMatches(model.text, parsedQuery.text, current));
             showAllFindHighlights(model, parsedQuery.text.length, indexes, current);
+            renderFindResults(model, parsedQuery.text, indexes, current, markers);
             if (current >= 0) {
               const currentRange = createRangeFromModel(model, current, parsedQuery.text.length);
               if (currentRange) showFindHighlight(currentRange);
@@ -4240,12 +4469,18 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
             }
           } else {
             clearFindHighlight();
+            renderFindResults(buildSpecialSearchModel(editor, markers), '', [], -1, markers);
           }
         } catch (error) {
           // 표식을 만들 수 없는 극단적인 문서에서는 개수 표시를 생략합니다.
           clearFindHighlight();
           findCount.textContent = '';
           findCount.classList.remove('is-empty');
+          const empty = document.createElement('div');
+          empty.className = 'find-results-empty';
+          empty.textContent = '검색 결과를 표시하지 못했습니다.';
+          findResultsList.replaceChildren(empty);
+          findResultsSummary.textContent = '';
           return;
         }
         findCount.classList.toggle('is-empty', total === 0);
@@ -4360,6 +4595,37 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           ? range.startContainer
           : range.startContainer.parentElement;
         anchor?.scrollIntoView({ block: 'center', inline: 'nearest' });
+      };
+
+      const goToFindResult = (index) => {
+        const query = findText.value;
+        if (!query || !Number.isInteger(index) || index < 0) return false;
+        const markers = pickSpecialSearchMarkers(editor, [query, replaceText.value]);
+        const parsedQuery = parseSpecialCodes(query, markers);
+        const needle = parsedQuery.text;
+        if (!needle) return false;
+        const model = buildSpecialSearchModel(editor, markers);
+        if (searchIndexOf(model.text, needle, index) !== index) {
+          updateFindCount();
+          return false;
+        }
+        const range = createRangeFromModel(model, index, needle.length);
+        if (!range) return false;
+
+        if (showFindHighlight(range)) scrollFindRangeIntoView(range);
+        else {
+          clearFindHighlight();
+          selectEditorRange(range);
+        }
+        specialSearchState = {
+          query: parsedQuery.usesCodes ? `special:${query}` : `literal:${query}`,
+          nextIndex: index + Math.max(1, needle.length),
+          index,
+          range: range.cloneRange()
+        };
+        updateFindCount();
+        findResultsList.querySelector(`[data-find-result-index="${index}"]`)?.focus();
+        return true;
       };
 
       // 앞뒤 찾기를 한 함수로 처리합니다. 특수기호(^p·^l)가 섞인 검색도 모델
@@ -5383,6 +5649,12 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         });
       });
 
+      findResultsList.addEventListener('click', (event) => {
+        const button = event.target.closest('[data-find-result-index]');
+        if (!button) return;
+        goToFindResult(Number(button.dataset.findResultIndex));
+      });
+
       // Enter는 입력칸에 포커스를 남기므로 계속 눌러 다음 일치로 넘어갈 수 있습니다.
       // 찾은 자리에서 바로 고치려면 Tab이나 클릭으로 본문에 들어가거나 F3을 씁니다.
       findText.addEventListener('keydown', (event) => {
@@ -5433,6 +5705,11 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           event.preventDefault();
           closeSymbolPicker();
           focusEditor();
+          return;
+        }
+        if (event.key === 'Escape' && findbar.classList.contains('open')) {
+          event.preventDefault();
+          closeFindbar();
           return;
         }
         // 찾기는 일치 구간을 편집기에서 선택하므로 포커스가 본문으로 갑니다.

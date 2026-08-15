@@ -1688,6 +1688,49 @@ await withPage({}, async (page) => {
     await page.evaluate(() => CSS.highlights.has('find-match')), true);
 });
 
+// 검색 결과 사이드바는 일치 항목이 들어 있는 문장을 보여 주고 클릭 이동을 지원한다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set(
+    '<p>첫 문장에는 사과가 있습니다.</p>'
+    + '<p>중간 문장입니다.</p>'.repeat(100)
+    + '<p>마지막 사과 문장입니다.</p>'
+  ));
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', '사과');
+  await page.waitForTimeout(260);
+  r.check('X3 검색 결과 사이드바 열림',
+    await page.getAttribute('#findResultsPanel', 'aria-hidden'), 'false');
+  r.check('X3 문장별 결과 두 개',
+    await page.locator('.find-result-item').count(), 2);
+  r.check('X3 검색 문장 문맥 표시',
+    await page.locator('.find-result-sentence').allTextContents(),
+    ['첫 문장에는 사과가 있습니다.', '마지막 사과 문장입니다.']);
+
+  await page.locator('.find-result-item').nth(1).click();
+  await page.waitForTimeout(150);
+  r.check('X3 사이드바 클릭으로 두 번째 결과 이동', await findCountText(page), '2 / 2');
+  r.check('X3 클릭한 결과를 현재 항목으로 표시',
+    await page.locator('.find-result-item').nth(1).getAttribute('aria-current'), 'true');
+  r.check('X3 클릭한 문장으로 본문 스크롤',
+    await page.evaluate(() => document.querySelector('.workspace').scrollTop > 0), true);
+  r.check('X3 클릭한 글자를 현재 하이라이트',
+    await page.evaluate(() => [...CSS.highlights.get('find-match')][0].toString()), '사과');
+
+  await page.keyboard.press('Escape');
+  r.check('X3 사이드바에서 Escape로 닫기',
+    await page.getAttribute('#findResultsPanel', 'aria-hidden'), 'true');
+});
+
+// 일치가 없을 때도 빈 결과 안내를 보여 준다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<p>사과 배 포도</p>'));
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', '수박');
+  await page.waitForTimeout(260);
+  r.check('X3 사이드바 빈 결과 안내',
+    await page.locator('.find-results-empty').textContent(), '일치하는 문장이 없습니다.');
+});
+
 // Enter로 찾은 뒤에는 선택 영역이 없다. 그 상태에서 바꾸기를 눌러도
 // 하이라이트된 그 자리를 바꿔야 한다.
 await withPage({}, async (page) => {
