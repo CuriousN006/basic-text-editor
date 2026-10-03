@@ -31,7 +31,7 @@ export async function launch() {
 
 // 페이지를 열고 편집기 조작용 헬퍼를 주입한다.
 export async function openEditor(browser, base, opts = {}) {
-  const context = await browser.newContext({ acceptDownloads: true });
+  const context = await browser.newContext({ acceptDownloads: true, hasTouch: Boolean(opts.hasTouch) });
   // 실제 클립보드를 통한 붙여넣기 검증에 필요합니다.
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
   const page = await context.newPage();

@@ -307,6 +307,7 @@
       border-collapse: collapse;
       table-layout: fixed;
     }
+    #editor tr { height: 36px; }
     #editor th,
     #editor td {
       min-width: 48px;
@@ -410,6 +411,73 @@
     }
 
     .selection-toolbar.visible { display: flex; }
+
+    .table-controls {
+      position: fixed;
+      inset: 0;
+      z-index: 34;
+      pointer-events: none;
+    }
+
+    .table-controls [hidden] { display: none; }
+
+    .table-edit-toolbar {
+      position: fixed;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 4px;
+      max-width: calc(100vw - 24px);
+      padding: 6px 8px;
+      border: 1px solid #c9d1dc;
+      border-radius: 10px;
+      background: #fff;
+      box-shadow: 0 5px 20px rgba(32,33,36,.14);
+      pointer-events: auto;
+      font-size: 12px;
+    }
+
+    .table-edit-label { padding: 0 5px; color: var(--muted); white-space: nowrap; }
+    .table-edit-toolbar button {
+      min-height: 30px;
+      padding: 4px 7px;
+      border: 0;
+      border-radius: 5px;
+      background: #f1f5f9;
+      color: var(--text);
+      font: inherit;
+      cursor: pointer;
+    }
+    .table-edit-toolbar button:hover { background: #dbeafe; }
+    .table-edit-toolbar .danger { color: var(--danger); background: #fff1f0; }
+    .table-edit-toolbar .danger:hover { background: #fee2e2; }
+    .table-controls button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    .table-axis-handle, .table-insert-button {
+      position: fixed;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      background: #fff;
+      color: #64748b;
+      font: 12px "Malgun Gothic", sans-serif;
+      box-shadow: 0 1px 4px rgba(32,33,36,.08);
+      pointer-events: auto;
+      cursor: pointer;
+      touch-action: none;
+      user-select: none;
+    }
+    .table-axis-handle[aria-pressed="true"] { background: #dbeafe; border-color: #2563eb; color: #1d4ed8; }
+    .table-axis-handle:hover { background: #eff6ff; border-color: #60a5fa; }
+    .table-insert-button { border-radius: 50%; background: #2563eb; color: #fff; border-color: #2563eb; font-size: 20px; }
+    .table-insert-button:hover { background: #1d4ed8; }
+    .table-cell-selection { position: fixed; background: rgba(37,99,235,.13); border: 1px solid rgba(37,99,235,.5); }
+    .table-insert-guide { position: fixed; background: #2563eb; }
 
     .table-picker {
       display: none;
@@ -978,6 +1046,23 @@
       <button class="toolbar-button" type="button" data-find="replace-all">모두 바꾸기</button>
     </div>
   </section>
+
+  <div id="tableControls" class="table-controls" hidden>
+    <div id="tableSelectionOverlay" aria-hidden="true"></div>
+    <div id="tableAxisHandles" role="group" aria-label="표 행과 열 선택"></div>
+    <div id="tableInsertGuide" class="table-insert-guide" hidden aria-hidden="true"></div>
+    <button id="tableAddRow" class="table-insert-button" type="button" data-table-edit="insert-row" aria-label="행 추가" title="이 위치에 행 추가">+</button>
+    <button id="tableAddColumn" class="table-insert-button" type="button" data-table-edit="insert-column" aria-label="열 추가" title="이 위치에 열 추가">+</button>
+    <div id="tableEditToolbar" class="table-edit-toolbar" role="toolbar" aria-label="표 행과 열 편집">
+      <span id="tableEditLabel" class="table-edit-label" aria-live="polite"></span>
+      <button type="button" data-table-edit="row-before" title="선택한 위치 위에 행 추가">↑ 행 추가</button>
+      <button type="button" data-table-edit="row-after" title="선택한 위치 아래에 행 추가">↓ 행 추가</button>
+      <button type="button" data-table-edit="column-before" title="선택한 위치 왼쪽에 열 추가">← 열 추가</button>
+      <button type="button" data-table-edit="column-after" title="선택한 위치 오른쪽에 열 추가">→ 열 추가</button>
+      <button type="button" data-table-edit="delete-row" class="danger">행 삭제</button>
+      <button type="button" data-table-edit="delete-column" class="danger">열 삭제</button>
+    </div>
+  </div>
 
   <section id="tablePicker" class="table-picker" role="dialog" aria-label="표 삽입" aria-hidden="true">
     <div class="table-picker-header">
@@ -1556,6 +1641,375 @@
         return !range.toString()
           && !remainder.querySelector?.('img,hr,table,iframe,video,audio,canvas,svg');
       };
+
+      // 도구와 선택 표시를 본문 밖에 두어 저장·복사·실행 취소 이력에 섞이지 않게 합니다.
+      const tableControls = document.getElementById('tableControls');
+      const tableAxisHandles = document.getElementById('tableAxisHandles');
+      const tableSelectionOverlay = document.getElementById('tableSelectionOverlay');
+      const tableEditToolbar = document.getElementById('tableEditToolbar');
+      const tableEditLabel = document.getElementById('tableEditLabel');
+      const tableAddRow = document.getElementById('tableAddRow');
+      const tableAddColumn = document.getElementById('tableAddColumn');
+      const tableInsertGuide = document.getElementById('tableInsertGuide');
+      let tableEditState = { table: null, cell: null, selection: null, drag: null, insertion: null };
+      let tableControlsFrame = null;
+
+      // HTML의 cellIndex는 병합 셀을 만나면 실제 열 번호와 달라집니다.
+      const tableGridModel = (table) => {
+        const rows = [...table.rows];
+        const grid = rows.map(() => []);
+        const entries = [];
+        rows.forEach((row, r) => {
+          let c = 0;
+          [...row.cells].forEach(cell => {
+            while (grid[r][c]) c += 1;
+            const remaining = [...row.parentElement.rows].length - row.sectionRowIndex;
+            const rowSpan = Math.min(cell.rowSpan || remaining, remaining);
+            const entry = { cell, row: r, col: c, rowSpan, colSpan: cell.colSpan };
+            entries.push(entry);
+            for (let y = r; y < r + rowSpan; y += 1) {
+              for (let x = c; x < c + entry.colSpan; x += 1) grid[y][x] = entry;
+            }
+            c += entry.colSpan;
+          });
+        });
+        return { rows, grid, entries, columns: Math.max(0, ...grid.map(row => row.length)) };
+      };
+
+      const changeTableStructure = (table, axis, index, count, remove) => {
+        const model = tableGridModel(table);
+        const rowAxis = axis === 'row';
+        const length = rowAxis ? model.rows.length : model.columns;
+        count = remove ? Math.min(count, length - index) : count;
+        if (count < 1 || index < 0 || index > length) return null;
+        if (remove && count === length) {
+          const paragraph = table.ownerDocument.createElement('p');
+          paragraph.innerHTML = '<br>';
+          table.replaceWith(paragraph);
+          return paragraph;
+        }
+        const position = rowAxis ? 'row' : 'col';
+        const span = rowAxis ? 'rowSpan' : 'colSpan';
+        const entries = [];
+        model.entries.forEach(original => {
+          const entry = { ...original };
+          if (remove) {
+            const overlap = Math.max(0, Math.min(entry[position] + entry[span], index + count) - Math.max(entry[position], index));
+            entry[span] -= overlap;
+            entry[position] -= Math.min(count, Math.max(0, entry[position] - index));
+          } else if (entry[position] < index && entry[position] + entry[span] > index) {
+            entry[span] += count;
+          } else if (entry[position] >= index) entry[position] += count;
+          if (entry[span]) entries.push(entry);
+        });
+        let rows = [...model.rows];
+        const columns = model.columns + (!rowAxis ? (remove ? -count : count) : 0);
+        if (rowAxis && remove) {
+          rows.splice(index, count).forEach(row => row.remove());
+        } else if (rowAxis) {
+          const before = rows[index];
+          const lastGroup = rows[rows.length - 1]?.parentElement;
+          const group = before?.parentElement
+            || (lastGroup?.tagName === 'THEAD' ? table.createTBody() : lastGroup)
+            || table.createTBody();
+          const added = Array.from({ length: count }, () => {
+            const row = table.ownerDocument.createElement('tr');
+            group.insertBefore(row, before || null);
+            return row;
+          });
+          rows.splice(index, 0, ...added);
+        }
+        const occupied = rows.map(() => []);
+        entries.forEach(entry => {
+          for (let y = entry.row; y < entry.row + entry.rowSpan; y += 1) {
+            for (let x = entry.col; x < entry.col + entry.colSpan; x += 1) occupied[y][x] = true;
+          }
+        });
+        rows.forEach((row, y) => {
+          for (let x = 0; x < columns; x += 1) {
+            if (occupied[y][x]) continue;
+            const header = row.parentElement.tagName === 'THEAD'
+              || (!rowAxis && model.rows[y]?.cells.length && [...model.rows[y].cells].every(cell => cell.tagName === 'TH'))
+              || (rowAxis && !remove && index === 0 && y < count && model.rows[0]?.cells.length && [...model.rows[0].cells].every(cell => cell.tagName === 'TH'));
+            const cell = table.ownerDocument.createElement(header ? 'th' : 'td');
+            cell.innerHTML = '<br>';
+            entries.push({ cell, row: y, col: x, rowSpan: 1, colSpan: 1 });
+          }
+        });
+        entries.forEach(entry => {
+          for (const [attribute, value] of [['rowspan', entry.rowSpan], ['colspan', entry.colSpan]]) {
+            if (value > 1) entry.cell.setAttribute(attribute, value);
+            else entry.cell.removeAttribute(attribute);
+          }
+        });
+        rows.forEach((row, y) => row.replaceChildren(...entries.filter(entry => entry.row === y).sort((a,b) => a.col - b.col).map(entry => entry.cell)));
+        [...table.children].filter(section => ['THEAD','TBODY','TFOOT'].includes(section.tagName) && !section.rows.length).forEach(section => section.remove());
+        if (!rowAxis) table.querySelectorAll(':scope > colgroup').forEach(group => group.remove());
+        const nextModel = tableGridModel(table);
+        const targetRow = rowAxis ? Math.min(index, rows.length - 1) : 0;
+        const targetCol = rowAxis ? 0 : Math.min(index, columns - 1);
+        return nextModel.grid[targetRow]?.[targetCol]?.cell || table.querySelector('th,td');
+      };
+
+      const hideTableControls = () => {
+        tableEditState = { table: null, cell: null, selection: null, drag: null, insertion: null };
+        tableControls.hidden = true;
+      };
+
+      const tableControlGeometry = (table, model) => {
+        const rect = table.getBoundingClientRect();
+        const edges = Array(model.columns + 1).fill(null);
+        edges[0] = rect.left;
+        edges[model.columns] = rect.right;
+        model.entries.forEach(entry => {
+          const cellRect = entry.cell.getBoundingClientRect();
+          edges[entry.col] = cellRect.left;
+          edges[entry.col + entry.colSpan] = cellRect.right;
+        });
+        for (let start = 0; start < edges.length - 1;) {
+          let end = start + 1;
+          while (edges[end] === null) end += 1;
+          for (let i = start + 1; i < end; i += 1) edges[i] = edges[start] + (edges[end] - edges[start]) * (i - start) / (end - start);
+          start = end;
+        }
+        return { rect, columns: edges, rows: [...model.rows.map(row => row.getBoundingClientRect().top), rect.bottom] };
+      };
+
+      const renderTableControls = () => {
+        const { table, selection, insertion } = tableEditState;
+        if (!table || !editor.contains(table)) { hideTableControls(); return; }
+        const model = tableGridModel(table);
+        if (!model.rows.length || !model.columns) { hideTableControls(); return; }
+        const { rect, rows, columns } = tableControlGeometry(table, model);
+        const view = workspace.getBoundingClientRect();
+        tableControls.hidden = rect.bottom < view.top || rect.top > view.bottom;
+        if (tableControls.hidden) return;
+        const focus = document.activeElement?.dataset;
+        const focusAxis = focus?.tableSelect;
+        const focusIndex = focus?.index;
+        tableAxisHandles.replaceChildren();
+        tableSelectionOverlay.replaceChildren();
+        const start = selection ? Math.min(selection.anchor, selection.end) : -1;
+        const end = selection ? Math.max(selection.anchor, selection.end) : -1;
+        const addHandle = (axis, index, x, y) => {
+          if (x < view.left || x + 24 > view.right || y < view.top || y + 24 > view.bottom) return;
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'table-axis-handle';
+          button.dataset.tableSelect = axis;
+          button.dataset.index = index;
+          button.textContent = index + 1;
+          button.title = `${index + 1}${axis === 'row' ? '행' : '열'} 선택 · 드래그로 여러 ${axis === 'row' ? '행' : '열'} 선택`;
+          button.setAttribute('aria-label', button.title);
+          button.setAttribute('aria-pressed', String(selection?.axis === axis && index >= start && index <= end));
+          button.tabIndex = index === 0 || (focusAxis === axis && Number(focusIndex) === index) ? 0 : -1;
+          button.style.left = `${x}px`; button.style.top = `${y}px`;
+          tableAxisHandles.appendChild(button);
+        };
+        model.rows.forEach((row, i) => addHandle('row', i, Math.max(view.left, rect.left - 29), (rows[i] + rows[i+1]) / 2 - 12));
+        for (let i = 0; i < model.columns; i += 1) addHandle('column', i, (columns[i] + columns[i+1]) / 2 - 12, rect.top - 29);
+        if (selection) {
+          model.entries.forEach(entry => {
+            const position = selection.axis === 'row' ? entry.row : entry.col;
+            const span = selection.axis === 'row' ? entry.rowSpan : entry.colSpan;
+            if (position > end || position + span <= start) return;
+            const cellRect = entry.cell.getBoundingClientRect();
+            const top = Math.max(cellRect.top, view.top), bottom = Math.min(cellRect.bottom, view.bottom);
+            const left = Math.max(cellRect.left, view.left), right = Math.min(cellRect.right, view.right);
+            if (bottom <= top || right <= left) return;
+            const highlight = document.createElement('div');
+            highlight.className = 'table-cell-selection';
+            highlight.style.cssText = `left:${left}px;top:${top}px;width:${right-left}px;height:${bottom-top}px`;
+            tableSelectionOverlay.appendChild(highlight);
+          });
+        }
+        const showButton = (button, x, y, index) => {
+          button.hidden = x < view.left || x + 24 > view.right || y < view.top || y + 24 > view.bottom;
+          button.style.left = `${x}px`; button.style.top = `${y}px`; button.dataset.index = index;
+        };
+        showButton(tableAddRow, (rect.left + rect.right) / 2 - 12, rect.bottom + 5, model.rows.length);
+        showButton(tableAddColumn, Math.min(rect.right + 5, view.right - 24), (Math.max(rect.top, view.top) + Math.min(rect.bottom, view.bottom)) / 2 - 12, model.columns);
+        tableInsertGuide.hidden = !insertion;
+        if (insertion) {
+          if (insertion.axis === 'row') {
+            showButton(tableAddRow, Math.max(rect.left, Math.min(insertion.point - 12, rect.right - 24)), rows[insertion.index] - 12, insertion.index);
+            tableInsertGuide.style.cssText = `left:${rect.left}px;top:${rows[insertion.index]-1}px;width:${rect.width}px;height:2px`;
+          } else {
+            showButton(tableAddColumn, columns[insertion.index] - 12, Math.max(view.top, Math.min(insertion.point - 12, view.bottom - 24)), insertion.index);
+            tableInsertGuide.style.cssText = `left:${columns[insertion.index]-1}px;top:${Math.max(rect.top,view.top)}px;width:2px;height:${Math.min(rect.bottom,view.bottom)-Math.max(rect.top,view.top)}px`;
+          }
+        }
+        tableEditLabel.textContent = selection
+          ? `${start+1}${end > start ? `–${end+1}` : ''}${selection.axis === 'row' ? '행' : '열'} 선택`
+          : `표 ${model.rows.length} × ${model.columns}`;
+        tableEditToolbar.querySelectorAll('button').forEach(button => {
+          const rowAction = button.dataset.tableEdit.startsWith('row') || button.dataset.tableEdit === 'delete-row';
+          button.hidden = Boolean(selection && (selection.axis === 'row') !== rowAction);
+        });
+        tableEditToolbar.hidden = !selection && window.getSelection()?.isCollapsed === false;
+        tableEditToolbar.style.maxWidth = `${Math.max(150, view.width - 16)}px`;
+        const toolbarRect = tableEditToolbar.getBoundingClientRect();
+        tableEditToolbar.style.left = `${Math.max(view.left+8, Math.min(rect.left, view.right-toolbarRect.width-8))}px`;
+        tableEditToolbar.style.top = `${window.innerWidth <= 600 ? Math.max(view.top+8, view.bottom-toolbarRect.height-48) : view.top+8}px`;
+        if (focusAxis) tableAxisHandles.querySelector(`[data-table-select="${focusAxis}"][data-index="${focusIndex}"]`)?.focus({ preventScroll: true });
+      };
+
+      const scheduleTableControls = () => {
+        if (tableControlsFrame !== null) return;
+        tableControlsFrame = requestAnimationFrame(() => { tableControlsFrame = null; renderTableControls(); });
+      };
+
+      const activateTableControls = (table, cell = null, clear = false) => {
+        if (table !== tableEditState.table || clear) tableEditState = { table, cell, selection: null, drag: null, insertion: null };
+        else if (cell) tableEditState.cell = cell;
+        scheduleTableControls();
+      };
+
+      const editTableFromControls = (action, explicitIndex = null) => {
+        const { table, cell, selection } = tableEditState;
+        if (!table || !editor.contains(table)) return;
+        const model = tableGridModel(table);
+        const entry = model.entries.find(entry => entry.cell === cell) || model.entries[0];
+        const rowAxis = action.includes('row');
+        const axis = rowAxis ? 'row' : 'column';
+        const start = selection?.axis === axis ? Math.min(selection.anchor, selection.end) : (rowAxis ? entry.row : entry.col);
+        const selectedAxis = selection?.axis === axis;
+        const end = selectedAxis ? Math.max(selection.anchor, selection.end) : start + (rowAxis ? entry.rowSpan : entry.colSpan) - 1;
+        const remove = action.startsWith('delete');
+        const index = explicitIndex ?? (action.endsWith('after') ? end + 1 : start);
+        const count = explicitIndex === null && selectedAxis ? end - start + 1 : 1;
+        const descriptor = nodePathWithin(editor, table);
+        let result = null;
+        runBulkEdit(root => {
+          const target = nodeAtPath(root, descriptor.path);
+          result = changeTableStructure(target, axis, index, count, remove);
+          return result ? 1 : 0;
+        }, {
+          preserveViewport: true,
+          beforeCommit() { result?.setAttribute('data-table-edit-focus', ''); },
+          afterCommit() {
+            const target = editor.querySelector('[data-table-edit-focus]');
+            target?.removeAttribute('data-table-edit-focus');
+            normalizeTableExitParagraphs();
+            focusEditor();
+            if (target) placeCaretInBlock(target);
+            const updated = target?.closest('table');
+            if (updated) {
+              ensureTableExitParagraph(updated);
+              activateTableControls(updated, target, true);
+            } else hideTableControls();
+          }
+        });
+        showToast(`${count}${rowAxis ? '행' : '열'}을 ${remove ? '삭제' : '추가'}했습니다. Ctrl+Z로 되돌릴 수 있습니다.`);
+      };
+
+      tableControls.addEventListener('pointerdown', event => {
+        const handle = event.target.closest('[data-table-select]');
+        if (!handle) { if (event.target.closest('button')) event.preventDefault(); return; }
+        event.preventDefault();
+        const axis = handle.dataset.tableSelect, index = Number(handle.dataset.index);
+        const anchor = event.shiftKey && tableEditState.selection?.axis === axis ? tableEditState.selection.anchor : index;
+        tableEditState.selection = { axis, anchor, end: index };
+        tableEditState.drag = { axis, pointerId: event.pointerId };
+        tableEditState.insertion = null;
+        window.getSelection()?.removeAllRanges();
+        hideSelectionToolbar();
+        tableControls.setPointerCapture(event.pointerId);
+        renderTableControls();
+        tableAxisHandles.querySelector(`[data-table-select="${axis}"][data-index="${index}"]`)?.focus({ preventScroll: true });
+      });
+      tableControls.addEventListener('click', event => {
+        const button = event.target.closest('[data-table-edit]');
+        if (button) editTableFromControls(button.dataset.tableEdit, button.dataset.index === undefined ? null : Number(button.dataset.index));
+        const handle = event.target.closest('[data-table-select]');
+        if (handle && !tableEditState.selection) {
+          tableEditState.selection = { axis: handle.dataset.tableSelect, anchor: Number(handle.dataset.index), end: Number(handle.dataset.index) };
+          renderTableControls();
+        }
+      });
+      document.addEventListener('pointermove', event => {
+        const { drag, table } = tableEditState;
+        if (drag && table) {
+          const model = tableGridModel(table);
+          const geometry = tableControlGeometry(table, model);
+          const edges = drag.axis === 'row' ? geometry.rows : geometry.columns;
+          const point = drag.axis === 'row' ? event.clientY : event.clientX;
+          let end = edges.length - 2;
+          for (let i = 0; i < edges.length - 1; i += 1) { if (point < edges[i+1]) { end = i; break; } }
+          if (end !== tableEditState.selection.end) { tableEditState.selection.end = end; renderTableControls(); }
+          return;
+        }
+        if (tableControls.contains(event.target)) return;
+        const hovered = event.target.closest?.('table');
+        if (hovered && editor.contains(hovered) && !tableEditState.selection) activateTableControls(hovered, event.target.closest('td,th'));
+        const active = tableEditState.table;
+        if (!active || !editor.contains(active)) return;
+        const model = tableGridModel(active);
+        const geometry = tableControlGeometry(active, model);
+        const rect = geometry.rect;
+        let insertion = null;
+        if (!tableEditState.selection && event.clientX >= rect.left-7 && event.clientX <= rect.right+7 && event.clientY >= rect.top-7 && event.clientY <= rect.bottom+7) {
+          const row = geometry.rows.map((value, index) => ({ index, distance: Math.abs(value-event.clientY) })).sort((a,b) => a.distance-b.distance)[0];
+          const col = geometry.columns.map((value, index) => ({ index, distance: Math.abs(value-event.clientX) })).sort((a,b) => a.distance-b.distance)[0];
+          const nearest = row.distance <= col.distance ? { ...row, axis: 'row', point: event.clientX } : { ...col, axis: 'column', point: event.clientY };
+          if (nearest.distance <= 7) insertion = nearest;
+        }
+        tableEditState.insertion = insertion;
+        if (insertion || tableInsertGuide.hidden === false) scheduleTableControls();
+      });
+      const endTableDrag = event => {
+        if (tableEditState.drag?.pointerId !== event.pointerId) return;
+        tableEditState.drag = null;
+        if (tableControls.hasPointerCapture(event.pointerId)) tableControls.releasePointerCapture(event.pointerId);
+        scheduleTableControls();
+      };
+      document.addEventListener('pointerup', endTableDrag);
+      document.addEventListener('pointercancel', endTableDrag);
+      tableControls.addEventListener('keydown', event => {
+        const handle = event.target.closest('[data-table-select]');
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          const cell = tableEditState.cell;
+          hideTableControls(); focusEditor();
+          if (cell && editor.contains(cell)) placeCaretInCell(cell);
+          return;
+        }
+        if (['Delete','Backspace'].includes(event.key) && tableEditState.selection) {
+          event.preventDefault(); editTableFromControls(`delete-${tableEditState.selection.axis}`); return;
+        }
+        if (!handle) return;
+        const axis = handle.dataset.tableSelect, current = Number(handle.dataset.index);
+        const model = tableGridModel(tableEditState.table);
+        const limit = axis === 'row' ? model.rows.length : model.columns;
+        const backward = axis === 'row' ? 'ArrowUp' : 'ArrowLeft', forward = axis === 'row' ? 'ArrowDown' : 'ArrowRight';
+        if (![backward,forward,'Home','End'].includes(event.key)) return;
+        event.preventDefault();
+        const end = event.key === 'Home' ? 0 : event.key === 'End' ? limit-1 : Math.max(0, Math.min(limit-1, current + (event.key === forward ? 1 : -1)));
+        tableEditState.selection = { axis, anchor: event.shiftKey && tableEditState.selection?.axis === axis ? tableEditState.selection.anchor : end, end };
+        renderTableControls();
+        tableAxisHandles.querySelector(`[data-table-select="${axis}"][data-index="${end}"]`)?.focus({ preventScroll: true });
+      });
+      editor.addEventListener('pointerdown', event => {
+        const cell = event.target.closest('td,th');
+        if (cell) activateTableControls(cell.closest('table'), cell, true);
+        else hideTableControls();
+      });
+      document.addEventListener('pointerdown', event => {
+        if (!editor.contains(event.target) && !event.composedPath().includes(tableControls)) hideTableControls();
+      });
+      document.addEventListener('focusin', event => {
+        if (!editor.contains(event.target) && !tableControls.contains(event.target)) hideTableControls();
+      });
+      document.addEventListener('selectionchange', () => {
+        if (tableEditState.selection || tableEditState.drag) return;
+        const cell = selectedTableCell();
+        if (cell && document.activeElement === editor) activateTableControls(cell.closest('table'), cell);
+        else if (document.activeElement === editor && selectionIsInsideEditor()) hideTableControls();
+      });
+      workspace.addEventListener('scroll', scheduleTableControls);
+      window.addEventListener('resize', scheduleTableControls);
+      new MutationObserver(() => { if (tableEditState.table) scheduleTableControls(); })
+        .observe(editor, { subtree: true, childList: true, characterData: true, attributes: true });
 
       for (let row = 1; row <= 8; row += 1) {
         for (let column = 1; column <= 10; column += 1) {
