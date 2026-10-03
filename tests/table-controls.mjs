@@ -209,5 +209,57 @@ try {
     r.check('저장 HTML에 행·열 편집 UI 없음', /table-controls|table-axis-handle|table-cell-selection|data-table-edit-focus/.test(exported), false);
     r.check('저장 HTML에 표 내용 유지', exported.includes('사과') && exported.includes('<table>'), true);
   }, { noFilePicker: true });
+  await withPage(async page => {
+    await active(page);
+    await act(page, 'delete-table');
+    r.check('표 전체 삭제 버튼으로 모든 행·열 제거', await page.locator('#editor table').count(), 0);
+    r.check('표 앞뒤 문단 보존', await page.evaluate(() => T.ed().textContent), '표 앞 설명표 뒤 설명');
+    r.check('표 삭제 뒤 편집 UI 닫힘', await page.locator('#tableControls').isVisible(), false);
+    await page.keyboard.type('표가 있던 자리');
+    r.check('삭제한 표 자리에서 계속 입력', await page.evaluate(() => T.ed().querySelectorAll('p')[1].textContent), '표가 있던 자리');
+    await page.keyboard.press('Control+z');
+    await page.keyboard.press('Control+z');
+    r.check('표 전체 삭제를 한 단계로 복원', await page.evaluate(() => T.html()), html);
+    await page.keyboard.press('Control+y');
+    r.check('표 전체 삭제 다시 실행', await page.locator('#editor table').count(), 0);
+  });
+  await withPage(async page => {
+    await active(page, merged);
+    await handle(page, 'column', 1).click();
+    r.check('열 선택 중에도 표 전체 삭제 버튼 표시', await page.locator('[data-table-edit="delete-table"]').isVisible(), true);
+    await act(page, 'delete-table');
+    r.check('병합 표도 한 번에 삭제', await page.locator('#editor table').count(), 0);
+    await page.keyboard.press('Control+z');
+    r.check('병합 표 전체를 서식과 함께 복원', await page.evaluate(() => T.html()), merged);
+  });
+  await withPage(async page => {
+    const source = '<table><tbody><tr><td>첫 표</td></tr></tbody></table><p>사이</p><table><tbody><tr><td>둘째 표</td></tr></tbody></table>';
+    await page.evaluate(source => T.set(source), source);
+    await page.locator('#editor td').last().click();
+    await act(page, 'delete-table');
+    r.check('여러 표 중 현재 표만 삭제', await page.evaluate(() => [...T.ed().querySelectorAll('table')].map(table => table.textContent)), ['첫 표']);
+    await page.keyboard.press('Control+z');
+    r.check('현재 표만 삭제한 작업도 복원', await page.evaluate(() => T.html()), source);
+  });
+  await withPage(async page => {
+    await active(page, '<table><tbody><tr><td>표만 있는 문서</td></tr></tbody></table>');
+    await act(page, 'delete-table');
+    r.check('표만 있는 문서도 삭제 뒤 입력 문단 유지', await page.evaluate(() => T.html()), '<p><br></p>');
+  });
+  await withPage(async page => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await active(page);
+    await page.locator('[data-table-edit="delete-table"]').tap();
+    r.check('좁은 화면에서도 표 전체 삭제', await page.locator('#editor table').count(), 0);
+  }, { hasTouch: true });
+  await withPage(async page => {
+    await page.evaluate(() => T.set('<table><tbody><tr><td>옆 칸</td><td>앞<table><tbody><tr><td>안쪽</td></tr></tbody></table>뒤</td></tr></tbody></table>'));
+    await page.locator('#editor table table td').click();
+    await act(page, 'delete-table');
+    r.check('중첩 표는 현재 안쪽 표만 삭제', await page.locator('#editor table').count(), 1);
+    r.check('안쪽 표 앞뒤의 셀 내용 보존', await page.evaluate(() => T.ed().querySelector('tr').cells[1].textContent), '앞뒤');
+    await act(page, 'delete-column');
+    r.check('안쪽 표 삭제 뒤에도 현재 셀 기준 편집', await page.evaluate(() => T.ed().querySelector('tr').cells[0].textContent), '옆 칸');
+  });
   process.exitCode = r.summary() ? 1 : 0;
 } finally { await browser.close(); server.close(); }

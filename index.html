@@ -1061,6 +1061,7 @@
       <button type="button" data-table-edit="column-after" title="선택한 위치 오른쪽에 열 추가">→ 열 추가</button>
       <button type="button" data-table-edit="delete-row" class="danger">행 삭제</button>
       <button type="button" data-table-edit="delete-column" class="danger">열 삭제</button>
+      <button type="button" data-table-edit="delete-table" class="danger" title="현재 표 전체 삭제 · Ctrl+Z로 복원">표 전체 삭제</button>
     </div>
   </div>
 
@@ -1844,7 +1845,7 @@
           : `표 ${model.rows.length} × ${model.columns}`;
         tableEditToolbar.querySelectorAll('button').forEach(button => {
           const rowAction = button.dataset.tableEdit.startsWith('row') || button.dataset.tableEdit === 'delete-row';
-          button.hidden = Boolean(selection && (selection.axis === 'row') !== rowAction);
+          button.hidden = button.dataset.tableEdit !== 'delete-table' && Boolean(selection && (selection.axis === 'row') !== rowAction);
         });
         tableEditToolbar.hidden = !selection && window.getSelection()?.isCollapsed === false;
         tableEditToolbar.style.maxWidth = `${Math.max(150, view.width - 16)}px`;
@@ -1870,14 +1871,15 @@
         if (!table || !editor.contains(table)) return;
         const model = tableGridModel(table);
         const entry = model.entries.find(entry => entry.cell === cell) || model.entries[0];
-        const rowAxis = action.includes('row');
+        const deleteTable = action === 'delete-table';
+        const rowAxis = deleteTable || action.includes('row');
         const axis = rowAxis ? 'row' : 'column';
-        const start = selection?.axis === axis ? Math.min(selection.anchor, selection.end) : (rowAxis ? entry.row : entry.col);
+        const start = deleteTable ? 0 : selection?.axis === axis ? Math.min(selection.anchor, selection.end) : (rowAxis ? entry.row : entry.col);
         const selectedAxis = selection?.axis === axis;
         const end = selectedAxis ? Math.max(selection.anchor, selection.end) : start + (rowAxis ? entry.rowSpan : entry.colSpan) - 1;
         const remove = action.startsWith('delete');
-        const index = explicitIndex ?? (action.endsWith('after') ? end + 1 : start);
-        const count = explicitIndex === null && selectedAxis ? end - start + 1 : 1;
+        const index = deleteTable ? 0 : explicitIndex ?? (action.endsWith('after') ? end + 1 : start);
+        const count = deleteTable ? model.rows.length : explicitIndex === null && selectedAxis ? end - start + 1 : 1;
         const descriptor = nodePathWithin(editor, table);
         let result = null;
         runBulkEdit(root => {
@@ -1896,11 +1898,12 @@
             const updated = target?.closest('table');
             if (updated) {
               ensureTableExitParagraph(updated);
-              activateTableControls(updated, target, true);
+              activateTableControls(updated, target.closest('td,th') || target, true);
             } else hideTableControls();
           }
         });
-        showToast(`${count}${rowAxis ? '행' : '열'}을 ${remove ? '삭제' : '추가'}했습니다. Ctrl+Z로 되돌릴 수 있습니다.`);
+        showToast(deleteTable ? '표 전체를 삭제했습니다. Ctrl+Z로 복원할 수 있습니다.'
+          : `${count}${rowAxis ? '행' : '열'}을 ${remove ? '삭제' : '추가'}했습니다. Ctrl+Z로 되돌릴 수 있습니다.`);
       };
 
       tableControls.addEventListener('pointerdown', event => {
