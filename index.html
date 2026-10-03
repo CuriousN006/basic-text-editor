@@ -2668,7 +2668,7 @@
         return { html: `<table><thead>${rowHtml(header, 'th')}</thead><tbody>${rows.join('')}</tbody></table>`, end };
       };
 
-      const markdownToHtml = (markdown) => {
+      const markdownToHtml = (markdown, { literalOrderedLists = false } = {}) => {
         const lines = String(markdown).replace(/\r\n?/g, '\n').split('\n');
         const output = [];
         let paragraph = [];
@@ -2780,6 +2780,11 @@
             const checked = unordered[1] ? `<input type="checkbox" disabled${unordered[1].toLowerCase() === 'x' ? ' checked' : ''}> ` : '';
             output.push(`<li>${checked}${parseInlineMarkdown(unordered[2])}</li>`);
           } else if (ordered) {
+            if (literalOrderedLists) {
+              closeList();
+              output.push(`<p>${parseInlineMarkdown(line)}</p>`);
+              return;
+            }
             if (listType !== 'ol') {
               closeList();
               listType = 'ol';
@@ -3618,10 +3623,30 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         container.appendChild(wrapper);
       };
 
+      const restoreOrderedListAncestor = (container, range) => {
+        if (![...container.children].some(child => child.tagName === 'LI')) return;
+        let element = range.commonAncestorContainer;
+        if (element.nodeType !== Node.ELEMENT_NODE) element = element.parentElement;
+        const list = element.closest('ol');
+        if (!list || !editor.contains(list)) return;
+        const items = [...list.children].filter(child => child.tagName === 'LI');
+        const first = items.findIndex(item => range.intersectsNode(item));
+        let number = list.hasAttribute('start') ? list.start : list.reversed ? items.length : 1;
+        for (let i = 0; i <= first; i += 1) {
+          if (items[i].hasAttribute('value')) number = items[i].value;
+          if (i < first) number += list.reversed ? -1 : 1;
+        }
+        const wrapper = list.cloneNode(false);
+        wrapper.start = number;
+        while (container.firstChild) wrapper.appendChild(container.firstChild);
+        container.appendChild(wrapper);
+      };
+
       const clipboardHtmlWithExplicitBreaks = (range) => {
         const container = document.createElement('div');
         container.appendChild(range.cloneContents());
         restoreInlineAncestors(container, range);
+        restoreOrderedListAncestor(container, range);
         restoreQuoteAncestor(container, range);
         cleanTableExitParagraphs(container);
         const clipboardBlockTags = new Set([
@@ -4104,8 +4129,33 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       // innerText는 <p>를 두 줄로 계산하기 때문에(마진과 무관한 규격상 동작)
       // <div>로 바꿔 눈에 보이는 줄과 개행 수를 1:1로 맞춥니다. 이 계산은 그대로
       // 두고, 서식은 각 텍스트 노드 앞에 표식 문자를 붙여 함께 실어 보냅니다.
+      // ol의 번호는 innerText에 포함되지 않으므로 붙여넣기에서는 실제 글자로 바꿉니다.
+      const literalizeClipboardOrderedLists = (root) => {
+        const doc = root.ownerDocument;
+        const asParagraph = element => {
+          const paragraph = doc.createElement('div');
+          [...element.attributes].forEach(attribute => paragraph.setAttribute(attribute.name, attribute.value));
+          while (element.firstChild) paragraph.appendChild(element.firstChild);
+          element.replaceWith(paragraph);
+        };
+        [...root.querySelectorAll('ol')].forEach(list => {
+          const items = [...list.children].filter(child => child.tagName === 'LI');
+          let number = list.hasAttribute('start') ? list.start : list.reversed ? items.length : 1;
+          items.forEach(item => {
+            if (item.hasAttribute('value')) number = item.value;
+            const first = [...item.childNodes].find(node => node.nodeType === Node.ELEMENT_NODE || node.textContent.trim());
+            const target = first?.nodeType === Node.ELEMENT_NODE && ['P','DIV'].includes(first.tagName) ? first : item;
+            target.insertBefore(doc.createTextNode(`${number}. `), target.firstChild);
+            number += list.reversed ? -1 : 1;
+            asParagraph(item);
+          });
+          asParagraph(list);
+        });
+      };
+
       const clipboardLinesFromHtml = (html, { preserveEdgeSpaces = false } = {}) => {
         const doc = new DOMParser().parseFromString(String(html), 'text/html');
+        literalizeClipboardOrderedLists(doc.body);
         doc.body.querySelectorAll('br').forEach((lineBreak) => {
           // 빈 블록의 <br>은 줄바꿈이 아니라 커서를 놓기 위한 자리표시입니다.
           // 줄바꿈으로 세면 빈 줄 하나가 두 줄로 늘어납니다.
@@ -4222,6 +4272,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         const tables = [...doc.body.querySelectorAll('table')]
           .filter(table => !table.parentElement.closest('table'));
         if (!tables.length) return null;
+        literalizeClipboardOrderedLists(doc.body);
         const tokens = [];
         const remaining = doc.createRange();
         remaining.selectNodeContents(doc.body);
@@ -6361,7 +6412,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           if (plain) {
             // 복사한 내용 끝의 공백은 마크다운의 강제 줄바꿈 문법으로 해석하지 않습니다.
             const markdownSource = plain.replace(/ +$/, spaces => '\u00a0'.repeat(spaces.length));
-            const html = markdownToHtml(markdownSource).replace(/\u00a0/g, ' ');
+            const html = markdownToHtml(markdownSource, { literalOrderedLists: true }).replace(/\u00a0/g, ' ');
             const parsed = new DOMParser().parseFromString(html, 'text/html');
             const plainMarkdown = !richDocument || !richDocument.body.querySelector('b,strong,i,em,u,s,a,pre,table,ul,ol,blockquote,h1,h2,h3');
             if ((plainMarkdown || parsed.body.querySelector('table'))
@@ -6379,9 +6430,14 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
 
         // 4) 일반 글은 평문의 줄 구조에 HTML의 글자 서식을 얹습니다.
         const htmlLines = rich ? clipboardLinesFromHtml(rich) : [];
-        const lines = (plain && htmlLines.length
+        const alignedLines = (plain && htmlLines.length
           ? alignClipboardLinesToPlainText(plain, htmlLines)
-          : null) || htmlLines;
+          : null);
+        // HTML 번호와 평문이 다를 때도 복사한 번호를 임의로 다시 매기지 않습니다.
+        const preservePlainNumbers = plain && /<ol(?:\s|>)/i.test(rich) && /^\s*[+-]?\d+[.)]\s+\S/m.test(plain);
+        const lines = alignedLines || (preservePlainNumbers
+          ? normalizeClipboardText(plain).split('\n').map(line => [[{ ...EMPTY_CLIPBOARD_STYLE, text: line }]])
+          : htmlLines);
         if (lines.some((line) => line.some((runs) => runs.some((run) => run.text.trim())))) {
           insertClipboardTokens(clipboardTokensFromLines(lines, keepFormatting));
           updateFormattingControlsState();
