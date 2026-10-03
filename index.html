@@ -2173,6 +2173,47 @@
         return value;
       };
 
+      const markdownTableCells = (line) => {
+        const source = line.trim();
+        const cells = [];
+        let cell = '';
+        let separators = 0;
+        for (let i = 0; i < source.length; i += 1) {
+          if (source[i] === '\\' && i + 1 < source.length) {
+            cell += source[i + 1] === '|' ? '|' : source[i] + source[i + 1];
+            i += 1;
+          } else if (source[i] === '|') {
+            cells.push(cell.trim());
+            cell = '';
+            separators += 1;
+          } else cell += source[i];
+        }
+        cells.push(cell.trim());
+        if (!separators) return null;
+        if (source.startsWith('|')) cells.shift();
+        if (source.endsWith('|') && cells[cells.length - 1] === '') cells.pop();
+        return cells;
+      };
+
+      const markdownTableAt = (lines, index) => {
+        const header = markdownTableCells(lines[index]);
+        const divider = index + 1 < lines.length ? markdownTableCells(lines[index + 1]) : null;
+        if (!header?.length || !divider || header.length !== divider.length
+          || !divider.every(cell => /^:?-{3,}:?$/.test(cell))) return null;
+        const rowHtml = (cells, tag) => `<tr>${header.map((_, column) =>
+          `<${tag}>${parseInlineMarkdown(cells[column] || '')}</${tag}>`
+        ).join('')}</tr>`;
+        const rows = [];
+        let end = index + 2;
+        while (end < lines.length && lines[end].trim()) {
+          const cells = markdownTableCells(lines[end]);
+          if (!cells) break;
+          rows.push(rowHtml(cells, 'td'));
+          end += 1;
+        }
+        return { html: `<table><thead>${rowHtml(header, 'th')}</thead><tbody>${rows.join('')}</tbody></table>`, end };
+      };
+
       const markdownToHtml = (markdown) => {
         const lines = String(markdown).replace(/\r\n?/g, '\n').split('\n');
         const output = [];
@@ -2182,6 +2223,7 @@
         let inCode = false;
         let codeLines = [];
         let pendingBlankLines = 0;
+        let tableEnd = 0;
 
         const flushParagraph = () => {
           if (!paragraph.length) return;
@@ -2214,7 +2256,8 @@
           pendingBlankLines = 0;
         };
 
-        lines.forEach((line) => {
+        lines.forEach((line, lineIndex) => {
+          if (lineIndex < tableEnd) return;
           if (/^```/.test(line)) {
             flushParagraph();
             closeList();
@@ -2232,6 +2275,17 @@
 
           if (inCode) {
             codeLines.push(line);
+            return;
+          }
+
+          const table = markdownTableAt(lines, lineIndex);
+          if (table) {
+            flushParagraph();
+            closeList();
+            flushQuote();
+            emitBlanks();
+            output.push(table.html);
+            tableEnd = table.end;
             return;
           }
 
@@ -3661,6 +3715,77 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         .map((line) => line.map(clipboardSegmentText).join('\n'))
         .join('\n');
 
+      const clipboardRunsHtml = (runs) => runs.map((run) => {
+        let html = escapeHtml(run.text);
+        if (run.bold) html = `<b>${html}</b>`;
+        if (run.italic) html = `<i>${html}</i>`;
+        if (run.underline) html = `<u>${html}</u>`;
+        if (run.strike) html = `<s>${html}</s>`;
+        if (run.href) html = `<a href="${escapeAttribute(run.href)}">${html}</a>`;
+        return html;
+      }).join('');
+
+      // 표 구조를 보존하고 셀의 글자 서식은 일반 붙여넣기와 같은 규칙으로 정리합니다.
+      const clipboardTableHtml = (source) => {
+        const doc = source.ownerDocument;
+        const table = doc.createElement('table');
+        if (source.caption) {
+          const caption = table.createCaption();
+          caption.textContent = source.caption.textContent;
+        }
+        const body = table.createTBody();
+        [...source.rows].forEach((row) => {
+          const targetRow = body.insertRow();
+          [...row.cells].forEach((cell) => {
+            const target = doc.createElement(cell.tagName.toLowerCase());
+            ['colspan', 'rowspan'].forEach((name) => {
+              const value = cell.getAttribute(name);
+              if (value && /^\d+$/.test(value)) target.setAttribute(name, value);
+            });
+            // TD를 단독으로 파싱하면 태그와 그 스타일이 사라지므로 DIV로 측정합니다.
+            const probe = doc.createTextNode('');
+            cell.appendChild(probe);
+            const inherited = clipboardStyleAt(probe, doc.body);
+            probe.remove();
+            const content = doc.createElement('div');
+            content.style.fontWeight = inherited.bold ? '700' : '400';
+            content.style.fontStyle = inherited.italic ? 'italic' : 'normal';
+            content.style.textDecoration = [inherited.underline ? 'underline' : '', inherited.strike ? 'line-through' : ''].filter(Boolean).join(' ');
+            content.innerHTML = cell.innerHTML;
+            target.innerHTML = clipboardLinesFromHtml(content.outerHTML)
+              .flatMap(line => line.map(clipboardRunsHtml)).join('<br>') || '<br>';
+            targetRow.appendChild(target);
+          });
+        });
+        return table.outerHTML;
+      };
+
+      const clipboardTableTokens = (doc) => {
+        const tables = [...doc.body.querySelectorAll('table')]
+          .filter(table => !table.parentElement.closest('table'));
+        if (!tables.length) return null;
+        const tokens = [];
+        const remaining = doc.createRange();
+        remaining.selectNodeContents(doc.body);
+        const appendText = (fragment) => {
+          const container = doc.createElement('div');
+          container.appendChild(fragment);
+          const lines = clipboardLinesFromHtml(container.innerHTML);
+          if (lines.some(line => line.some(runs => runs.some(run => run.text.trim())))) {
+            tokens.push(...clipboardTokensFromLines(lines, true));
+          }
+        };
+        tables.forEach((table) => {
+          remaining.setEndBefore(table);
+          appendText(remaining.cloneContents());
+          tokens.push({ type: 'block', html: clipboardTableHtml(table) });
+          remaining.setStartAfter(table);
+          remaining.setEnd(doc.body, doc.body.childNodes.length);
+        });
+        appendText(remaining.cloneContents());
+        return tokens;
+      };
+
       const MAX_FIND_PREFILL_LENGTH = 500;
 
       // 선택 범위를 찾기 문법으로 바꿉니다. 검색 모델의 각 글자가 선택 범위 안에
@@ -4222,6 +4347,43 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         ? null
         : tokens.map((token) => token.value || '').join(''));
 
+      // 표나 마크다운 블록을 문단 바깥에 넣고, 기존 문단의 앞뒤 내용은 보존합니다.
+      const insertClipboardBlock = (range, html, root) => {
+        const doc = root.ownerDocument;
+        const container = doc.createElement('div');
+        container.innerHTML = html;
+        const block = container.firstElementChild;
+        if (!block) return null;
+        let top = range.startContainer;
+        if (top !== root) {
+          while (top.parentNode && top.parentNode !== root) top = top.parentNode;
+        }
+        if (top === root) {
+          range.insertNode(block);
+          if (!block.nextSibling) {
+            const after = doc.createElement('p');
+            if (block.tagName === 'TABLE') after.setAttribute(TABLE_EXIT_ATTRIBUTE, '');
+            block.after(after);
+            range.setStart(after, 0);
+          } else range.setStartAfter(block);
+        } else {
+          const tail = doc.createRange();
+          tail.setStart(range.startContainer, range.startOffset);
+          tail.setEnd(top, top.childNodes.length);
+          let after = top.cloneNode(false);
+          after.appendChild(tail.extractContents());
+          const hasContent = node => Boolean(node.textContent || node.querySelector('img,hr,table'));
+          if (!hasContent(after)) after = doc.createElement('p');
+          top.after(block, after);
+          if (!hasContent(top)) top.remove();
+          if (block.tagName === 'TABLE' && !hasContent(after)) after.setAttribute(TABLE_EXIT_ATTRIBUTE, '');
+          const next = after.querySelector('p,li,td,th') || after;
+          range.setStart(next, 0);
+        }
+        range.collapse(true);
+        return block;
+      };
+
       // 토큰이 지닌 인라인 서식(붙여넣기용)을 그 토큰이 만든 노드에만 적용합니다.
       const applyTokenStyle = (node, root, style) => {
         const apply = [];
@@ -4274,6 +4436,11 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         tokens.forEach((token) => {
           if (token.type === 'paragraph') {
             splitBlockAtRange(range, root);
+            return;
+          }
+          if (token.type === 'block') {
+            const node = insertClipboardBlock(range, token.html, root);
+            if (node) inserted.push(node);
             return;
           }
           let node = null;
@@ -4946,6 +5113,10 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           // 경로가 어긋나고, 커서가 문서 맨 앞으로 돌아갑니다.
           beforeCommit(root) {
             if (!lastNode || !root.contains(lastNode) || !lastNode.parentNode) return;
+            if (tokens[tokens.length - 1]?.type === 'block' && lastNode.tagName !== 'TABLE') {
+              const tail = lastNode.nextSibling;
+              if (tail?.nodeName === 'P' && !tail.textContent && !tail.querySelector('img,hr,table')) tail.remove();
+            }
             const mark = root.ownerDocument.createElement('span');
             mark.setAttribute(PASTE_CARET_MARK, '1');
             lastNode.parentNode.insertBefore(mark, lastNode.nextSibling);
@@ -4956,9 +5127,16 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
             if (mark && mark.parentNode) {
               const parent = mark.parentNode;
               const index = [...parent.childNodes].indexOf(mark);
+              const previous = mark.previousSibling;
               mark.remove();
-              caret.setStart(parent, index);
-              caret.collapse(true);
+              const next = parent.childNodes[index];
+              if (parent === editor && next?.nodeType === Node.ELEMENT_NODE && next.tagName !== 'TABLE') {
+                caret.setStart(next.querySelector('p,li') || next, 0);
+              } else if (parent === editor && !next && previous?.nodeType === Node.ELEMENT_NODE && previous.tagName !== 'TABLE') {
+                caret.selectNodeContents(previous);
+                caret.collapse(false);
+              } else caret.setStart(parent, index);
+              if (!caret.collapsed) caret.collapse(true);
             } else {
               // 표식을 잃어도 맨 앞으로 돌아가지 않게 문서 끝에 둡니다.
               const fallback = collapsedRangeAtEnd(editor);
@@ -5646,7 +5824,36 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           return;
         }
 
-        // 3) 줄 구조는 평문을 따르고, HTML에서 서식만 가져와 얹습니다.
+        // 3) 표는 행·열을 유지합니다. 기존 표 셀 안에서는 글자로 붙여넣습니다.
+        const richDocument = keepFormatting && rich
+          ? new DOMParser().parseFromString(sanitizeHtml(rich), 'text/html')
+          : null;
+        if (keepFormatting && !selectedTableCell()) {
+          const tableTokens = richDocument && clipboardTableTokens(richDocument);
+          if (tableTokens) {
+            insertClipboardTokens(tableTokens);
+            updateFormattingControlsState();
+            return;
+          }
+          // 마크다운 평문은 일반 Ctrl+V로 제목·표·글자 서식을 변환합니다.
+          if (plain) {
+            const html = markdownToHtml(plain);
+            const parsed = new DOMParser().parseFromString(html, 'text/html');
+            const plainMarkdown = !richDocument || !richDocument.body.querySelector('b,strong,i,em,u,s,a,pre,table,ul,ol,blockquote,h1,h2,h3');
+            if ((plainMarkdown || parsed.body.querySelector('table'))
+              && parsed.body.querySelector('table,h1,h2,h3,pre,ul,ol,blockquote,hr,strong,em,s,a,code')) {
+              const hasBlocks = parsed.body.querySelector('table,h1,h2,h3,pre,ul,ol,blockquote,hr');
+              const tokens = hasBlocks
+                ? [...parsed.body.children].map(block => ({ type: 'block', html: block.outerHTML }))
+                : clipboardTokensFromLines(clipboardLinesFromHtml(html), true);
+              insertClipboardTokens(tokens);
+              updateFormattingControlsState();
+              return;
+            }
+          }
+        }
+
+        // 4) 일반 글은 평문의 줄 구조에 HTML의 글자 서식을 얹습니다.
         const htmlLines = rich ? clipboardLinesFromHtml(rich) : [];
         const lines = (plain && htmlLines.length
           ? alignClipboardLinesToPlainText(plain, htmlLines)
