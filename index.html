@@ -3731,7 +3731,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
 
         // HTML의 일반 공백은 받는 편집기가 white-space: normal로 해석하면 여러
         // 칸을 한 칸으로 접습니다. 에디터 안의 원고는 그대로 두고, 클립보드용
-        // HTML에서 연속된 일반 공백만 NBSP로 바꿔 네이버 카페 같은 외부
+        // HTML에서 연속 공백과 줄 양 끝 공백을 NBSP로 바꿔 네이버 카페 같은 외부
         // 편집기에서도 입력한 칸 수가 유지되게 합니다. 인라인 서식 경계 양쪽에
         // 나뉜 공백도 한 덩어리로 계산합니다.
         const preserveRepeatedSpaces = (root) => {
@@ -3741,9 +3741,10 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           ]);
           const replacements = new Map();
           let run = [];
+          let atLineStart = true;
 
-          const flush = () => {
-            if (run.length > 1) {
+          const flush = (atLineEnd = false) => {
+            if (run.length > 1 || run[0]?.leading || atLineEnd) {
               run.forEach(({ node, offset }) => {
                 if (!replacements.has(node)) replacements.set(node, new Set());
                 replacements.get(node).add(offset);
@@ -3755,28 +3756,30 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           const visit = (node, insideBlock = false) => {
             if (node.nodeType === Node.TEXT_NODE) {
               if (!insideBlock) {
-                flush();
+                flush(true);
+                atLineStart = true;
                 return;
               }
               for (let offset = 0; offset < node.nodeValue.length; offset += 1) {
-                if (node.nodeValue[offset] === ' ') run.push({ node, offset });
-                else flush();
+                if (node.nodeValue[offset] === ' ') run.push({ node, offset, leading: atLineStart });
+                else { flush(); atLineStart = false; }
               }
               return;
             }
             if (node.nodeType !== Node.ELEMENT_NODE) return;
             if (node.tagName === 'BR') {
-              flush();
+              flush(true);
+              atLineStart = true;
               return;
             }
             const isBlock = blockTags.has(node.tagName);
-            if (isBlock) flush();
+            if (isBlock) { flush(true); atLineStart = true; }
             [...node.childNodes].forEach((child) => visit(child, insideBlock || isBlock));
-            if (isBlock) flush();
+            if (isBlock) { flush(true); atLineStart = true; }
           };
 
           [...root.childNodes].forEach((node) => visit(node));
-          flush();
+          flush(true);
           replacements.forEach((offsets, node) => {
             node.nodeValue = node.nodeValue
               .split('')
@@ -3963,7 +3966,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       const escapeClipboardReserved = (value) => String(value)
         .replace(CLIPBOARD_RESERVED_PATTERN, (character) => String.fromCharCode(CLIPBOARD_MARK_ESCAPE) + character);
 
-      const clipboardRunsFromMarkedText = (segment, styles) => {
+      const clipboardRunsFromMarkedText = (segment, styles, trimEdges = true) => {
         const runs = [];
         let style = EMPTY_CLIPBOARD_STYLE;
         let buffer = '';
@@ -3998,7 +4001,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           buffer += character;
         }
         flush();
-        return finalizeClipboardRuns(runs, true);
+        return finalizeClipboardRuns(runs, trimEdges, false);
       };
 
       // 한 줄의 구간 목록을 다듬습니다.
@@ -4007,7 +4010,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       //  - 서식이 있는 구간의 양 끝 공백은 서식 밖으로 뺍니다. 밑줄·취소선·링크는
       //    공백에도 선이 그려져 "밑줄 "처럼 눈에 보입니다.
       //  - 줄바꿈 없는 공백(&nbsp;)은 눈에 보이는 글자이므로 일반 공백으로 남깁니다.
-      const finalizeClipboardRuns = (runs, trimEdges) => {
+      const finalizeClipboardRuns = (runs, trimEdges, preserveWhitespaceOnly = !trimEdges) => {
         const working = [...runs];
         if (trimEdges) {
           while (working.length) {
@@ -4043,8 +4046,8 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           push(EMPTY_CLIPBOARD_STYLE, parts[3]);
         });
 
-        // 공백만 남은 줄은 빈 줄로 봅니다. 그대로 두면 줄 앞에 공백이 생깁니다.
-        return spaced.some((run) => run.text.trim()) ? spaced : [];
+        // HTML의 빈 줄 자리표시는 제거하지만 평문에 실제로 있는 공백 줄은 유지합니다.
+        return preserveWhitespaceOnly || spaced.some((run) => run.text.trim()) ? spaced : [];
       };
 
       // 줄 구조는 평문(text/plain)을 따르고, 서식만 HTML에서 가져와 같은 글자에
@@ -4101,7 +4104,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       // innerText는 <p>를 두 줄로 계산하기 때문에(마진과 무관한 규격상 동작)
       // <div>로 바꿔 눈에 보이는 줄과 개행 수를 1:1로 맞춥니다. 이 계산은 그대로
       // 두고, 서식은 각 텍스트 노드 앞에 표식 문자를 붙여 함께 실어 보냅니다.
-      const clipboardLinesFromHtml = (html) => {
+      const clipboardLinesFromHtml = (html, { preserveEdgeSpaces = false } = {}) => {
         const doc = new DOMParser().parseFromString(String(html), 'text/html');
         doc.body.querySelectorAll('br').forEach((lineBreak) => {
           // 빈 블록의 <br>은 줄바꿈이 아니라 커서를 놓기 위한 자리표시입니다.
@@ -4150,6 +4153,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         const host = document.createElement('div');
         host.setAttribute('aria-hidden', 'true');
         host.style.cssText = 'position:fixed;left:-9999px;top:0;width:800px;pointer-events:none';
+        if (preserveEdgeSpaces) host.style.whiteSpace = 'pre-wrap';
         document.body.appendChild(host);
         let measured = '';
         try {
@@ -4162,7 +4166,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
 
         return normalizeClipboardText(measured).split('\n').map((line) => line
           .split(CLIPBOARD_SOFT_BREAK)
-          .map((segment) => clipboardRunsFromMarkedText(segment, styles)));
+          .map((segment) => clipboardRunsFromMarkedText(segment, styles, !preserveEdgeSpaces)));
       };
 
       const clipboardPlainTextFromHtml = (html) => clipboardLinesFromHtml(html)
@@ -4279,7 +4283,10 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         const standardHtml = clipboardHtmlWithExplicitBreaks(range);
         // text/html은 이미 "블록 하나 = 한 줄"로 정규화돼 있으므로
         // text/plain도 같은 구조에서 뽑아 두 형식의 줄 수를 일치시킵니다.
-        const plain = clipboardPlainTextFromHtml(standardHtml);
+        const measured = clipboardPlainTextFromHtml(standardHtml);
+        const selectedText = range.toString();
+        // 공백만 선택한 경우도 복사합니다. HTML의 빈 문단 자리표시와 구별합니다.
+        const plain = !measured && /^[ \t]+$/.test(selectedText) ? selectedText : measured;
         const html = naverQuoteClipboardHtml(standardHtml);
 
         event.preventDefault();
@@ -6271,6 +6278,15 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
 
         // 2) URL 단독 붙여넣기: 클릭 가능한 <a> 링크로 삽입합니다.
         if (keepFormatting && isUrl(linkCandidate) && !/[\r\n]/.test(plain)) {
+          if (plain !== linkCandidate) {
+            const start = plain.indexOf(linkCandidate);
+            insertClipboardTokens([
+              { type: 'text', value: plain.slice(0, start), style: EMPTY_CLIPBOARD_STYLE },
+              { type: 'text', value: linkCandidate, style: { ...EMPTY_CLIPBOARD_STYLE, href: linkCandidate } },
+              { type: 'text', value: plain.slice(start + linkCandidate.length), style: EMPTY_CLIPBOARD_STYLE }
+            ]);
+            return;
+          }
           document.execCommand('insertHTML', false,
             `<a href="${escapeAttribute(linkCandidate)}">${escapeHtml(linkCandidate)}</a>`);
           updateCount();
@@ -6291,7 +6307,9 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           }
           // 마크다운 평문은 일반 Ctrl+V로 제목·표·글자 서식을 변환합니다.
           if (plain) {
-            const html = markdownToHtml(plain);
+            // 복사한 내용 끝의 공백은 마크다운의 강제 줄바꿈 문법으로 해석하지 않습니다.
+            const markdownSource = plain.replace(/ +$/, spaces => '\u00a0'.repeat(spaces.length));
+            const html = markdownToHtml(markdownSource).replace(/\u00a0/g, ' ');
             const parsed = new DOMParser().parseFromString(html, 'text/html');
             const plainMarkdown = !richDocument || !richDocument.body.querySelector('b,strong,i,em,u,s,a,pre,table,ul,ol,blockquote,h1,h2,h3');
             if ((plainMarkdown || parsed.body.querySelector('table'))
@@ -6299,7 +6317,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
               const hasBlocks = parsed.body.querySelector('table,h1,h2,h3,pre,ul,ol,blockquote,hr');
               const tokens = hasBlocks
                 ? [...parsed.body.children].map(block => ({ type: 'block', html: block.outerHTML }))
-                : clipboardTokensFromLines(clipboardLinesFromHtml(html), true);
+                : clipboardTokensFromLines(clipboardLinesFromHtml(html, { preserveEdgeSpaces: true }), true);
               insertClipboardTokens(tokens);
               updateFormattingControlsState();
               return;
