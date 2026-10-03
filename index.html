@@ -3908,7 +3908,9 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         && left.italic === right.italic
         && left.underline === right.underline
         && left.strike === right.strike
-        && left.href === right.href;
+        && left.href === right.href
+        && Boolean(left.orderedMarker) === Boolean(right.orderedMarker)
+        && Boolean(left.orderedGapBefore) === Boolean(right.orderedGapBefore);
 
       const clipboardLinkHref = (element) => {
         const source = String(element.getAttribute('href') || '').trim();
@@ -4094,32 +4096,61 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         const htmlCompact = withoutSpaces(flat.map((item) => item.character).join(''));
         if (!htmlCompact) return null;
         const text = normalizeClipboardText(plain);
-        if (withoutSpaces(text) !== htmlCompact) return null;
+        let addOrderedMarkers = false;
+        if (withoutSpaces(text) !== htmlCompact) {
+          // 브라우저의 평문에는 목록 번호가 빠질 수 있습니다. 우리가 HTML에서 만든
+          // 번호만 제외해 본문이 같은지 확인하고, 평문의 빈 줄 위에 번호를 보완합니다.
+          const bodyCompact = withoutSpaces(flat.filter(item => !item.style.orderedMarker).map(item => item.character).join(''));
+          const emptyNumberedItem = htmlLines.some(line => {
+            const runs = line.flat();
+            return runs.some(run => run.orderedMarker) && !withoutSpaces(runs.filter(run => !run.orderedMarker).map(run => run.text).join(''));
+          });
+          if (!bodyCompact || emptyNumberedItem || withoutSpaces(text) !== bodyCompact) return null;
+          addOrderedMarkers = true;
+        }
 
         let cursor = 0;
-        const takeStyle = () => {
-          while (cursor < flat.length && /\s/.test(flat[cursor].character)) cursor += 1;
+        let gapBefore = false;
+        const takeStyle = (runs) => {
+          let marker = '', markerStyle = null;
+          while (cursor < flat.length && (/\s/.test(flat[cursor].character)
+            || (addOrderedMarkers && flat[cursor].style.orderedMarker))) {
+            const item = flat[cursor];
+            if (addOrderedMarkers && item.style.orderedMarker) {
+              marker += item.character;
+              markerStyle = item.style;
+              if (!runs.some(run => run.text.trim())) gapBefore ||= Boolean(item.style.orderedGapBefore);
+            }
+            cursor += 1;
+          }
+          if (marker) runs.push({ ...markerStyle, text: marker.trimEnd() + ' ' });
           if (cursor >= flat.length) return EMPTY_CLIPBOARD_STYLE;
           const style = flat[cursor].style;
+          if (style.orderedMarker && !runs.some(run => run.text.trim())) gapBefore ||= Boolean(style.orderedGapBefore);
           cursor += 1;
           return style;
         };
 
-        return text.split('\n').map((line) => {
+        const lines = [];
+        text.split('\n').forEach((line) => {
           const runs = [];
+          gapBefore = false;
           let last = EMPTY_CLIPBOARD_STYLE;
-          line.split('').forEach((character) => {
+          [...line].forEach((character) => {
             // 공백은 앞 글자의 서식을 따라가되, 구간 끝 공백은 아래 다듬기에서
             // 서식 밖으로 빠집니다.
-            const style = /\s/.test(character) ? last : takeStyle();
+            const style = /\s/.test(character) ? last : takeStyle(runs);
             last = style;
             const tail = runs[runs.length - 1];
             if (tail && sameClipboardStyle(tail, style)) tail.text += character;
             else runs.push({ ...style, text: character });
           });
           // 평문에는 문단 안 줄바꿈이 따로 없으므로 한 줄은 한 구간뿐입니다.
-          return [finalizeClipboardRuns(runs, false)];
+          // HTML의 문단 여백도 보존하되 평문에 이미 빈 줄이 있으면 더 늘리지 않습니다.
+          if (gapBefore && lines.length && lines[lines.length - 1].flat().some(run => run.text.trim())) lines.push([[]]);
+          lines.push([finalizeClipboardRuns(runs, false)]);
         });
+        return lines;
       };
 
       const clipboardSegmentText = (runs) => runs.map((run) => run.text).join('');
@@ -4132,6 +4163,13 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       // ol의 번호는 innerText에 포함되지 않으므로 붙여넣기에서는 실제 글자로 바꿉니다.
       const literalizeClipboardOrderedLists = (root) => {
         const doc = root.ownerDocument;
+        const markers = new WeakMap();
+        const paragraphSpacing = item => {
+          const paragraph = item.querySelector(':scope > p');
+          if (!paragraph) return false;
+          const top = paragraph.style.marginTop, bottom = paragraph.style.marginBottom;
+          return !(top && bottom && Number.parseFloat(top) === 0 && Number.parseFloat(bottom) === 0);
+        };
         const asParagraph = element => {
           const paragraph = doc.createElement('div');
           [...element.attributes].forEach(attribute => paragraph.setAttribute(attribute.name, attribute.value));
@@ -4140,22 +4178,32 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         };
         [...root.querySelectorAll('ol')].forEach(list => {
           const items = [...list.children].filter(child => child.tagName === 'LI');
+          const spacing = items.map(paragraphSpacing);
           let number = list.hasAttribute('start') ? list.start : list.reversed ? items.length : 1;
-          items.forEach(item => {
+          items.forEach((item, index) => {
             if (item.hasAttribute('value')) number = item.value;
             const first = [...item.childNodes].find(node => node.nodeType === Node.ELEMENT_NODE || node.textContent.trim());
             const target = first?.nodeType === Node.ELEMENT_NODE && ['P','DIV'].includes(first.tagName) ? first : item;
-            target.insertBefore(doc.createTextNode(`${number}. `), target.firstChild);
+            const marker = doc.createTextNode(`${number}. `);
+            const gapBefore = index > 0 && spacing[index - 1] && spacing[index];
+            markers.set(marker, { gapBefore });
+            target.insertBefore(marker, target.firstChild);
             number += list.reversed ? -1 : 1;
+            if (index + 1 < items.length && spacing[index] && spacing[index + 1]) {
+              const gap = doc.createElement('p');
+              gap.appendChild(doc.createElement('br'));
+              item.after(gap);
+            }
             asParagraph(item);
           });
           asParagraph(list);
         });
+        return markers;
       };
 
       const clipboardLinesFromHtml = (html, { preserveEdgeSpaces = false } = {}) => {
         const doc = new DOMParser().parseFromString(String(html), 'text/html');
-        literalizeClipboardOrderedLists(doc.body);
+        const orderedMarkers = literalizeClipboardOrderedLists(doc.body);
         doc.body.querySelectorAll('br').forEach((lineBreak) => {
           // 빈 블록의 <br>은 줄바꿈이 아니라 커서를 놓기 위한 자리표시입니다.
           // 줄바꿈으로 세면 빈 줄 하나가 두 줄로 늘어납니다.
@@ -4176,7 +4224,8 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
 
         doc.body.querySelectorAll('img, svg, video, audio, iframe').forEach((el) => el.remove());
 
-        const styles = [];
+        // 표식 수를 넘긴 구간도 목록 번호 표식의 상태를 물려받지 않도록 기본 서식을 확보합니다.
+        const styles = [{ ...EMPTY_CLIPBOARD_STYLE }];
         const textNodes = [];
         const styleWalker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
         while (styleWalker.nextNode()) textNodes.push(styleWalker.currentNode);
@@ -4186,11 +4235,15 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           // (Word나 손으로 정리한 HTML에 흔합니다) 전부 빈 줄로 늘어납니다.
           if (!node.nodeValue || !node.nodeValue.trim()) return;
           const style = clipboardStyleAt(node, doc.body);
+          if (orderedMarkers.has(node)) {
+            style.orderedMarker = true;
+            style.orderedGapBefore = orderedMarkers.get(node).gapBefore;
+          }
           let index = styles.findIndex((item) => sameClipboardStyle(item, style));
           if (index < 0) {
             if (styles.length >= CLIPBOARD_MARK_LIMIT) {
               // 표식을 못 붙이면 서식은 잃지만 글자는 남겨야 합니다.
-              node.nodeValue = escapeClipboardReserved(node.nodeValue);
+              node.nodeValue = String.fromCharCode(CLIPBOARD_MARK_BASE) + escapeClipboardReserved(node.nodeValue);
               return;
             }
             styles.push(style);

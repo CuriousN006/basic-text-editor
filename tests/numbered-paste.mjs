@@ -20,7 +20,7 @@ try {
     for (const text of ['1. 이런 텍스트\n2. 다음 텍스트', '이런 텍스트\n다음 텍스트']) {
       await withPage(async page => {
         await paste(page, '<ol><li><p>이런 텍스트</p></li><li><p>다음 텍스트</p></li></ol>', text, plain);
-        const expected = plain && !text.startsWith('1.') ? ['이런 텍스트','다음 텍스트'] : ['1. 이런 텍스트','2. 다음 텍스트'];
+        const expected = plain ? text.split('\n') : ['1. 이런 텍스트','','2. 다음 텍스트'];
         r.check('복사된 번호를 글자로 유지', await paragraphs(page), expected);
         r.check('HTML 번호 목록을 별도 목록 서식으로 넣지 않음', await page.locator('#editor ol,#editor li').count(), 0);
       });
@@ -90,6 +90,52 @@ try {
     await paste(page, '', '1. 첫 설명\n\n| 항목 | 값 |\n| --- | --- |\n| 사과 | 1 |\n\n3. 다음 설명');
     r.check('마크다운 표 앞뒤 번호 유지', await paragraphs(page), ['1. 첫 설명','','항목값사과1','','3. 다음 설명']);
     r.check('번호 문단과 함께 마크다운 표 변환 유지', await page.locator('#editor table').count(), 1);
+  });
+  for (const text of ['첫 설명\n\n다음 설명', '1. 첫 설명\n\n2. 다음 설명']) {
+    await withPage(async page => {
+      await paste(page, '<ol><li><p>첫 설명</p></li><li><p>다음 설명</p></li></ol>', text);
+      r.check('번호를 글자로 바꾸면서 복사 평문의 항목 사이 빈 줄 유지', await paragraphs(page), ['1. 첫 설명','','2. 다음 설명']);
+    });
+  }
+  for (const text of ['첫 설명\n\n다음 설명', '첫 설명\n\n\n다음 설명']) {
+    await withPage(async page => {
+      await paste(page, '<ol><li><b>첫 설명</b></li><li><i>다음 설명</i></li></ol>', text);
+      const blankLines = text.split('\n').slice(1,-1);
+      r.check('번호 없는 평문에서도 실제 빈 줄 수 유지', await paragraphs(page), ['1. 첫 설명',...blankLines,'2. 다음 설명']);
+      r.check('빈 줄 복원 후 글자 서식 유지', await page.evaluate(() => [T.ed().querySelector('b')?.textContent, T.ed().querySelector('i')?.textContent]), ['첫 설명','다음 설명']);
+    });
+  }
+  await withPage(async page => {
+    await paste(page, '<ol><li>첫 설명</li><li>다음 설명</li></ol>', '첫 설명\n다음 설명');
+    r.check('촘촘한 목록에 빈 줄을 임의로 넣지 않음', await paragraphs(page), ['1. 첫 설명','2. 다음 설명']);
+  });
+  await withPage(async page => {
+    await paste(page, '<ol><li><p style="margin:0">첫 설명</p></li><li><p style="margin:0">다음 설명</p></li></ol>', '첫 설명\n다음 설명');
+    r.check('여백 없는 문단 목록은 촘촘하게 유지', await paragraphs(page), ['1. 첫 설명','2. 다음 설명']);
+  });
+  await withPage(async page => {
+    await paste(page, '<ol><li><p>첫 설명</p></li><li><p>다음 설명</p></li></ol>', '첫 설명\n다음 설명');
+    r.check('평문에 없는 목록 문단 여백을 빈 줄로 보존', await paragraphs(page), ['1. 첫 설명','','2. 다음 설명']);
+    await page.keyboard.press('Control+z');
+    r.check('목록 문단 여백 복원도 한 번에 취소', await page.evaluate(() => T.html()), '<p><br></p>');
+  });
+  await withPage(async page => {
+    await paste(page, '<ol><li></li><li>다음 설명</li></ol>', '\n다음 설명');
+    r.check('빈 목록 항목의 번호를 다음 번호와 합치지 않음', await paragraphs(page), ['1.','2. 다음 설명']);
+  });
+  await withPage(async page => {
+    const count = 260;
+    const html = '<ol>' + Array.from({ length: count }, (_, i) => `<li><a href="https://example.com/${i}">항목${i+1}</a></li>`).join('') + '</ol>';
+    const plain = Array.from({ length: count }, (_, i) => `항목${i+1}`).join('\n\n');
+    await paste(page, html, plain);
+    const rows = await paragraphs(page);
+    r.check('서식 종류가 많은 번호 목록에서도 빈 줄 수 유지', rows.length, count*2-1);
+    r.check('긴 목록의 마지막 번호와 본문 유지', rows[rows.length-1], '260. 항목260');
+  });
+  await withPage(async page => {
+    await paste(page, '<ol><li>😀 <b>첫 설명</b></li><li>다음 설명</li></ol>', '😀 첫 설명\n\n다음 설명');
+    r.check('이모지가 있어도 번호와 빈 줄 유지', await paragraphs(page), ['1. 😀 첫 설명','','2. 다음 설명']);
+    r.check('이모지 뒤 굵게 범위 유지', await page.evaluate(() => T.ed().querySelector('b')?.textContent), '첫 설명');
   });
   process.exitCode = r.summary() ? 1 : 0;
 } finally { await browser.close(); server.close(); }
