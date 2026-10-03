@@ -2166,6 +2166,50 @@ await withPage({}, async (page) => {
   r.check('X24 서식 경계를 넘어 두 개', await findCountText(page), '2개');
 });
 
+// 모두 바꾸기로 문서 높이가 달라져도 화면에서 읽던 문단은 유지해야 한다.
+for (const scenario of [
+  { name: '줄 수 감소', find: '나머지 문장입니다. '.repeat(6), replace: '' },
+  { name: '줄 수 증가', find: '키워드', replace: '대체 문장을 길게 작성합니다. '.repeat(10) },
+  { name: '서식만 변경', find: '', replace: '', bold: true },
+  { name: '특수기호 치환', find: '^l', replace: '^p', lineBreaks: true },
+]) {
+  await withPage({}, async (page) => {
+    await page.evaluate((lineBreaks) => {
+      T.set(Array.from({ length: 180 }, (_, i) =>
+        `<p>${i} 키워드 문장을 길게 작성합니다. ${'나머지 문장입니다. '.repeat(12)}${lineBreaks ? '<br>마지막 줄' : ''}</p>`
+      ).join(''));
+      T.caretIn(120, true);
+    }, Boolean(scenario.lineBreaks));
+    await page.keyboard.press('Control+h');
+    await page.fill('#findText', scenario.find);
+    await page.fill('#replaceText', scenario.replace);
+    if (scenario.bold) await page.click('[data-replace-format="bold"]');
+    await page.waitForTimeout(260);
+    await page.evaluate(() => { document.querySelector('.workspace').scrollTop = 4200; });
+    const before = await page.evaluate(() => {
+      const view = document.querySelector('.workspace').getBoundingClientRect();
+      const block = [...T.ed().children].find(p => p.getBoundingClientRect().bottom > view.top);
+      return { label: block.textContent.split(' ')[0], top: block.getBoundingClientRect().top - view.top };
+    });
+    await page.click('[data-find="replace-all"]');
+    // 지연된 검색 결과 갱신과 브라우저 레이아웃까지 확인합니다.
+    await page.waitForTimeout(350);
+    const after = await page.evaluate((label) => {
+      const view = document.querySelector('.workspace').getBoundingClientRect();
+      const blocks = [...T.ed().children];
+      const visible = blocks.find(p => p.getBoundingClientRect().bottom > view.top);
+      const anchor = blocks.find(p => p.textContent.split(' ')[0] === label);
+      return { label: visible.textContent.split(' ')[0], top: anchor.getBoundingClientRect().top - view.top };
+    }, before.label);
+    r.check(`X30 ${scenario.name} 뒤에도 같은 문단`, after.label, before.label);
+    r.check(`X30 ${scenario.name} 뒤에도 문단의 화면 위치 유지`, Math.abs(after.top - before.top) < 1, true);
+    r.check(`X30 ${scenario.name} 치환 실제 반영`, await page.evaluate(({ find, bold, lineBreaks }) =>
+      bold ? T.ed().querySelectorAll('b,strong').length > 0
+        : lineBreaks ? T.ed().querySelectorAll('p').length === 360
+          : !T.ed().textContent.includes(find), scenario), true);
+  });
+}
+
 const failed = r.summary();
 await browser.close();
 server.close();

@@ -4067,12 +4067,29 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       const runBulkEdit = (mutate, hooks = {}) => {
         const beforeHtml = editor.innerHTML;
         const clone = editor.cloneNode(true);
+        // 모두 바꾸기는 스크롤 숫자가 아니라 보고 있던 문단을 유지합니다.
+        // 앞쪽 문단의 줄 수가 달라지면 같은 scrollTop도 전혀 다른 내용을 보여 줍니다.
+        const viewport = hooks.preserveViewport ? workspace.getBoundingClientRect() : null;
+        const visibleBlock = viewport && [...editor.querySelectorAll('p,h1,h2,h3,h4,h5,h6,pre,li,td,th')]
+          .find((block) => {
+            const rect = block.getBoundingClientRect();
+            return rect.height > 0 && rect.bottom > viewport.top && rect.top < viewport.bottom;
+          });
+        const viewportAnchor = visibleBlock
+          ? nodeAtPath(clone, nodePathWithin(editor, visibleBlock).path)
+          : null;
+        const anchorTop = visibleBlock ? visibleBlock.getBoundingClientRect().top - viewport.top : 0;
+        const scrollTop = workspace.scrollTop;
+        const scrollLeft = workspace.scrollLeft;
         const count = mutate(clone);
         if (!count) return 0;
         pruneEmptyInlineElements(clone);
         pruneEmptyBlockContainers(clone);
         ensureBlockPlaceholders(clone);
         if (hooks.beforeCommit) hooks.beforeCommit(clone);
+        const anchorPath = viewportAnchor && clone.contains(viewportAnchor)
+          ? nodePathWithin(clone, viewportAnchor).path
+          : null;
 
         // innerHTML을 갈아치우면 검색 위치와 개수도 더 이상 맞지 않습니다.
         invalidateFindResultsAfterDocumentChange();
@@ -4085,6 +4102,14 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         }
         normalizeEmptyDocument();
         if (hooks.afterCommit) hooks.afterCommit();
+        if (viewport) {
+          const anchor = anchorPath && nodeAtPath(editor, anchorPath);
+          workspace.scrollTop = anchor
+            ? workspace.scrollTop + anchor.getBoundingClientRect().top
+              - workspace.getBoundingClientRect().top - anchorTop
+            : scrollTop;
+          workspace.scrollLeft = scrollLeft;
+        }
 
         breakEditorHistoryGroup();
         pushEditorHistory(beforeHtml, editor.innerHTML);
@@ -5114,7 +5139,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
             if (formattingOnly) applyFormatSettingsToRange(range, root, settings);
             else replaceRangeWithTokens(range, parsedReplacement.tokens, root, settings);
           });
-        });
+        }, { preserveViewport: true });
         specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
         return { count, truncated };
       };
@@ -5234,7 +5259,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
             if (replaceScope.value === 'all') range.selectNodeContents(root);
             applyFormatSettingsToRange(range, root, settings);
             return 1;
-          });
+          }, { preserveViewport: true });
           showToast(changed
             ? `${replacementScopeLabel()}의 서식을 지정한 대로 변경했습니다.`
             : '변경할 내용이 없습니다.');
@@ -5280,7 +5305,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
             if (formattingOnly) applyFormatSettingsToRange(range, root, settings);
             else replaceRangeWithTokens(range, [{ type: 'text', value: match.insertion }], root, settings);
           });
-        });
+        }, { preserveViewport: true });
 
         specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
         const particleMessage = particleCount ? ` · 조사 ${particleCount}개 자동 교정` : '';
