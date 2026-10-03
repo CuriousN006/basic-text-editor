@@ -49,4 +49,5 @@ EDITOR_DIR=/tmp/baseline npm test
 - `table-paste.mjs` — HTML 표·마크다운 표의 실제 클립보드 붙여넣기 검증
 - `table-controls.mjs` — 행·열 추가, 실제 핸들 드래그 선택·삭제, 병합 셀, 실행 취소와 터치 조작 검증
 - `clipboard-spaces.mjs` — 실제 복사·잘라내기·붙여넣기에서 앞뒤 공백과 서식을 보존하는지 검증
+- `findbar-scroll.mjs` — 치환 후 찾기·바꾸기 창을 닫을 때의 화면 위치와 포커스 복귀 검증
 - `perf.mjs` — 일괄 치환 소요 시간 측정

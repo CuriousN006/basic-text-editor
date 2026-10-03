@@ -4368,6 +4368,55 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       };
 
       const closeFindbar = () => {
+        if (!findbar.classList.contains('open')) return;
+        // 사이드바를 닫으면 본문 폭과 줄 수가 달라집니다. 포커스 복귀까지 마친 뒤
+        // 닫기 직전에 보던 문단을 같은 화면 위치로 되돌립니다.
+        const view = workspace.getBoundingClientRect();
+        const anchor = [...editor.querySelectorAll('p,h1,h2,h3,h4,h5,h6,pre,li,td,th')]
+          .find(block => {
+            const rect = block.getBoundingClientRect();
+            return rect.height > 0 && rect.bottom > view.top && rect.top < view.bottom;
+          });
+        const anchorTop = anchor ? anchor.getBoundingClientRect().top - view.top : 0;
+        // 긴 한 문단 안에서 보고 있던 글자도 추적합니다. 문단의 위쪽만 고정하면
+        // 폭이 바뀌면서 같은 문단의 더 아래쪽 글자가 화면으로 올라올 수 있습니다.
+        const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+        let textAnchor = null;
+        while (walker.nextNode()) {
+          const node = walker.currentNode;
+          if (!node.length) continue;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          if (![...range.getClientRects()].some(rect => rect.height > 0
+            && rect.bottom > view.top && rect.top < view.bottom
+            && rect.right > view.left && rect.left < view.right)) continue;
+          let low = 0, high = node.length;
+          while (low < high) {
+            const middle = Math.floor((low + high) / 2);
+            range.setStart(node, middle); range.setEnd(node, middle + 1);
+            if (range.getBoundingClientRect().bottom <= view.top) low = middle + 1;
+            else high = middle;
+          }
+          if (low >= node.length) continue;
+          range.setStart(node, low); range.setEnd(node, low + 1);
+          if (!range.getBoundingClientRect().height) continue;
+          textAnchor = range;
+          break;
+        }
+        const textTop = textAnchor ? textAnchor.getBoundingClientRect().top - view.top : 0;
+        const scrollTop = workspace.scrollTop;
+        const scrollLeft = workspace.scrollLeft;
+        const restoreViewport = () => {
+          if (findbar.classList.contains('open')) return;
+          workspace.scrollTop = textAnchor && editor.contains(textAnchor.startContainer)
+            ? workspace.scrollTop + textAnchor.getBoundingClientRect().top
+              - workspace.getBoundingClientRect().top - textTop
+            : anchor && editor.contains(anchor)
+            ? workspace.scrollTop + anchor.getBoundingClientRect().top
+              - workspace.getBoundingClientRect().top - anchorTop
+            : scrollTop;
+          workspace.scrollLeft = scrollLeft;
+        };
         findbar.classList.remove('open');
         findResultsPanel.classList.remove('open');
         findResultsPanel.setAttribute('aria-hidden', 'true');
@@ -4376,6 +4425,9 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         findCount.textContent = '';
         findCount.classList.remove('is-empty');
         focusEditor();
+        restoreViewport();
+        // 브라우저가 다음 프레임에 포커스/스크롤 앵커를 다시 계산하는 경우도 보정합니다.
+        requestAnimationFrame(restoreViewport);
       };
 
       // 문단·줄바꿈은 검색 모델 안에서 한 글자짜리 표식이 필요합니다. 고정된
