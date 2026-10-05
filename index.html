@@ -2186,6 +2186,42 @@
         linkPreviewCopy.textContent = copied ? '복사됨' : '복사 실패';
       };
 
+      const createLinkWithoutScrolling = (url) => {
+        const scrollStates = [{ element: workspace, top: workspace.scrollTop, left: workspace.scrollLeft }];
+        let element = window.getSelection()?.anchorNode;
+        if (element?.nodeType !== Node.ELEMENT_NODE) element = element?.parentElement;
+        for (; element; element = element.parentElement) {
+          if (element === workspace) continue;
+          if (element.scrollTop || element.scrollLeft || element.scrollHeight > element.clientHeight || element.scrollWidth > element.clientWidth) {
+            scrollStates.push({ element, top: element.scrollTop, left: element.scrollLeft });
+          }
+        }
+        const windowTop = window.scrollY, windowLeft = window.scrollX;
+        const result = document.execCommand('createLink', false, url);
+        const history = currentHistoryHtml;
+        const restore = () => {
+          scrollStates.forEach(({ element, top, left }) => {
+            if (element.isConnected) element.scrollTo({ top, left, behavior: 'instant' });
+          });
+          window.scrollTo({ top: windowTop, left: windowLeft, behavior: 'instant' });
+        };
+        restore();
+        // 링크는 글자를 바꾸지 않습니다. 브라우저의 다음 프레임 보정으로도 화면이
+        // 움직이지 않게 하되, 사용자가 직접 스크롤하거나 편집했다면 그 동작을 따릅니다.
+        let cancelled = false;
+        const cancel = () => { cancelled = true; };
+        workspace.addEventListener('wheel', cancel, { passive: true, once: true });
+        workspace.addEventListener('pointerdown', cancel, { once: true });
+        document.addEventListener('keydown', cancel, { once: true });
+        requestAnimationFrame(() => {
+          workspace.removeEventListener('wheel', cancel);
+          workspace.removeEventListener('pointerdown', cancel);
+          document.removeEventListener('keydown', cancel);
+          if (!cancelled && document.activeElement === editor && currentHistoryHtml === history) restore();
+        });
+        return result;
+      };
+
       const insertLink = (urlOverride = '') => {
         restoreSelection();
         focusEditor();
@@ -2204,7 +2240,7 @@
 
         restoreSelection();
         if (selection && !selection.isCollapsed) {
-          document.execCommand('createLink', false, trimmed);
+          createLinkWithoutScrolling(trimmed);
         } else {
           const label = trimmed;
           document.execCommand('insertHTML', false, `<a href="${escapeAttribute(label)}">${escapeHtml(label)}</a>`);
@@ -5709,6 +5745,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         }
 
         let lastNode = null;
+        let insertionCaret = null;
         const changed = runBulkEdit((root) => {
           let range = null;
           const start = boundaryFromPath(root, startPath);
@@ -5726,12 +5763,21 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           }
 
           lastNode = replaceRangeWithTokens(range, tokens, root);
+          // 글자만 바꾸는 빠른 경로는 새 노드를 만들지 않습니다. 이 경우에도
+          // 실제 삽입 위치를 기록하여 문서 끝을 커서 위치로 사용하지 않습니다.
+          if (!lastNode && range.collapsed) insertionCaret = range.cloneRange();
           return 1;
         }, {
           // 커서 자리를 임시 표식으로 남깁니다. 자식 인덱스 경로로 기록하면
           // innerHTML을 다시 파싱할 때 이웃한 텍스트 노드가 하나로 합쳐져
           // 경로가 어긋나고, 커서가 문서 맨 앞으로 돌아갑니다.
           beforeCommit(root) {
+            if (insertionCaret && root.contains(insertionCaret.startContainer)) {
+              const mark = root.ownerDocument.createElement('span');
+              mark.setAttribute(PASTE_CARET_MARK, '1');
+              insertionCaret.insertNode(mark);
+              return;
+            }
             if (!lastNode || !root.contains(lastNode) || !lastNode.parentNode) return;
             if (tokens[tokens.length - 1]?.type === 'block' && lastNode.tagName !== 'TABLE') {
               const tail = lastNode.nextSibling;
@@ -6430,7 +6476,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           && !selection.isCollapsed
           && isUrl(linkCandidate)
           && selectionIsInsideEditor()) {
-          document.execCommand('createLink', false, linkCandidate);
+          createLinkWithoutScrolling(linkCandidate);
           updateCount();
           return;
         }
