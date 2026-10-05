@@ -2186,7 +2186,7 @@
         linkPreviewCopy.textContent = copied ? '복사됨' : '복사 실패';
       };
 
-      const createLinkWithoutScrolling = (url) => {
+      const captureLinkScroll = () => {
         const scrollStates = [{ element: workspace, top: workspace.scrollTop, left: workspace.scrollLeft }];
         let element = window.getSelection()?.anchorNode;
         if (element?.nodeType !== Node.ELEMENT_NODE) element = element?.parentElement;
@@ -2197,27 +2197,82 @@
           }
         }
         const windowTop = window.scrollY, windowLeft = window.scrollX;
-        const result = document.execCommand('createLink', false, url);
-        const history = currentHistoryHtml;
-        const restore = () => {
+        return () => {
           scrollStates.forEach(({ element, top, left }) => {
-            if (element.isConnected) element.scrollTo({ top, left, behavior: 'instant' });
+            if (element.isConnected && (Math.abs(element.scrollTop-top) > .5 || Math.abs(element.scrollLeft-left) > .5)) {
+              element.scrollTo({ top, left, behavior: 'instant' });
+            }
           });
-          window.scrollTo({ top: windowTop, left: windowLeft, behavior: 'instant' });
+          if (Math.abs(window.scrollY-windowTop) > .5 || Math.abs(window.scrollX-windowLeft) > .5) {
+            window.scrollTo({ top: windowTop, left: windowLeft, behavior: 'instant' });
+          }
         };
+      };
+
+      let linkPasteCheckpoint = null;
+      let stopLinkScrollGuard = null;
+      document.addEventListener('keydown', event => {
+        if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'v'
+          || event.shiftKey || !editor.contains(event.target) || !selectionIsInsideEditor()) return;
+        const selection = window.getSelection();
+        if (!selection || selection.isCollapsed || !selection.rangeCount) return;
+        const range = selection.getRangeAt(0);
+        // paste보다 앞선 키보드 캡처 단계에서 원래 화면 위치를 기록합니다.
+        linkPasteCheckpoint = {
+          event, createdAt: Date.now(), restore: captureLinkScroll(),
+          start: range.startContainer, startOffset: range.startOffset,
+          end: range.endContainer, endOffset: range.endOffset
+        };
+      }, true);
+
+      const createLinkWithoutScrolling = (url, checkpoint = null) => {
+        stopLinkScrollGuard?.();
+        const range = window.getSelection()?.rangeCount ? window.getSelection().getRangeAt(0) : null;
+        const useCheckpoint = checkpoint && Date.now()-checkpoint.createdAt < 1500 && range
+          && range.startContainer === checkpoint.start && range.startOffset === checkpoint.startOffset
+          && range.endContainer === checkpoint.end && range.endOffset === checkpoint.endOffset;
+        const restoreScroll = useCheckpoint ? checkpoint.restore : captureLinkScroll();
+        const result = document.execCommand('createLink', false, url);
+        // 이력 이벤트의 도착 순서가 아닌 실제 편집 완료 내용을 기준으로 검사합니다.
+        const appliedHtml = editor.innerHTML;
+        let stopped = false, stopTimer = null;
+        const stop = () => {
+          if (stopped) return;
+          stopped = true;
+          clearTimeout(stopTimer);
+          window.removeEventListener('scroll', restore, true);
+          window.removeEventListener('wheel', stop, true);
+          window.removeEventListener('pointerdown', stop, true);
+          window.removeEventListener('keydown', onKeydown, true);
+          window.removeEventListener('keyup', onKeyup, true);
+          window.removeEventListener('blur', stop);
+          if (stopLinkScrollGuard === stop) stopLinkScrollGuard = null;
+        };
+        const restore = () => {
+          if (stopped) return;
+          if (document.activeElement !== editor || editor.innerHTML !== appliedHtml) { stop(); return; }
+          restoreScroll();
+        };
+        const onKeydown = event => { if (!useCheckpoint || event !== checkpoint.event) stop(); };
+        const onKeyup = event => {
+          if (!useCheckpoint || event.key.toLowerCase() !== 'v') return;
+          restore();
+          clearTimeout(stopTimer);
+          stopTimer = setTimeout(stop, 120);
+        };
+        stopLinkScrollGuard = stop;
+        // 링크 적용 중 발생하는 늦은 자동 스크롤도 짧은 구간 동안 보정합니다.
+        // 사용자가 새 입력·클릭·휠 조작을 시작하면 즉시 종료합니다.
+        window.addEventListener('scroll', restore, { capture: true, passive: true });
+        window.addEventListener('wheel', stop, { capture: true, passive: true });
+        window.addEventListener('pointerdown', stop, true);
+        window.addEventListener('keydown', onKeydown, true);
+        window.addEventListener('keyup', onKeyup, true);
+        window.addEventListener('blur', stop);
+        stopTimer = setTimeout(stop, 180);
         restore();
-        // 링크는 글자를 바꾸지 않습니다. 브라우저의 다음 프레임 보정으로도 화면이
-        // 움직이지 않게 하되, 사용자가 직접 스크롤하거나 편집했다면 그 동작을 따릅니다.
-        let cancelled = false;
-        const cancel = () => { cancelled = true; };
-        workspace.addEventListener('wheel', cancel, { passive: true, once: true });
-        workspace.addEventListener('pointerdown', cancel, { once: true });
-        document.addEventListener('keydown', cancel, { once: true });
         requestAnimationFrame(() => {
-          workspace.removeEventListener('wheel', cancel);
-          workspace.removeEventListener('pointerdown', cancel);
-          document.removeEventListener('keydown', cancel);
-          if (!cancelled && document.activeElement === editor && currentHistoryHtml === history) restore();
+          restore(); requestAnimationFrame(restore);
         });
         return result;
       };
@@ -6464,6 +6519,8 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       // Ctrl+Shift+V는 서식 없이 글자만 붙여넣습니다.
       editor.addEventListener('paste', (event) => {
         event.preventDefault();
+        const linkCheckpoint = linkPasteCheckpoint;
+        linkPasteCheckpoint = null;
         const keepFormatting = !consumePlainPasteRequest();
         const selection = window.getSelection();
         const plain = event.clipboardData?.getData('text/plain') || '';
@@ -6476,7 +6533,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           && !selection.isCollapsed
           && isUrl(linkCandidate)
           && selectionIsInsideEditor()) {
-          createLinkWithoutScrolling(linkCandidate);
+          createLinkWithoutScrolling(linkCandidate, linkCheckpoint);
           updateCount();
           return;
         }

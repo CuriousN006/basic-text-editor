@@ -52,4 +52,5 @@ EDITOR_DIR=/tmp/baseline npm test
 - `findbar-scroll.mjs` — 치환 후 찾기·바꾸기 창을 닫을 때의 화면 위치와 포커스 복귀 검증
 - `numbered-paste.mjs` — HTML·마크다운 번호 목록을 숫자가 포함된 일반 문단으로 붙여넣는지 검증
 - `link-paste-scroll.mjs` — 실제 URL 붙여넣기, 연속 링크 변경, 스크롤 유지와 붙여넣기 뒤 커서 위치 검증
+- `link-paste-half-window.mjs` — 반쪽 창 크기, 실제 마우스 선택, 붙여넣기 전·후 지연 스크롤 보정 검증
 - `perf.mjs` — 일괄 치환 소요 시간 측정

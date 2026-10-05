@@ -4,7 +4,7 @@
   "type": "module",
   "description": "index.html의 동작을 실제 브라우저에서 검증하는 개발용 테스트. 편집기 실행에는 필요하지 않습니다.",
   "scripts": {
-    "test": "node tests.mjs && node table-paste.mjs && node table-controls.mjs && node clipboard-spaces.mjs && node findbar-scroll.mjs && node numbered-paste.mjs && node link-paste-scroll.mjs",
+    "test": "node tests.mjs && node table-paste.mjs && node table-controls.mjs && node clipboard-spaces.mjs && node findbar-scroll.mjs && node numbered-paste.mjs && node link-paste-scroll.mjs && node link-paste-half-window.mjs",
     "perf": "node perf.mjs"
   },
   "devDependencies": {
