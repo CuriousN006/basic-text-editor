@@ -9,7 +9,12 @@ const active = async (page, source = html) => {
   await page.locator('#editor td').first().click();
   await page.waitForTimeout(80);
 };
-const act = async (page, name) => { await page.locator(`[data-table-edit="${name}"]`).click(); await page.waitForTimeout(80); };
+// 메뉴 항목이 닫혀 있으면 표 모서리의 ⋯ 메뉴를 열고 누릅니다.
+const act = async (page, name) => {
+  const item = page.locator(`#tableMenu [data-table-edit="${name}"]`);
+  if (!await item.isVisible()) { await page.locator('#tableMenuButton').click(); await page.waitForTimeout(40); }
+  await item.click(); await page.waitForTimeout(80);
+};
 const handle = (page, axis, i) => page.locator(`[data-table-select="${axis}"][data-index="${i}"]`);
 const drag = async (page, axis, from, to) => {
   const a = await handle(page, axis, from).boundingBox(), b = await handle(page, axis, to).boundingBox();
@@ -31,6 +36,11 @@ try {
     await active(page);
     r.check('셀 클릭으로 표 편집 UI 표시', await page.locator('#tableControls').isVisible(), true);
     r.check('행과 열 핸들 표시', await page.locator('.table-axis-handle').count(), 7);
+    r.check('현재 칸의 행·열 손잡이만 드러남', await page.locator('.table-axis-handle.is-current').count(), 2);
+    r.check('나머지 손잡이는 투명', await page.evaluate(() => [...document.querySelectorAll('.table-axis-handle:not(.is-current)')].every(h => getComputedStyle(h).opacity === '0')), true);
+    r.check('처음에는 메뉴가 닫혀 있음', await page.locator('#tableMenu').isVisible(), false);
+    r.check('처음에는 + 버튼 없음', await page.locator('.table-insert-button:visible').count(), 0);
+    r.check('표 모서리 메뉴 버튼 표시', await page.locator('#tableMenuButton').isVisible(), true);
     await act(page, 'row-before');
     r.check('선택한 셀 위에 행 삽입', await read(page), [['항목','가격','수량'],['','',''],['사과','100','1'],['배','200','2'],['포도','300','3']]);
     await page.keyboard.press('Control+z');
@@ -181,7 +191,7 @@ try {
     await page.setViewportSize({ width: 390, height: 844 });
     await active(page);
     r.check('좁은 화면에서도 행 핸들 표시', await handle(page, 'row', 1).isVisible(), true);
-    r.check('좁은 화면에서도 열 추가 버튼 표시', await page.locator('#tableAddColumn').isVisible(), true);
+    r.check('좁은 화면에서도 표 메뉴 버튼 표시', await page.locator('#tableMenuButton').isVisible(), true);
     await handle(page, 'row', 1).tap();
     await page.locator('[data-table-edit="delete-row"]').tap();
     r.check('좁은 화면에서 행 삭제', await page.locator('#editor tr').count(), 3);
@@ -226,7 +236,7 @@ try {
   await withPage(async page => {
     await active(page, merged);
     await handle(page, 'column', 1).click();
-    r.check('열 선택 중에도 표 전체 삭제 버튼 표시', await page.locator('[data-table-edit="delete-table"]').isVisible(), true);
+    r.check('열 메뉴에는 열 항목만 표시', await page.locator('#tableMenu [data-table-edit]:visible').evaluateAll(items => items.map(item => item.dataset.tableEdit)), ['column-before', 'column-after', 'delete-column']);
     await act(page, 'delete-table');
     r.check('병합 표도 한 번에 삭제', await page.locator('#editor table').count(), 0);
     await page.keyboard.press('Control+z');
@@ -249,6 +259,7 @@ try {
   await withPage(async page => {
     await page.setViewportSize({ width: 390, height: 844 });
     await active(page);
+    await page.locator('#tableMenuButton').tap();
     await page.locator('[data-table-edit="delete-table"]').tap();
     r.check('좁은 화면에서도 표 전체 삭제', await page.locator('#editor table').count(), 0);
   }, { hasTouch: true });
@@ -260,6 +271,35 @@ try {
     r.check('안쪽 표 앞뒤의 셀 내용 보존', await page.evaluate(() => T.ed().querySelector('tr').cells[1].textContent), '앞뒤');
     await act(page, 'delete-column');
     r.check('안쪽 표 삭제 뒤에도 현재 셀 기준 편집', await page.evaluate(() => T.ed().querySelector('tr').cells[0].textContent), '옆 칸');
+  });
+  await withPage(async page => {
+    await active(page);
+    await drag(page, 'row', 1, 2);
+    r.check('여러 행 선택 시 삭제 항목에 개수 표시', await page.locator('[data-table-edit="delete-row"]').textContent(), '행 2개 삭제');
+    r.check('행 메뉴에는 행 항목만 표시', await page.locator('#tableMenu [data-table-edit]:visible').evaluateAll(items => items.map(item => item.dataset.tableEdit)), ['row-before', 'row-after', 'delete-row']);
+    await page.keyboard.press('Escape');
+    r.check('Esc로 행 메뉴 닫기', await page.locator('#tableMenu').isVisible(), false);
+    r.check('Esc 뒤 표는 그대로', await page.locator('#editor tr').count(), 4);
+    await act(page, 'delete-row');
+    r.check('행 삭제 안내 문구에 개수 표시', await page.locator('#toast').textContent(), '행 1개를 삭제했습니다. Ctrl+Z로 되돌릴 수 있습니다.');
+  });
+  await withPage(async page => {
+    await active(page);
+    await page.locator('#tableMenuButton').focus();
+    await page.keyboard.press('Enter');
+    r.check('키보드로 표 메뉴 열면 첫 항목에 초점', await page.evaluate(() => document.activeElement.dataset.tableEdit), 'row-before');
+    await page.keyboard.press('End');
+    r.check('표 메뉴 End로 마지막 항목', await page.evaluate(() => document.activeElement.dataset.tableEdit), 'delete-table');
+    await page.keyboard.press('ArrowDown');
+    r.check('표 메뉴 아래 화살표는 처음으로 순환', await page.evaluate(() => document.activeElement.dataset.tableEdit), 'row-before');
+    await page.keyboard.press('Escape');
+    r.check('Esc로 표 메뉴 닫고 본문으로 복귀', await page.evaluate(() => [document.getElementById('tableMenu').hidden, document.activeElement.id]), [true, 'editor']);
+  });
+  await withPage(async page => {
+    await page.locator('#tableButton').click();
+    r.check('표 삽입 창 격자와 숫자 칸 일치', await page.evaluate(() => [document.querySelectorAll('.table-grid-cell.active').length, tableRows.value, tableColumns.value]), [4, '2', '2']);
+    await page.locator('[data-table-row="3"][data-table-column="4"]').hover();
+    r.check('격자에 마우스를 올리면 숫자 칸도 따라감', await page.evaluate(() => [tableRows.value, tableColumns.value, document.getElementById('tableSizeLabel').textContent]), ['3', '4', '3행 × 4열']);
   });
   const topTable = '<table><tbody><tr><td>첫 칸</td><td>둘째</td></tr><tr><td>가</td><td>나</td></tr></tbody></table><p>뒤</p>';
   const rootShape = page => page.evaluate(() => [...T.ed().childNodes].map(node => node.nodeType === 3 ? `#text:${node.data}` : node.tagName));
