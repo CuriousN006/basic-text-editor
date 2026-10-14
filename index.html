@@ -2904,7 +2904,9 @@
       const sanitizeHtml = (html) => {
         const doc = new DOMParser().parseFromString(html, 'text/html');
         // form은 formaction/action 을 통해 저장된 HTML에서 동작할 수 있으므로 함께 제거합니다.
-        doc.querySelectorAll('script, style, iframe, object, embed, link, meta, form, base, template, noscript')
+        // SVG·MathML은 <animate attributeName="href" values="javascript:…">처럼 URL 속성
+        // 검사를 우회해 링크를 바꿀 수 있습니다. 문서 편집에 쓸 일이 없으므로 통째로 뺍니다.
+        doc.querySelectorAll('script, style, iframe, object, embed, link, meta, form, base, template, noscript, svg, math')
           .forEach((node) => node.remove());
         doc.querySelectorAll('*').forEach((node) => {
           [...node.attributes].forEach((attribute) => {

@@ -214,6 +214,19 @@ await withPage({}, async (page) => {
   r.check('S3 정상 링크 유지', /https:\/\/ok\.example\//.test(html), true, html);
   r.check('S4 인라인 이미지 유지', /data:image\/png/.test(html), true, html);
 });
+await withPage({}, async (page) => {
+  await page.setInputFiles('#fileInput', {
+    name: 'svg.html',
+    mimeType: 'text/html',
+    buffer: Buffer.from('<p>앞 <svg><a><animate attributeName="href" values="javascript:alert(1)"/><text y="20">클릭</text></a></svg>'
+      + '<math><maction actiontype="statusline" xlink:href="javascript:alert(2)">수식</maction></math> 뒤</p>'),
+  });
+  await page.waitForTimeout(200);
+  const html = await page.evaluate(() => T.html());
+  r.check('S5 SVG 애니메이션 링크 우회 제거', /<svg|animate|script:/i.test(html), false, html);
+  r.check('S6 MathML 제거', /<math|maction/i.test(html), false, html);
+  r.check('S7 주변 글자 유지', await page.evaluate(() => T.text().replace(/\s+/g, ' ').trim()), '앞 뒤');
+});
 
 /* =================== 회귀 검증 =================== */
 
