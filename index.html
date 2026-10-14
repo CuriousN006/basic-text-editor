@@ -1536,27 +1536,37 @@
         return paragraph;
       };
 
-      const cleanTableExitParagraphs = (root) => {
-        [...root.querySelectorAll(`p[${TABLE_EXIT_ATTRIBUTE}]`)].forEach((paragraph) => {
-          if (isEmptyTableExitParagraph(paragraph)) paragraph.remove();
-          else paragraph.removeAttribute(TABLE_EXIT_ATTRIBUTE);
+      // 탈출 문단에 여러 줄을 붙여넣거나 Enter를 누르면 브라우저가 문단을 나누면서
+      // 속성까지 새 문단마다 복제합니다. 이렇게 이웃과 함께 표시된 문단은 사용자가
+      // 만든 문단(붙여넣은 빈 줄 포함)이므로 표시만 떼고 그대로 둡니다. 혼자 남은
+      // 빈 문단만 편집용 자리표시자로 보고 정리합니다.
+      const settleTableExitParagraphs = (root, removePlaceholder) => {
+        const marked = [...root.querySelectorAll(`p[${TABLE_EXIT_ATTRIBUTE}]`)];
+        const markedSet = new Set(marked);
+        const placeholders = marked.filter((paragraph) => (
+          isEmptyTableExitParagraph(paragraph)
+          && !markedSet.has(paragraph.previousElementSibling)
+          && !markedSet.has(paragraph.nextElementSibling)
+        ));
+        marked.forEach((paragraph) => {
+          if (!placeholders.includes(paragraph)) {
+            paragraph.removeAttribute(TABLE_EXIT_ATTRIBUTE);
+          } else if (removePlaceholder(paragraph)) {
+            paragraph.remove();
+          }
         });
         return root;
       };
 
+      const cleanTableExitParagraphs = (root) => settleTableExitParagraphs(root, () => true);
+
       const editorContentForExport = () => cleanTableExitParagraphs(editor.cloneNode(true));
 
       const normalizeTableExitParagraphs = () => {
-        [...editor.querySelectorAll(`p[${TABLE_EXIT_ATTRIBUTE}]`)].forEach((paragraph) => {
-          if (!isEmptyTableExitParagraph(paragraph)) {
-            paragraph.removeAttribute(TABLE_EXIT_ATTRIBUTE);
-            return;
-          }
-          if (paragraph.parentElement !== editor
-            || paragraph.previousElementSibling?.tagName !== 'TABLE') {
-            paragraph.remove();
-          }
-        });
+        settleTableExitParagraphs(editor, (paragraph) => (
+          paragraph.parentElement !== editor
+          || paragraph.previousElementSibling?.tagName !== 'TABLE'
+        ));
       };
 
       const placeCaretInBlock = (block, atEnd = false) => {

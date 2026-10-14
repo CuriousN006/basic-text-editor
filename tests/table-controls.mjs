@@ -301,6 +301,40 @@ try {
     await page.locator('[data-table-row="3"][data-table-column="4"]').hover();
     r.check('격자에 마우스를 올리면 숫자 칸도 따라감', await page.evaluate(() => [tableRows.value, tableColumns.value, document.getElementById('tableSizeLabel').textContent]), ['3', '4', '3행 × 4열']);
   });
+  const belowTable = '<table><tbody><tr><td>칸</td></tr></tbody></table><p data-table-exit=""><br></p>';
+  const pasteBelowTable = async (page, html) => {
+    await page.evaluate(source => T.set(source), belowTable);
+    await page.locator('#editor p').last().click();
+    await page.evaluate(([h, t]) => T.writeClipboard(h, t), [html, '첫 줄\n\n둘째 줄\n\n\n셋째 줄']);
+    await page.keyboard.press('Control+v');
+    await page.waitForTimeout(120);
+  };
+  const paragraphs = page => page.evaluate(() => [...T.ed().querySelectorAll(':scope > p')].map(p => p.textContent || '(빈 줄)'));
+  for (const [label, html] of [['일반 글자', null], ['HTML', '<p>첫 줄</p><p><br></p><p>둘째 줄</p><p><br></p><p><br></p><p>셋째 줄</p>']]) {
+    await withPage(async page => {
+      await pasteBelowTable(page, html);
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('넷');
+      r.check(`표 아래 ${label} 붙여넣기 뒤 Enter해도 빈 줄 유지`, await paragraphs(page), ['첫 줄', '(빈 줄)', '둘째 줄', '(빈 줄)', '(빈 줄)', '셋째 줄', '넷']);
+      r.check(`표 아래 ${label} 붙여넣기 뒤 탈출 표시 남지 않음`, await page.locator('#editor [data-table-exit]').count(), 0);
+    });
+  }
+  await withPage(async page => {
+    await pasteBelowTable(page, null);
+    const pending = page.waitForEvent('download');
+    await page.locator('[data-action="save-html"]').click();
+    const stream = await (await pending).createReadStream(), chunks = [];
+    for await (const chunk of stream) chunks.push(chunk);
+    const body = Buffer.concat(chunks).toString().split('<body>')[1] || '';
+    r.check('표 아래 붙여넣고 바로 저장해도 빈 줄 유지', (body.match(/<p[^>]*><br><\/p>/g) || []).length, 3);
+    r.check('저장 결과에 탈출 표시 없음', body.includes('data-table-exit'), false);
+  }, { noFilePicker: true });
+  await withPage(async page => {
+    await page.evaluate(source => T.set(source), belowTable);
+    await page.locator('#editor p').last().click();
+    await page.keyboard.press('Enter');
+    r.check('표 아래 빈 문단에서 Enter하면 빈 줄 추가', await page.locator('#editor > p').count(), 2);
+  });
   const topTable = '<table><tbody><tr><td>첫 칸</td><td>둘째</td></tr><tr><td>가</td><td>나</td></tr></tbody></table><p>뒤</p>';
   const rootShape = page => page.evaluate(() => [...T.ed().childNodes].map(node => node.nodeType === 3 ? `#text:${node.data}` : node.tagName));
   await withPage(async page => {
