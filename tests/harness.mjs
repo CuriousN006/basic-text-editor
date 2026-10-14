@@ -70,6 +70,9 @@ export async function openEditor(browser, base, opts = {}) {
   page.on('dialog', (d) => d.accept(opts.promptAnswer ?? ''));
   await page.goto(`${base}/index.html`);
   await page.waitForSelector('#editor');
+  // 초안 복구는 탭 잠금을 확보한 뒤 비동기로 끝납니다. 끝나면 탭 ID가 기록됩니다.
+  // (탭별 초안 이전 버전으로 돌릴 때는 기록되지 않으므로 잠깐만 기다립니다.)
+  await page.waitForFunction(() => sessionStorage.getItem('basic-text-editor-tab'), null, { timeout: 2000 }).catch(() => {});
 
   await page.addScriptTag({
     content: `
@@ -113,7 +116,11 @@ export async function openEditor(browser, base, opts = {}) {
         return full;
       },
       selection() { return String(getSelection()); },
-      draft() { return localStorage.getItem('basic-text-editor-draft'); },
+      draft() {
+        const id = sessionStorage.getItem('basic-text-editor-tab');
+        const raw = id && localStorage.getItem('basic-text-editor-draft:' + id);
+        return raw ? JSON.parse(raw).html : localStorage.getItem('basic-text-editor-draft');
+      },
       toast() { return document.getElementById('toast').textContent; },
       boldTags() { return T.ed().querySelectorAll('b,strong').length; },
       formatTags() { return T.ed().querySelectorAll('b,strong,i,em,u,s,strike,del,a').length; },

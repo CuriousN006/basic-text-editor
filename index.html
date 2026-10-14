@@ -6977,8 +6977,23 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       });
 
       // ===== 자동 저장 및 이탈 경고 =====
-      const DRAFT_KEY = 'basic-text-editor-draft';
+      // 초안은 탭마다 따로 둡니다. 예전처럼 키 하나를 함께 쓰면 두 탭에서 편집할 때
+      // 마지막에 저장한 탭이 다른 탭의 초안을 덮어쓰고, 한 탭에서 파일을 저장하면
+      // 다른 탭의 초안까지 지워졌습니다. 그 사이 다른 탭이 비정상 종료되면 작업이
+      // 복구 수단 없이 사라집니다.
+      //
+      // 탭이 살아 있는지는 Web Locks로 판단합니다. 탭은 열려 있는 동안 자기 잠금을
+      // 쥐고 있고, 닫히거나 비정상 종료되면 브라우저가 즉시 풀어 줍니다. 잠금이 풀린
+      // 탭의 초안만 주인 없는 초안으로 보고 새 탭이 복구합니다.
+      const LEGACY_DRAFT_KEY = 'basic-text-editor-draft';
+      const DRAFT_KEY_PREFIX = 'basic-text-editor-draft:';
+      const TAB_ID_KEY = 'basic-text-editor-tab';
+      const TAB_LOCK_PREFIX = 'basic-text-editor-tab:';
+      const RESTORE_LOCK = 'basic-text-editor-restore';
       const DRAFT_SAVE_DELAY = 700;
+      const locksSupported = Boolean(window.isSecureContext && navigator.locks?.request && navigator.locks?.query);
+      // 탭 ID를 확보하기 전에는 저장을 미룹니다. 확보하면 밀린 변경을 바로 기록합니다.
+      let draftKey = null;
       let draftDirty = false;
       let draftSaveTimer = null;
 
@@ -6988,13 +7003,31 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         draftSaveTimer = null;
       };
 
-      const saveDraft = () => {
-        cancelScheduledDraftSave();
+      const readDraft = (key) => {
         try {
-          localStorage.setItem(DRAFT_KEY, editor.innerHTML);
+          const raw = localStorage.getItem(key);
+          if (!raw) return null;
+          // 이전 버전은 키 하나에 HTML을 그대로 저장했습니다.
+          if (key === LEGACY_DRAFT_KEY) return { key, html: raw, savedAt: 0 };
+          const { html, savedAt } = JSON.parse(raw);
+          return typeof html === 'string' ? { key, html, savedAt: Number(savedAt) || 0 } : null;
+        } catch (error) {
+          return null;
+        }
+      };
+
+      const writeDraft = (html, savedAt = Date.now()) => {
+        if (!draftKey) return;
+        try {
+          localStorage.setItem(draftKey, JSON.stringify({ html, savedAt }));
         } catch (error) {
           // 용량 초과 등 저장 실패 시 조용히 무시합니다.
         }
+      };
+
+      const saveDraft = () => {
+        cancelScheduledDraftSave();
+        writeDraft(editor.innerHTML);
       };
 
       const scheduleDraftSave = () => {
@@ -7005,12 +7038,13 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         }, DRAFT_SAVE_DELAY);
       };
 
-      // 파일에 실제로 기록됐음을 확인한 경우에만 복구 초안을 버립니다.
+      // 파일에 실제로 기록됐음을 확인한 경우에만 이 탭의 복구 초안을 버립니다.
       const markDocumentClean = () => {
         cancelScheduledDraftSave();
         draftDirty = false;
+        if (!draftKey) return;
         try {
-          localStorage.removeItem(DRAFT_KEY);
+          localStorage.removeItem(draftKey);
         } catch (error) {
           // 접근 불가 시 무시합니다.
         }
@@ -7033,23 +7067,107 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         if (!bulkEditing && !composing) scheduleDraftSave();
       };
 
-      // 복구는 조용히 일어나면 안 됩니다. 사용자가 직접 지운 내용이 되살아난
-      // 것인지, 비정상 종료에서 살아난 것인지 구분할 수 있게 알려 줍니다.
-      const restoreDraft = () => {
+      const editorIsBlank = () => !editor.textContent.replace(/​/g, '').trim();
+
+      // 잠금을 얻으면 탭이 닫힐 때까지 놓지 않습니다. waitMs를 주면 그동안 기다립니다.
+      const holdTabLock = (id, waitMs = 0) => new Promise((resolve) => {
+        const options = waitMs ? { signal: AbortSignal.timeout(waitMs) } : { ifAvailable: true };
+        navigator.locks.request(`${TAB_LOCK_PREFIX}${id}`, options, (lock) => {
+          resolve(Boolean(lock));
+          return lock ? new Promise(() => {}) : null;
+        }).catch(() => resolve(false));
+      });
+
+      const newTabId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+      const orphanDrafts = async () => {
+        const keys = [];
         try {
-          const saved = localStorage.getItem(DRAFT_KEY);
-          if (saved && !editor.textContent.replace(/\u200B/g, '').trim()) {
-            editor.innerHTML = saved;
-            draftDirty = true;
-            showToast('저장하지 않은 내용을 복구했습니다.');
+          for (let index = 0; index < localStorage.length; index += 1) {
+            const key = localStorage.key(index);
+            if (key === LEGACY_DRAFT_KEY || (key?.startsWith(DRAFT_KEY_PREFIX) && key !== draftKey)) keys.push(key);
           }
         } catch (error) {
-          // 접근 불가 시 무시합니다.
+          return [];
+        }
+        // 잠금을 확인할 수 없으면 다른 탭의 초안은 건드리지 않습니다.
+        const held = locksSupported
+          ? new Set(((await navigator.locks.query()).held || []).map((lock) => lock.name))
+          : null;
+        return keys
+          .filter((key) => key === LEGACY_DRAFT_KEY
+            || (held && !held.has(`${TAB_LOCK_PREFIX}${key.slice(DRAFT_KEY_PREFIX.length)}`)))
+          .map(readDraft)
+          .filter(Boolean)
+          .sort((left, right) => right.savedAt - left.savedAt);
+      };
+
+      // 복구는 조용히 일어나면 안 됩니다. 사용자가 직접 지운 내용이 되살아난
+      // 것인지, 비정상 종료에서 살아난 것인지 구분할 수 있게 알려 줍니다.
+      const restoreDraft = async () => {
+        if (!editorIsBlank()) return;
+        // 같은 탭을 새로 고친 경우에는 이 탭의 초안을 그대로 이어 씁니다.
+        let restored = readDraft(draftKey);
+        let remaining = 0;
+        if (!restored) {
+          const adopt = async () => {
+            const orphans = await orphanDrafts();
+            if (!orphans.length || !editorIsBlank()) return;
+            // 가져온 초안은 이 탭의 초안으로 옮겨 다른 탭이 같은 초안을 또 가져가지 않게 합니다.
+            [restored] = orphans;
+            remaining = orphans.length - 1;
+            writeDraft(restored.html, restored.savedAt || Date.now());
+            try {
+              localStorage.removeItem(restored.key);
+            } catch (error) {
+              // 지우지 못해도 다음 복구 때 다시 보일 뿐 내용은 잃지 않습니다.
+            }
+          };
+          // 여러 탭이 한꺼번에 열려도 한 초안은 한 탭만 가져가도록 차례로 처리합니다.
+          if (locksSupported) await navigator.locks.request(RESTORE_LOCK, adopt);
+          else await adopt();
+        }
+        if (!restored || !editorIsBlank()) return;
+        editor.innerHTML = sanitizeHtml(restored.html);
+        normalizeEmptyDocument();
+        resetEditorHistory();
+        draftDirty = true;
+        updateCount();
+        showToast(remaining
+          ? `저장하지 않은 내용을 복구했습니다. 복구할 초안이 ${remaining}개 더 있습니다. 새 창을 열면 이어서 복구됩니다.`
+          : '저장하지 않은 내용을 복구했습니다.');
+      };
+
+      const initDrafts = async () => {
+        let id = null;
+        try {
+          id = sessionStorage.getItem(TAB_ID_KEY);
+        } catch (error) {
+          // sessionStorage를 쓸 수 없으면 매번 새 ID를 씁니다.
+        }
+        if (locksSupported) {
+          // 탭을 복제하면 sessionStorage도 복사되어 같은 ID가 됩니다. 다른 탭이 이미
+          // 쓰는 ID면 새로 만듭니다. 새로 고침 직후에는 이전 페이지가 잠금을 놓는 데
+          // 잠깐 걸릴 수 있어 조금 기다려 봅니다.
+          if (!id || !(await holdTabLock(id, 800))) {
+            id = newTabId();
+            await holdTabLock(id);
+          }
+        } else if (!id) {
+          id = newTabId();
+        }
+        draftKey = `${DRAFT_KEY_PREFIX}${id}`;
+        await restoreDraft();
+        if (draftDirty) saveDraft();
+        try {
+          sessionStorage.setItem(TAB_ID_KEY, id);
+        } catch (error) {
+          // 새로 고침 뒤에는 주인 없는 초안으로 복구됩니다.
         }
       };
 
-      restoreDraft();
       resetEditorHistory();
+      initDrafts().catch(() => {});
 
       editor.addEventListener('input', () => {
         // 글자를 고치면 일치 개수와 다음 검색 위치를 다시 계산해야 합니다.
