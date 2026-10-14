@@ -1643,6 +1643,118 @@
           && !remainder.querySelector?.('img,hr,table,iframe,video,audio,canvas,svg');
       };
 
+      const selectionIsAtStartOfCell = (cell) => {
+        const selection = window.getSelection();
+        if (!selection || !selection.rangeCount || !selection.isCollapsed) return false;
+        const range = document.createRange();
+        try {
+          range.selectNodeContents(cell);
+          range.setEnd(selection.focusNode, selection.focusOffset);
+        } catch (error) {
+          return false;
+        }
+        return !range.toString().replace(/[​﻿]/g, '')
+          && !range.cloneContents().querySelector?.('img,hr,table,iframe,video,audio,canvas,svg');
+      };
+
+      // 문서 첫 블록이 표이면 ↑ 키나 표 위쪽 클릭으로 캐럿이 편집기 최상위,
+      // 표 바로 옆에 놓입니다. 그 자리에서 입력하면 브라우저가 문단 없는 글자를
+      // 만들고, Enter를 누르면 그 글자와 표를 함께 <div>로 감싸 표 구조가
+      // 저장 과정에서 사라집니다. 입력 직전에 그 자리에 문단을 만들어 둡니다.
+      const rootCaretBesideTable = () => {
+        const selection = window.getSelection();
+        if (!selection || !selection.rangeCount || !selection.isCollapsed) return null;
+        const { startContainer, startOffset } = selection.getRangeAt(0);
+        if (startContainer !== editor) return null;
+        const isBlank = (node) => node?.nodeType === Node.TEXT_NODE && !node.nodeValue.trim();
+        let before = editor.childNodes[startOffset - 1];
+        let after = editor.childNodes[startOffset];
+        while (isBlank(before)) before = before.previousSibling;
+        while (isBlank(after)) after = after.nextSibling;
+        if (after?.tagName !== 'TABLE' && before?.tagName !== 'TABLE') return null;
+        return { reference: editor.childNodes[startOffset] || null };
+      };
+
+      // 키 입력 없이 글자가 들어오는 경로(IME, 자동 완성 등)도 있으므로 입력 뒤에도
+      // 한 번 더 확인합니다. 표 옆의 문단 없는 글자는 문단으로 감싸고, <div>에
+      // 갇힌 표는 다시 최상위로 꺼냅니다. 범위를 표 주변으로 한정해 다른 편집
+      // 동작에는 영향을 주지 않습니다.
+      const ROOT_BLOCK_TAGS = new Set(['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'PRE', 'UL', 'OL', 'TABLE', 'HR', 'FIGURE']);
+      const isRootInline = (node) => (
+        node.nodeType === Node.TEXT_NODE
+          ? Boolean(node.nodeValue.trim())
+          : node.nodeType === Node.ELEMENT_NODE && !ROOT_BLOCK_TAGS.has(node.tagName)
+      );
+
+      const repairBlocksAroundTables = () => {
+        if (!editor.querySelector(':scope > table, :scope > div > table')) return;
+        const selection = window.getSelection();
+        const saved = selection?.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
+        const { startContainer, startOffset, endContainer, endOffset } = saved || {};
+        let changed = false;
+
+        [...editor.querySelectorAll(':scope > div')].forEach((wrapper) => {
+          if (![...wrapper.children].some((child) => child.tagName === 'TABLE')) return;
+          let run = null;
+          [...wrapper.childNodes].forEach((child) => {
+            if (child.nodeType === Node.ELEMENT_NODE && ROOT_BLOCK_TAGS.has(child.tagName)) {
+              run = null;
+              editor.insertBefore(child, wrapper);
+              return;
+            }
+            if (child.nodeName === 'BR' && !run) { child.remove(); return; }
+            if (!run) {
+              run = document.createElement('p');
+              editor.insertBefore(run, wrapper);
+            }
+            run.appendChild(child);
+          });
+          wrapper.remove();
+          changed = true;
+        });
+
+        const children = [...editor.childNodes];
+        children.forEach((node, index) => {
+          if (!node.isConnected || node.parentNode !== editor || !isRootInline(node)) return;
+          let left = index - 1, right = index + 1;
+          while (left >= 0 && !isRootInline(children[left]) && children[left].nodeType === Node.TEXT_NODE) left -= 1;
+          while (right < children.length && !isRootInline(children[right]) && children[right].nodeType === Node.TEXT_NODE) right += 1;
+          if (children[left]?.tagName !== 'TABLE' && children[right]?.tagName !== 'TABLE') return;
+          const paragraph = document.createElement('p');
+          editor.insertBefore(paragraph, node);
+          for (let next = node; next && next.parentNode === editor && (isRootInline(next) || next.nodeType === Node.TEXT_NODE || next.nodeName === 'BR');) {
+            const following = next.nextSibling;
+            paragraph.appendChild(next);
+            next = following;
+          }
+          changed = true;
+        });
+
+        if (changed && saved && startContainer.isConnected && endContainer.isConnected) {
+          try {
+            const range = document.createRange();
+            range.setStart(startContainer, startOffset);
+            range.setEnd(endContainer, endOffset);
+            selection.removeAllRanges();
+            selection.addRange(range);
+          } catch (error) {
+            // 위치를 되살릴 수 없으면 브라우저가 정한 위치를 그대로 둡니다.
+          }
+        }
+      };
+
+      const insertParagraphBeforeTableUndoably = (reference) => {
+        const beforeHtml = editor.innerHTML;
+        const paragraph = document.createElement('p');
+        paragraph.innerHTML = '<br>';
+        editor.insertBefore(paragraph, reference);
+        placeCaretInBlock(paragraph);
+        breakEditorHistoryGroup();
+        pushEditorHistory(beforeHtml, editor.innerHTML);
+        markDocumentDirty();
+        return paragraph;
+      };
+
       // 도구와 선택 표시를 본문 밖에 두어 저장·복사·실행 취소 이력에 섞이지 않게 합니다.
       const tableControls = document.getElementById('tableControls');
       const tableAxisHandles = document.getElementById('tableAxisHandles');
@@ -6336,6 +6448,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         if (bulkEditing) return;
         hideSelectionToolbar();
         if (!event.isComposing) {
+          repairBlocksAroundTables();
           normalizeTableExitParagraphs();
           normalizeEmptyDocument();
           updateFormattingControlsState();
@@ -6363,6 +6476,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       });
       editor.addEventListener('compositionend', () => {
         composing = false;
+        repairBlocksAroundTables();
         normalizeTableExitParagraphs();
         normalizeEmptyDocument();
         updateFormattingControlsState();
@@ -6422,11 +6536,33 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           .includes(event.key)) {
           breakEditorHistoryGroup();
         }
+        const modified = event.ctrlKey || event.metaKey || event.altKey;
+        if (!event.isComposing && !modified
+          && (event.key.length === 1 || event.key === 'Enter' || event.key === 'Process')) {
+          const besideTable = rootCaretBesideTable();
+          if (besideTable) {
+            insertParagraphBeforeTableUndoably(besideTable.reference);
+            // Enter는 새 문단을 만드는 것으로 끝납니다. 글자는 그 문단에 들어갑니다.
+            if (event.key === 'Enter') event.preventDefault();
+            return;
+          }
+        }
         const cell = selectedTableCell();
         if (!cell) return;
         const table = cell.closest('table');
         const cells = [...table.querySelectorAll('th,td')];
         const index = cells.indexOf(cell);
+
+        // Word처럼 문서 맨 위 표의 첫 칸 맨 앞에서 Enter를 누르면 표 위에 문단을 만듭니다.
+        if (event.key === 'Enter' && !modified && !event.shiftKey && !event.isComposing
+          && index === 0
+          && table.parentElement === editor
+          && !table.previousElementSibling
+          && selectionIsAtStartOfCell(cell)) {
+          event.preventDefault();
+          insertParagraphBeforeTableUndoably(table);
+          return;
+        }
 
         if (event.key === 'ArrowDown'
           && index === cells.length - 1
