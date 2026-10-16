@@ -4233,6 +4233,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         && left.underline === right.underline
         && left.strike === right.strike
         && left.href === right.href
+        && (left.quote || 0) === (right.quote || 0)
         && Boolean(left.orderedMarker) === Boolean(right.orderedMarker)
         && Boolean(left.orderedGapBefore) === Boolean(right.orderedGapBefore);
 
@@ -4528,6 +4529,12 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       const clipboardLinesFromHtml = (html, { preserveEdgeSpaces = false } = {}) => {
         const doc = new DOMParser().parseFromString(String(html), 'text/html');
         const orderedMarkers = literalizeClipboardOrderedLists(doc.body);
+        // 인용구는 줄 구조로 바꾸면 사라지므로 글자마다 어느 인용구에 속했는지
+        // 번호로 실어 보냅니다. 겹친 인용구는 바깥 인용구 하나로 봅니다.
+        const quoteIds = new Map();
+        [...doc.body.querySelectorAll('blockquote')]
+          .filter((quote) => !quote.parentElement.closest('blockquote'))
+          .forEach((quote, index) => quoteIds.set(quote, index + 1));
         doc.body.querySelectorAll('br').forEach((lineBreak) => {
           // 빈 블록의 <br>은 줄바꿈이 아니라 커서를 놓기 위한 자리표시입니다.
           // 줄바꿈으로 세면 빈 줄 하나가 두 줄로 늘어납니다.
@@ -4559,6 +4566,9 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           // (Word나 손으로 정리한 HTML에 흔합니다) 전부 빈 줄로 늘어납니다.
           if (!node.nodeValue || !node.nodeValue.trim()) return;
           const style = clipboardStyleAt(node, doc.body);
+          let quote = node.parentElement?.closest('blockquote');
+          while (quote && !quoteIds.has(quote)) quote = quote.parentElement.closest('blockquote');
+          if (quote) style.quote = quoteIds.get(quote);
           if (orderedMarkers.has(node)) {
             style.orderedMarker = true;
             style.orderedGapBefore = orderedMarkers.get(node).gapBefore;
@@ -4645,7 +4655,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         return table.outerHTML;
       };
 
-      const clipboardTableTokens = (doc) => {
+      const clipboardTableTokens = (doc, { quotes = false } = {}) => {
         const tables = [...doc.body.querySelectorAll('table')]
           .filter(table => !table.parentElement.closest('table'));
         if (!tables.length) return null;
@@ -4658,7 +4668,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           container.appendChild(fragment);
           const lines = clipboardLinesFromHtml(container.innerHTML);
           if (lines.some(line => line.some(runs => runs.some(run => run.text.trim())))) {
-            tokens.push(...clipboardTokensFromLines(lines, true));
+            tokens.push(...clipboardTokensFromLines(lines, true, { quotes }));
           }
         };
         tables.forEach((table) => {
@@ -6105,7 +6115,24 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       // 이 편집기에서 Enter는 새 문단, Shift+Enter는 문단 안의 줄바꿈입니다.
       // 붙여넣기도 같은 규칙을 따라야 원본과 줄 구조가 같아집니다.
       // keepFormatting이 참이면 구간별 인라인 서식을 함께 싣습니다.
-      const clipboardTokensFromLines = (lines, keepFormatting = false) => {
+      //
+      // quotes가 참이면 HTML에서 같은 인용구에 있던 줄을 인용구 블록 하나로
+      // 묶습니다. 인용구 안 문단 사이의 빈 줄은 인용구의 문단 여백으로 대신합니다.
+      const lineQuoteId = (line) => {
+        const ids = new Set(line.flat().filter((run) => run.text.trim()).map((run) => run.quote || 0));
+        return ids.size === 1 ? [...ids][0] : 0;
+      };
+
+      const isBlankClipboardLine = (line) => !line.flat().some((run) => run.text.trim());
+
+      const clipboardQuoteHtml = (paragraphs) => {
+        const inner = paragraphs.map((line) => line.map(clipboardRunsHtml).join('\n'));
+        return inner.length === 1
+          ? `<blockquote>${inner[0]}</blockquote>`
+          : `<blockquote>${inner.map((html) => `<p>${html}</p>`).join('')}</blockquote>`;
+      };
+
+      const clipboardTokensFromLines = (lines, keepFormatting = false, { quotes = false } = {}) => {
         const tokens = [];
         // 줄을 나누기 전에 서식을 해제합니다. 굵게가 켜진 상태로 문단을 나누면
         // 빈 문단이 <p><b><br></b></p> 처럼 만들어집니다.
@@ -6113,11 +6140,39 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           if (keepFormatting) tokens.push({ type: 'style', style: EMPTY_CLIPBOARD_STYLE });
         };
 
-        lines.forEach((line, lineIndex) => {
-          if (lineIndex) {
+        let afterBlock = false;
+        for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+          const line = lines[lineIndex];
+          const quoteId = keepFormatting && quotes ? lineQuoteId(line) : 0;
+          if (quoteId) {
+            const paragraphs = [];
+            let next = lineIndex;
+            while (next < lines.length) {
+              if (lineQuoteId(lines[next]) === quoteId) {
+                paragraphs.push(lines[next]);
+                next += 1;
+                continue;
+              }
+              let after = next;
+              while (after < lines.length && isBlankClipboardLine(lines[after])) after += 1;
+              if (after === next || after >= lines.length || lineQuoteId(lines[after]) !== quoteId) break;
+              next = after;
+            }
+            // 블록을 넣은 뒤에는 커서가 이미 다음 문단에 있으므로 문단을 또 나누지 않습니다.
+            if (lineIndex && !afterBlock) {
+              resetBeforeBreak();
+              tokens.push({ type: 'paragraph' });
+            }
+            tokens.push({ type: 'block', html: clipboardQuoteHtml(paragraphs) });
+            afterBlock = true;
+            lineIndex = next - 1;
+            continue;
+          }
+          if (lineIndex && !afterBlock) {
             resetBeforeBreak();
             tokens.push({ type: 'paragraph' });
           }
+          afterBlock = false;
           line.forEach((runs, segmentIndex) => {
             if (segmentIndex) {
               resetBeforeBreak();
@@ -6128,7 +6183,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
                 .forEach((token) => tokens.push(token));
             });
           });
-        });
+        }
         return tokens;
       };
 
@@ -6814,8 +6869,10 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         const richDocument = keepFormatting && rich
           ? new DOMParser().parseFromString(sanitizeHtml(rich), 'text/html')
           : null;
+        // 인용구는 표 칸이나 기존 인용구 안에 겹쳐 넣지 않고 글자만 넣습니다.
+        const quotes = keepFormatting && !selectedTableCell() && !quoteAncestorForSelection();
         if (keepFormatting && !selectedTableCell()) {
-          const tableTokens = richDocument && clipboardTableTokens(richDocument);
+          const tableTokens = richDocument && clipboardTableTokens(richDocument, { quotes });
           if (tableTokens) {
             insertClipboardTokens(tableTokens);
             updateFormattingControlsState();
@@ -6852,7 +6909,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           ? normalizeClipboardText(plain).split('\n').map(line => [[{ ...EMPTY_CLIPBOARD_STYLE, text: line }]])
           : htmlLines);
         if (lines.some((line) => line.some((runs) => runs.some((run) => run.text.trim())))) {
-          insertClipboardTokens(clipboardTokensFromLines(lines, keepFormatting));
+          insertClipboardTokens(clipboardTokensFromLines(lines, keepFormatting, { quotes }));
           updateFormattingControlsState();
           return;
         }
