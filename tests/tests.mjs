@@ -627,6 +627,75 @@ await withPage({}, async (page) => {
     await page.evaluate(() => T.html()), '<p>앞《→뒤</p>');
 });
 
+// 기호 창은 떠 있는 창: 넣어도 닫히지 않고, 옮길 수 있으며, ✕·Esc로만 닫힌다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => {
+    T.set('<p>앞뒤</p>');
+    const text = T.ed().querySelector('p').firstChild;
+    const range = document.createRange();
+    range.setStart(text, 1);
+    range.collapse(true);
+    T.ed().focus();
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+  });
+  const pickerOpen = () => page.evaluate(() => document.getElementById('symbolPicker').classList.contains('open'));
+  await page.click('[data-action="symbol"]');
+  await page.click('[data-symbol="《"]');
+  await page.click('[data-symbol="→"]');
+  await page.click('[data-symbol="》"]');
+  r.check('R33 다시 열지 않고 기호 여러 개 삽입',
+    await page.evaluate(() => T.html()), '<p>앞《→》뒤</p>');
+  r.check('R33 기호를 넣어도 창 유지', await pickerOpen(), true);
+  r.check('R33 기호를 넣은 뒤 포커스는 본문',
+    await page.evaluate(() => document.activeElement.id), 'editor');
+  await page.keyboard.type('가');
+  r.check('R33 기호 뒤에 바로 타자',
+    await page.evaluate(() => T.html()), '<p>앞《→》가뒤</p>');
+
+  await page.keyboard.press('Control+z');
+  await page.keyboard.press('Control+z');
+  r.check('R33 기호는 하나씩 실행 취소',
+    await page.evaluate(() => T.html()), '<p>앞《→뒤</p>');
+
+  await page.click('#editor p');
+  r.check('R33 본문을 눌러도 창 유지', await pickerOpen(), true);
+
+  const box = await page.locator('#symbolPicker [data-symbol-drag]').boundingBox();
+  const before = await page.locator('#symbolPicker').boundingBox();
+  const startX = box.x + 40;
+  const startY = box.y + box.height / 2;
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(startX - 200, startY + 40, { steps: 5 });
+  await page.mouse.up();
+  const moved = await page.locator('#symbolPicker').boundingBox();
+  r.check('R33 제목 줄을 끌어 창 이동',
+    [Math.round(moved.x - before.x), Math.round(moved.y - before.y)], [-200, 40]);
+  r.check('R33 끄는 동안 본문 내용 유지',
+    await page.evaluate(() => T.html()), '<p>앞《→뒤</p>');
+
+  await page.click('[data-symbol-action="close"]');
+  r.check('R33 ✕로 닫기', await pickerOpen(), false);
+  await page.click('[data-action="symbol"]');
+  const reopened = await page.locator('#symbolPicker').boundingBox();
+  r.check('R33 다시 열면 옮긴 자리에 표시',
+    [Math.round(reopened.x), Math.round(reopened.y)], [Math.round(moved.x), Math.round(moved.y)]);
+
+  await page.keyboard.press('Control+f');
+  await page.waitForTimeout(50);
+  r.check('R33 찾기 막대와 함께 표시',
+    await page.evaluate(() => [findbar.classList.contains('open'), document.getElementById('symbolPicker').classList.contains('open')]),
+    [true, true]);
+  await page.focus('#findText');
+  await page.keyboard.press('Escape');
+  r.check('R33 찾기 칸의 Esc는 찾기 막대만 닫음',
+    await page.evaluate(() => [findbar.classList.contains('open'), document.getElementById('symbolPicker').classList.contains('open')]),
+    [false, true]);
+  await page.keyboard.press('Escape');
+  r.check('R33 Esc로 기호 창 닫기', await pickerOpen(), false);
+});
+
 // 인용구 블록 전환과 네이버 SmartEditor ONE용 복사 구조
 await withPage({}, async (page) => {
   await page.evaluate(() => {

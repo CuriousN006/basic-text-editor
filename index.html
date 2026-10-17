@@ -614,6 +614,23 @@
 
     .symbol-picker.open { display: block; }
 
+    /* 기호 창은 여러 개를 이어 넣을 수 있게 떠 있는 창이라 제목 줄로 옮깁니다. */
+    .symbol-picker .table-picker-header {
+      /* 창 안을 스크롤해도 제목 줄은 남아 있어야 옮기거나 닫을 수 있습니다. */
+      position: sticky;
+      top: -12px;
+      z-index: 1;
+      background: #ffffff;
+      margin: -12px -12px 9px;
+      padding: 8px 8px 8px 12px;
+      border-bottom: 1px solid #e5e7eb;
+      cursor: move;
+      touch-action: none;
+      user-select: none;
+    }
+
+    .symbol-picker.dragging { opacity: 0.92; }
+
     .symbol-category + .symbol-category {
       margin-top: 12px;
       padding-top: 10px;
@@ -1107,7 +1124,7 @@
   </section>
 
   <section id="symbolPicker" class="symbol-picker" role="dialog" aria-label="문자 기호 삽입" aria-hidden="true">
-    <div class="table-picker-header">
+    <div class="table-picker-header" data-symbol-drag title="끌어서 옮기기">
       <span>문자 기호 삽입</span>
       <button class="table-picker-close" type="button" data-symbol-action="close" title="닫기">✕</button>
     </div>
@@ -1344,36 +1361,48 @@
       const openTablePicker = () => {
         hideSelectionToolbar();
         findbar.classList.remove('open');
-        closeSymbolPicker();
         tablePicker.classList.add('open');
         tablePicker.setAttribute('aria-hidden', 'false');
         updateTableGridHighlight(tableRows.value, tableColumns.value);
         positionTablePicker();
       };
 
+      // 사용자가 끌어서 옮긴 기호 창 위치입니다. 닫았다 다시 열어도 그 자리에 뜹니다.
+      let movedSymbolPickerPosition = null;
+
+      const placeSymbolPicker = (left, top) => {
+        const pickerRect = symbolPicker.getBoundingClientRect();
+        // 창 밖으로 완전히 나가면 되찾을 수 없으므로 화면 안에 붙잡아 둡니다.
+        const safeLeft = Math.min(Math.max(8, left), Math.max(8, window.innerWidth - pickerRect.width - 8));
+        const safeTop = Math.min(Math.max(8, top), Math.max(8, window.innerHeight - pickerRect.height - 8));
+        symbolPicker.style.left = `${safeLeft}px`;
+        symbolPicker.style.top = `${safeTop}px`;
+        return { left: safeLeft, top: safeTop };
+      };
+
       const positionSymbolPicker = () => {
+        if (movedSymbolPickerPosition) {
+          placeSymbolPicker(movedSymbolPickerPosition.left, movedSymbolPickerPosition.top);
+          return;
+        }
         const buttonRect = symbolButton.getBoundingClientRect();
         const pickerRect = symbolPicker.getBoundingClientRect();
-        const left = Math.min(
-          Math.max(8, buttonRect.left),
-          window.innerWidth - pickerRect.width - 8
-        );
         const below = buttonRect.bottom + 7;
         const top = below + pickerRect.height <= window.innerHeight - 8
           ? below
-          : Math.max(8, buttonRect.top - pickerRect.height - 7);
-        symbolPicker.style.left = `${left}px`;
-        symbolPicker.style.top = `${top}px`;
+          : buttonRect.top - pickerRect.height - 7;
+        placeSymbolPicker(buttonRect.left, top);
       };
 
+      // 기호 창은 여러 개를 이어 넣을 수 있게 떠 있는 창입니다. 기호를 넣거나 본문을
+      // 눌러도 닫히지 않고, ✕나 Esc로만 닫습니다. 찾기 막대와도 함께 띄울 수 있습니다.
       const openSymbolPicker = () => {
         hideSelectionToolbar();
-        findbar.classList.remove('open');
         closeTablePicker();
+        if (symbolPicker.classList.contains('open')) return;
         symbolPicker.classList.add('open');
         symbolPicker.setAttribute('aria-hidden', 'false');
         positionSymbolPicker();
-        symbolPicker.querySelector('[data-symbol]')?.focus({ preventScroll: true });
       };
 
       const insertLiteralSymbol = (symbol) => {
@@ -1395,7 +1424,6 @@
         pushEditorHistory(beforeHtml, editor.innerHTML);
         breakEditorHistoryGroup();
         saveSelection();
-        closeSymbolPicker();
       };
 
       const toggleQuoteBlock = () => {
@@ -1499,6 +1527,12 @@
           button.title = `${symbol} 문자 삽입`;
           button.setAttribute('aria-label', `${symbol} 문자 삽입`);
           button.addEventListener('mousedown', (event) => event.preventDefault());
+          // 기호 버튼이 포커스를 가져가지 않아야 넣은 뒤에도 본문 커서가 깜박이고
+          // 바로 이어서 타자를 칠 수 있습니다.
+          button.addEventListener('mousedown', (event) => {
+            saveSelection();
+            event.preventDefault();
+          });
           button.addEventListener('click', () => insertLiteralSymbol(symbol));
           container.appendChild(button);
         });
@@ -6689,7 +6723,6 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       document.addEventListener('mousedown', (event) => {
         if (!selectionToolbar.contains(event.target)) hideSelectionToolbar();
         if (!tablePicker.contains(event.target) && !tableButton.contains(event.target)) closeTablePicker();
-        if (!symbolPicker.contains(event.target) && !symbolButton.contains(event.target)) closeSymbolPicker();
       });
 
       document.querySelectorAll('[data-table-action]').forEach((button) => {
@@ -6702,6 +6735,30 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       symbolPicker.querySelector('[data-symbol-action="close"]').addEventListener('click', () => {
         closeSymbolPicker();
         focusEditor();
+      });
+
+      const symbolDragHandle = symbolPicker.querySelector('[data-symbol-drag]');
+      symbolDragHandle.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0 || event.target.closest('button')) return;
+        // 제목 줄을 눌러도 본문 선택이 풀리지 않게 합니다.
+        event.preventDefault();
+        const pickerRect = symbolPicker.getBoundingClientRect();
+        const offsetX = event.clientX - pickerRect.left;
+        const offsetY = event.clientY - pickerRect.top;
+        symbolDragHandle.setPointerCapture(event.pointerId);
+        symbolPicker.classList.add('dragging');
+        const move = (moveEvent) => {
+          movedSymbolPickerPosition = placeSymbolPicker(moveEvent.clientX - offsetX, moveEvent.clientY - offsetY);
+        };
+        const stop = () => {
+          symbolPicker.classList.remove('dragging');
+          symbolDragHandle.removeEventListener('pointermove', move);
+          symbolDragHandle.removeEventListener('pointerup', stop);
+          symbolDragHandle.removeEventListener('pointercancel', stop);
+        };
+        symbolDragHandle.addEventListener('pointermove', move);
+        symbolDragHandle.addEventListener('pointerup', stop);
+        symbolDragHandle.addEventListener('pointercancel', stop);
       });
 
       editor.addEventListener('keydown', (event) => {
@@ -6789,7 +6846,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         hideLinkPreview();
         hideSelectionToolbar();
         closeTablePicker();
-        closeSymbolPicker();
+        if (symbolPicker.classList.contains('open')) positionSymbolPicker();
       });
       document.addEventListener('copy', handleEditorCopy);
       document.addEventListener('cut', handleEditorCut);
@@ -6983,7 +7040,10 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           focusEditor();
           return;
         }
-        if (event.key === 'Escape' && symbolPicker.classList.contains('open')) {
+        // 찾기 막대와 기호 창을 함께 띄웠을 때 찾기 칸에서 누른 Esc는 찾기 막대만 닫습니다.
+        // 찾기 칸의 처리기가 먼저 막대를 닫으므로 포커스가 아니라 눌린 위치로 판단합니다.
+        if (event.key === 'Escape' && symbolPicker.classList.contains('open')
+          && !findbar.contains(event.target)) {
           event.preventDefault();
           closeSymbolPicker();
           focusEditor();
