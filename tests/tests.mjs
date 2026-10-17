@@ -826,7 +826,7 @@ await withPage({}, async (page) => {
 await withPage({}, async (page) => {
   await page.evaluate(() => {
     T.set('<p>인용할 문장</p>');
-    T.caretIn(0, true);
+    T.select('인용할 문장');
   });
   await page.click('[data-action="quote"]');
   r.check('R29 인용구 블록 적용',
@@ -842,6 +842,62 @@ await withPage({}, async (page) => {
   await page.keyboard.press('Control+y');
   r.check('R29 인용구 전환 다시 실행',
     await page.evaluate(() => T.html()), '<blockquote>인용할 문장</blockquote>');
+});
+
+// 글자를 고르지 않고 인용 버튼을 누르면 지금 문단은 그대로 두고 빈 인용구를 만든다.
+await withPage({}, async (page) => {
+  const caretAt = (index, offset) => page.evaluate(({ index, offset }) => {
+    const text = T.ed().children[index].firstChild;
+    const range = document.createRange();
+    range.setStart(text, offset);
+    range.collapse(true);
+    T.ed().focus();
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+  }, { index, offset });
+
+  await page.evaluate(() => T.set('<p>본문 문장</p>'));
+  await caretAt(0, 5);
+  await page.click('[data-action="quote"]');
+  r.check('R35 문단 끝에서 누르면 아래에 빈 인용구',
+    await page.evaluate(() => T.html()), '<p>본문 문장</p><blockquote><br></blockquote>');
+  r.check('R35 빈 인용구에서 인용 버튼 활성',
+    await page.getAttribute('#quoteButton', 'aria-pressed'), 'true');
+  await page.keyboard.type('인용');
+  r.check('R35 빈 인용구에 바로 입력',
+    await page.evaluate(() => T.html()), '<p>본문 문장</p><blockquote>인용</blockquote>');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('다음');
+  r.check('R35 맨 끝 Enter로 빠져나와 이어 쓰기',
+    await page.evaluate(() => T.html()), '<p>본문 문장</p><blockquote>인용</blockquote><p>다음</p>');
+
+  await page.evaluate(() => T.set('<p>본문 문장</p>'));
+  await caretAt(0, 2);
+  await page.click('[data-action="quote"]');
+  r.check('R35 문단 가운데서 누르면 문단을 나누지 않고 아래에 빈 인용구',
+    await page.evaluate(() => T.html()), '<p>본문 문장</p><blockquote><br></blockquote>');
+  await page.keyboard.press('Control+z');
+  r.check('R35 빈 인용구 만들기 실행 취소',
+    await page.evaluate(() => T.html()), '<p>본문 문장</p>');
+
+  await page.evaluate(() => T.set('<p>본문 문장</p>'));
+  await caretAt(0, 0);
+  await page.click('[data-action="quote"]');
+  r.check('R35 문단 맨 앞에서 누르면 위에 빈 인용구',
+    await page.evaluate(() => T.html()), '<blockquote><br></blockquote><p>본문 문장</p>');
+
+  await page.evaluate(() => {
+    T.set('<p>앞</p><p><br></p>');
+    T.caretIn(1, false);
+  });
+  await page.click('[data-action="quote"]');
+  r.check('R35 빈 문단에서 누르면 그 자리가 빈 인용구',
+    await page.evaluate(() => T.html()), '<p>앞</p><blockquote><br></blockquote>');
+
+  // 인용구 안에서 다시 누르면 지금처럼 일반 문단으로 되돌린다.
+  await page.click('[data-action="quote"]');
+  r.check('R35 인용구 안에서 누르면 해제',
+    await page.evaluate(() => T.blocks()), 'P P:빈');
 });
 
 // 인용구의 Enter: 맨 끝에서만 인용구를 빠져나오고, 그 밖에서는 같은 인용구 안에 새 문단을 만든다.
