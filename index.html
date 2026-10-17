@@ -1590,7 +1590,6 @@
           button.textContent = symbol;
           button.title = `${symbol} 문자 삽입`;
           button.setAttribute('aria-label', `${symbol} 문자 삽입`);
-          button.addEventListener('mousedown', (event) => event.preventDefault());
           // 기호 버튼이 포커스를 가져가지 않아야 넣은 뒤에도 본문 커서가 깜박이고
           // 바로 이어서 타자를 칠 수 있습니다.
           button.addEventListener('mousedown', (event) => {
@@ -1881,6 +1880,53 @@
         pushEditorHistory(beforeHtml, editor.innerHTML);
         markDocumentDirty();
         return paragraph;
+      };
+
+      // 인용구 안에서 Enter를 누르면 브라우저는 인용구 줄을 하나 더 만들 뿐이라
+      // 인용구 밖으로 나갈 방법이 없었습니다. Word·구글 문서처럼 빈 인용구 줄에서
+      // 누른 Enter는 그 줄을 일반 문단으로 바꿔 인용구를 빠져나옵니다.
+      // 처리했으면 참을 돌려줍니다.
+      const exitQuoteFromEmptyLine = () => {
+        const selection = window.getSelection();
+        if (!selection?.rangeCount || !selection.isCollapsed) return false;
+        const quote = quoteAncestorForSelection();
+        if (!quote) return false;
+        let node = selection.getRangeAt(0).startContainer;
+        if (node.nodeType !== Node.ELEMENT_NODE) node = node.parentElement;
+        // 인용구 안의 문단(<blockquote><p>…</p></blockquote>)이면 그 문단이, 평평한
+        // 인용구(<blockquote>…</blockquote>)면 인용구 자체가 한 줄입니다.
+        let line = node.closest('p,div,h1,h2,h3,h4,h5,h6,pre');
+        if (!line || line.parentElement !== quote) line = quote;
+        const empty = !String(line.textContent || '').replace(/[​﻿]/g, '').length
+          && !line.querySelector('img,hr,table,iframe,video,audio,canvas,svg');
+        if (!empty) return false;
+
+        const beforeHtml = editor.innerHTML;
+        const paragraph = document.createElement('p');
+        paragraph.innerHTML = '<br>';
+        if (line === quote) {
+          quote.replaceWith(paragraph);
+        } else if (!line.nextElementSibling) {
+          quote.after(paragraph);
+          line.remove();
+        } else if (!line.previousElementSibling) {
+          quote.before(paragraph);
+          line.remove();
+        } else {
+          // 가운데 빈 줄이면 인용구를 둘로 나누고 그 사이에 일반 문단을 둡니다.
+          const rest = quote.cloneNode(false);
+          while (line.nextSibling) rest.appendChild(line.nextSibling);
+          quote.after(paragraph, rest);
+          line.remove();
+        }
+        if (quote.isConnected && !quote.textContent.trim() && !quote.querySelector('img,hr,table')) quote.remove();
+        placeCaretInBlock(paragraph);
+        breakEditorHistoryGroup();
+        pushEditorHistory(beforeHtml, editor.innerHTML);
+        markDocumentDirty();
+        updateCount();
+        updateFormattingControlsState();
+        return true;
       };
 
       // 도구와 선택 표시를 본문 밖에 두어 저장·복사·실행 취소 이력에 섞이지 않게 합니다.
@@ -6863,6 +6909,11 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
             if (event.key === 'Enter') event.preventDefault();
             return;
           }
+        }
+        if (event.key === 'Enter' && !modified && !event.shiftKey && !event.isComposing
+          && exitQuoteFromEmptyLine()) {
+          event.preventDefault();
+          return;
         }
         const cell = selectedTableCell();
         if (!cell) return;

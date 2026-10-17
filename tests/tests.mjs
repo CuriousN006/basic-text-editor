@@ -763,6 +763,66 @@ await withPage({}, async (page) => {
     await page.evaluate(() => T.html()), '<blockquote>인용할 문장</blockquote>');
 });
 
+// 인용구에서 빠져나오기: 빈 인용구 줄에서 Enter를 누르면 일반 문단이 된다.
+await withPage({}, async (page) => {
+  const caretAtEndOf = (selector) => page.evaluate((selector) => {
+    const block = T.ed().querySelector(selector);
+    const range = document.createRange();
+    range.selectNodeContents(block);
+    range.collapse(false);
+    T.ed().focus();
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+  }, selector);
+
+  await page.evaluate(() => {
+    T.set('<blockquote>인용할 문장</blockquote>');
+    T.caretIn(0, true);
+  });
+  await page.keyboard.press('Enter');
+  r.check('R34 인용구 안의 첫 Enter는 인용구 줄 추가',
+    await page.evaluate(() => T.blocks()), 'BLOCKQUOTE BLOCKQUOTE:빈');
+  await page.keyboard.press('Enter');
+  r.check('R34 빈 인용구 줄의 Enter로 인용구 벗어남',
+    await page.evaluate(() => T.blocks()), 'BLOCKQUOTE P:빈');
+  await page.keyboard.type('본문');
+  r.check('R34 벗어난 뒤 입력은 일반 문단',
+    await page.evaluate(() => T.html()), '<blockquote>인용할 문장</blockquote><p>본문</p>');
+  r.check('R34 벗어난 뒤 인용 버튼 해제',
+    await page.evaluate(() => document.querySelector('[data-action="quote"]').getAttribute('aria-pressed')), 'false');
+  await page.keyboard.press('Control+z');
+  await page.keyboard.press('Control+z');
+  r.check('R34 인용구 벗어나기 실행 취소',
+    await page.evaluate(() => T.blocks()), 'BLOCKQUOTE BLOCKQUOTE:빈');
+
+  // 붙여넣은 인용구처럼 문단으로 된 인용구의 끝에서 빠져나온다.
+  await page.evaluate(() => T.set('<blockquote><p>첫 문단</p><p>둘째 문단</p></blockquote>'));
+  await caretAtEndOf('blockquote p:last-child');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('본문');
+  r.check('R34 문단으로 된 인용구 끝에서 벗어남',
+    await page.evaluate(() => T.html()), '<blockquote><p>첫 문단</p><p>둘째 문단</p></blockquote><p>본문</p>');
+
+  // 가운데 빈 줄에서 누르면 인용구가 둘로 나뉘고 그 사이가 일반 문단이 된다.
+  await page.evaluate(() => T.set('<blockquote><p>첫 문단</p><p><br></p><p>둘째 문단</p></blockquote>'));
+  await caretAtEndOf('blockquote p:nth-child(2)');
+  await page.keyboard.press('Enter');
+  r.check('R34 가운데 빈 인용구 줄에서 인용구 나눔',
+    await page.evaluate(() => T.html()),
+    '<blockquote><p>첫 문단</p></blockquote><p><br></p><blockquote><p>둘째 문단</p></blockquote>');
+
+  // 글자가 있는 인용구 줄의 Enter와 Shift+Enter는 그대로 인용구 안에서 동작한다.
+  await page.evaluate(() => {
+    T.set('<blockquote>인용</blockquote>');
+    T.caretIn(0, true);
+  });
+  await page.keyboard.press('Shift+Enter');
+  await page.keyboard.type('둘째 줄');
+  r.check('R34 Shift+Enter는 인용구 안 줄바꿈',
+    await page.evaluate(() => T.blocks()), 'BLOCKQUOTE');
+});
+
 await withPage({}, async (page) => {
   await page.evaluate(() => {
     T.set('<blockquote>인용 <b>굵게</b></blockquote><p>본문</p>');
