@@ -741,15 +741,17 @@
     }
 
     .replace-formats-reset {
-      min-height: 30px;
-      margin-left: auto;
-      padding: 4px 9px;
+      width: 30px;
+      height: 30px;
+      margin-left: 2px;
+      padding: 0;
       border: 1px solid var(--line);
       border-radius: 6px;
       background: #f8fafc;
       color: var(--text);
       cursor: pointer;
-      font-size: 12px;
+      font-size: 15px;
+      line-height: 1;
     }
 
     .replace-formats-reset:hover:not(:disabled),
@@ -791,7 +793,8 @@
     /* 찾을 내용 줄은 입력칸 · 일치 개수 · 닫기 버튼 세 칸입니다.
        :has()는 문서 전체 스타일 무효화를 유발하므로 클래스로 지정합니다. */
     .find-row.has-count {
-      grid-template-columns: 1fr auto auto;
+      grid-template-columns: 1fr auto auto auto;
+      gap: 2px;
     }
 
     .find-row:last-child { margin-bottom: 0; }
@@ -879,24 +882,68 @@
       outline: none;
     }
 
-    .find-specials {
-      margin: 1px 0 8px;
-      color: var(--muted);
-      font-size: 11px;
-      line-height: 1.5;
+    /* 고르는 항목만 한데 모아 폭에 따라 줄을 바꿉니다. 설명은 ? 도움말에 둡니다. */
+    .find-options {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 2px 14px;
+      margin: 0 0 10px;
     }
 
-    .find-specials code {
+    .find-options .particle-option,
+    .find-options .replace-scope { margin: 0; padding: 0; }
+
+    .find-icon-button {
+      width: 30px;
+      height: 30px;
+      align-self: center;
+      padding: 0;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .find-icon-button:hover,
+    .find-icon-button:focus-visible,
+    .find-icon-button[aria-expanded="true"] {
+      border-color: var(--line);
+      background: #f1f5f9;
+      color: var(--text);
+      outline: none;
+    }
+
+    .find-help {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 6px 12px;
+      margin: 0 0 10px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: #f8fafc;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .find-help[hidden] { display: none; }
+    .find-help-term { color: var(--text); font-weight: 700; white-space: nowrap; }
+
+    .find-help code {
       color: var(--text);
       font-family: Consolas, monospace;
     }
 
+    .findbar:not(.replace-mode) [data-replace-help] { display: none; }
+
     .replace-formats {
       display: flex;
       align-items: center;
-      flex-wrap: wrap;
       gap: 4px;
-      margin: 0 0 8px;
       color: var(--muted);
       font-size: 12px;
     }
@@ -1063,42 +1110,46 @@
     <div class="find-row has-count">
       <input id="findText" class="find-input" type="text" placeholder="찾을 내용" autocomplete="off" title="바꾸기에서는 찾은 글자의 현재 서식이 이 칸에 그대로 표시됩니다.">
       <span id="findCount" class="find-count" aria-live="polite" aria-atomic="true"></span>
-      <button class="toolbar-button" type="button" data-find="close" tabindex="-1" title="닫기">✕</button>
+      <button id="findHelpButton" class="find-icon-button" type="button" tabindex="-1" title="특수기호와 단축키" aria-label="특수기호와 단축키" aria-expanded="false" aria-controls="findHelp">?</button>
+      <button class="find-icon-button" type="button" data-find="close" tabindex="-1" title="닫기" aria-label="닫기">✕</button>
     </div>
     <div id="replaceRow" class="find-row">
       <input id="replaceText" class="find-input" type="text" placeholder="바꿀 내용" autocomplete="off" title="바꿀 서식을 적용한 결과가 이 칸에 그대로 표시됩니다.">
     </div>
-    <label id="particleOption" class="particle-option" title="바꾼 단어의 받침에 맞춰 바로 뒤 또는 닫는 따옴표·괄호 뒤의 조사를 교정합니다.">
-      <input id="adjustParticles" type="checkbox" checked>
-      조사 자동 교정
-    </label>
-    <label class="particle-option" title="끄면 영문 대문자와 소문자를 같은 글자로 봅니다.">
-      <input id="matchCase" type="checkbox" checked>
-      대소문자 구분
-    </label>
-    <label id="replaceScopeOption" class="replace-scope" title="전체는 문서 전체, 아래쪽과 위쪽은 현재 커서 또는 찾은 위치를 기준으로 바꿉니다.">
-      <span>바꾸기 범위</span>
-      <select id="replaceScope">
-        <option value="all" selected>전체</option>
-        <option value="down">아래쪽</option>
-        <option value="up">위쪽</option>
-      </select>
-    </label>
-    <div id="replaceFormats" class="replace-formats" aria-label="바꿀 내용 서식">
-      <span class="replace-formats-label">바꿀 서식</span>
-      <button class="mini-format-button" type="button" data-replace-format="bold" data-format-state="none"><b>B</b></button>
-      <button class="mini-format-button" type="button" data-replace-format="italic" data-format-state="none"><i>I</i></button>
-      <button class="mini-format-button" type="button" data-replace-format="underline" data-format-state="none"><u>U</u></button>
-      <button class="mini-format-button" type="button" data-replace-format="strikeThrough" data-format-state="none"><s>S</s></button>
-      <button id="replaceFormatReset" class="replace-formats-reset" type="button" data-format-reset title="지정한 바꿀 서식 설정을 초기화합니다.">서식 설정 초기화</button>
+    <!-- 설명은 ? 도움말에 모으고 여기에는 실제로 고르는 항목만 둡니다. -->
+    <div class="find-options">
+      <label id="particleOption" class="particle-option" title="바꾼 단어의 받침에 맞춰 바로 뒤 또는 닫는 따옴표·괄호 뒤의 조사를 교정합니다.">
+        <input id="adjustParticles" type="checkbox" checked>
+        조사 자동 교정
+      </label>
+      <label class="particle-option" title="끄면 영문 대문자와 소문자를 같은 글자로 봅니다.">
+        <input id="matchCase" type="checkbox" checked>
+        대소문자 구분
+      </label>
+      <label id="replaceScopeOption" class="replace-scope" title="전체는 문서 전체, 아래쪽과 위쪽은 현재 커서 또는 찾은 위치를 기준으로 바꿉니다.">
+        <span>범위</span>
+        <select id="replaceScope">
+          <option value="all" selected>전체</option>
+          <option value="down">아래쪽</option>
+          <option value="up">위쪽</option>
+        </select>
+      </label>
+      <div id="replaceFormats" class="replace-formats" aria-label="바꿀 내용 서식">
+        <span class="replace-formats-label">서식</span>
+        <button class="mini-format-button" type="button" data-replace-format="bold" data-format-state="none"><b>B</b></button>
+        <button class="mini-format-button" type="button" data-replace-format="italic" data-format-state="none"><i>I</i></button>
+        <button class="mini-format-button" type="button" data-replace-format="underline" data-format-state="none"><u>U</u></button>
+        <button class="mini-format-button" type="button" data-replace-format="strikeThrough" data-format-state="none"><s>S</s></button>
+        <button id="replaceFormatReset" class="replace-formats-reset" type="button" data-format-reset title="바꿀 서식 초기화" aria-label="바꿀 서식 초기화">↺</button>
+      </div>
     </div>
-    <div id="replaceFormatHint" class="find-specials" aria-live="polite"></div>
-
-    <div class="find-specials">
-      특수기호: <code>^p</code> 문단 · <code>^l</code> 줄바꿈 · <code>^t</code> 탭 · <code>^^</code> ^ 문자
-    </div>
-    <div class="find-specials">
-      이어서 찾기: <code>Enter</code> 다음 · <code>Shift+Enter</code> 이전 · 본문 편집 중에는 <code>F3</code>
+    <div id="findHelp" class="find-help" role="note" hidden>
+      <span class="find-help-term">특수기호</span>
+      <span><code>^p</code> 문단 · <code>^l</code> 줄바꿈 · <code>^t</code> 탭 · <code>^^</code> ^ 문자</span>
+      <span class="find-help-term">이동</span>
+      <span><code>Enter</code> 다음 · <code>Shift+Enter</code> 이전 · 본문에서는 <code>F3</code></span>
+      <span class="find-help-term" data-replace-help>서식</span>
+      <span data-replace-help><code>Ctrl+B</code> 굵게 · <code>Ctrl+I</code> 기울임 · <code>Ctrl+U</code> 밑줄<br><code>Ctrl+Shift+X</code> 취소선 · 누를 때마다 적용 → 제거 → 해제</span>
     </div>
     <div id="findActions" class="find-actions">
       <button class="toolbar-button" type="button" data-find="previous" title="이전 일치로 이동 (Shift+Enter)">이전 찾기</button>
@@ -1225,7 +1276,8 @@
       const replaceFormats = document.getElementById('replaceFormats');
       const replaceFormatButtons = [...document.querySelectorAll('[data-replace-format]')];
       const replaceFormatReset = document.getElementById('replaceFormatReset');
-      const replaceFormatHint = document.getElementById('replaceFormatHint');
+      const findHelpButton = document.getElementById('findHelpButton');
+      const findHelp = document.getElementById('findHelp');
       const findActions = document.getElementById('findActions');
       // 찾기 전용 모드에서는 바꾸기 버튼을 문서에서 떼어 둡니다.
       const replaceOnlyButtons = [...findActions.querySelectorAll('[data-find^="replace"]')];
@@ -1882,45 +1934,66 @@
         return paragraph;
       };
 
-      // 인용구 안에서 Enter를 누르면 브라우저는 인용구 줄을 하나 더 만들 뿐이라
-      // 인용구 밖으로 나갈 방법이 없었습니다. Word·구글 문서처럼 빈 인용구 줄에서
-      // 누른 Enter는 그 줄을 일반 문단으로 바꿔 인용구를 빠져나옵니다.
+      // 인용구 안의 Enter. 브라우저 기본 동작은 평평한 인용구(<blockquote>글</blockquote>)를
+      // 인용구 두 개로 쪼개고, 인용구 밖으로 나갈 방법도 주지 않았습니다.
+      // - 인용구 맨 끝에서 누른 Enter는 인용구를 빠져나와 아래에 일반 문단을 만듭니다.
+      // - 그 밖의 자리에서는 인용구를 쪼개지 않고 같은 인용구 안에 새 문단을 만듭니다.
       // 처리했으면 참을 돌려줍니다.
-      const exitQuoteFromEmptyLine = () => {
+      const QUOTE_MEDIA_SELECTOR = 'img,hr,table,iframe,video,audio,canvas,svg';
+      const QUOTE_LINE_SELECTOR = 'p,div,h1,h2,h3,h4,h5,h6,pre';
+      const hasVisibleQuoteContent = (node) => Boolean(
+        String(node.textContent || '').replace(/[​﻿]/g, '').length
+        || node.querySelector?.(QUOTE_MEDIA_SELECTOR)
+      );
+
+      const handleEnterInQuote = () => {
         const selection = window.getSelection();
         if (!selection?.rangeCount || !selection.isCollapsed) return false;
         const quote = quoteAncestorForSelection();
-        if (!quote) return false;
-        let node = selection.getRangeAt(0).startContainer;
-        if (node.nodeType !== Node.ELEMENT_NODE) node = node.parentElement;
-        // 인용구 안의 문단(<blockquote><p>…</p></blockquote>)이면 그 문단이, 평평한
-        // 인용구(<blockquote>…</blockquote>)면 인용구 자체가 한 줄입니다.
-        let line = node.closest('p,div,h1,h2,h3,h4,h5,h6,pre');
-        if (!line || line.parentElement !== quote) line = quote;
-        const empty = !String(line.textContent || '').replace(/[​﻿]/g, '').length
-          && !line.querySelector('img,hr,table,iframe,video,audio,canvas,svg');
-        if (!empty) return false;
+        if (!quote || selectedTableCell()) return false;
+        const caret = selection.getRangeAt(0);
+        const after = document.createRange();
+        after.setStart(caret.endContainer, caret.endOffset);
+        after.setEnd(quote, quote.childNodes.length);
+        const atEnd = !hasVisibleQuoteContent(after.cloneContents());
 
         const beforeHtml = editor.innerHTML;
-        const paragraph = document.createElement('p');
-        paragraph.innerHTML = '<br>';
-        if (line === quote) {
-          quote.replaceWith(paragraph);
-        } else if (!line.nextElementSibling) {
-          quote.after(paragraph);
-          line.remove();
-        } else if (!line.previousElementSibling) {
-          quote.before(paragraph);
-          line.remove();
+        let caretTarget = null;
+        if (atEnd) {
+          // 커서 뒤에 남은 빈 줄(빈 문단이나 줄바꿈)은 인용구에서 걷어 냅니다.
+          const isTrailingBlank = (node) => node && (
+            node.nodeName === 'BR'
+            || (node.nodeType === Node.TEXT_NODE && !node.nodeValue.replace(/[​﻿]/g, '').trim())
+            || (node.nodeType === Node.ELEMENT_NODE && node.matches(QUOTE_LINE_SELECTOR) && !hasVisibleQuoteContent(node))
+          );
+          while (quote.childNodes.length > 1 && isTrailingBlank(quote.lastChild)) quote.lastChild.remove();
+          const paragraph = document.createElement('p');
+          paragraph.innerHTML = '<br>';
+          if (hasVisibleQuoteContent(quote)) quote.after(paragraph);
+          else quote.replaceWith(paragraph);
+          caretTarget = paragraph;
         } else {
-          // 가운데 빈 줄이면 인용구를 둘로 나누고 그 사이에 일반 문단을 둡니다.
-          const rest = quote.cloneNode(false);
-          while (line.nextSibling) rest.appendChild(line.nextSibling);
-          quote.after(paragraph, rest);
-          line.remove();
+          // 평평한 인용구는 내용을 문단 하나로 감싸야 브라우저가 인용구 안에 새 문단을 만듭니다.
+          if (![...quote.children].some((child) => child.matches(QUOTE_LINE_SELECTOR))) {
+            const { startContainer, startOffset } = caret;
+            const wrapper = document.createElement('p');
+            while (quote.firstChild) wrapper.appendChild(quote.firstChild);
+            quote.appendChild(wrapper);
+            const restored = document.createRange();
+            restored.setStart(startContainer === quote ? wrapper : startContainer, startOffset);
+            restored.collapse(true);
+            selection.removeAllRanges();
+            selection.addRange(restored);
+          }
+          suppressingInputHistory = true;
+          try {
+            runCommand('insertParagraph');
+          } finally {
+            suppressingInputHistory = false;
+          }
         }
-        if (quote.isConnected && !quote.textContent.trim() && !quote.querySelector('img,hr,table')) quote.remove();
-        placeCaretInBlock(paragraph);
+        if (caretTarget) placeCaretInBlock(caretTarget);
+        else saveSelection();
         breakEditorHistoryGroup();
         pushEditorHistory(beforeHtml, editor.innerHTML);
         markDocumentDirty();
@@ -2803,11 +2876,10 @@
         const parts = replaceFormatButtons
           .filter((button) => replacementFormatState(button) !== 'none')
           .map((button) => `${FORMAT_LABELS[button.dataset.replaceFormat]} ${FORMAT_STATE_LABELS[replacementFormatState(button)]}`);
-        const keepsText = Boolean(parts.length) && !replaceText.value;
-        const summary = parts.length
-          ? `서식: ${parts.join(' · ')}${keepsText ? ' · 글자는 유지' : ''}`
-          : '서식: 변경 없음';
-        if (replaceFormatHint.textContent !== summary) replaceFormatHint.textContent = summary;
+        // 서식 상태는 버튼 색으로 보이므로 따로 요약 줄을 두지 않습니다. 서식만 고르고
+        // 바꿀 내용을 비워 두면 글자는 그대로라는 점만 입력칸 안내 문구로 알립니다.
+        replaceText.placeholder = parts.length ? '비워 두면 글자는 두고 서식만 바꿉니다' : '바꿀 내용';
+        replaceFormats.title = parts.length ? `바꿀 서식: ${parts.join(' · ')}` : '바꿀 서식: 변경 없음';
         replaceFormatReset.disabled = !parts.length;
         updateReplacementFormatPreview();
       };
@@ -4943,7 +5015,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         replaceScopeOption.style.display = withReplace ? 'flex' : 'none';
         if (withReplace) replaceScope.value = 'all';
         replaceFormats.style.display = withReplace ? 'flex' : 'none';
-        replaceFormatHint.style.display = withReplace ? 'block' : 'none';
+        findbar.classList.toggle('replace-mode', Boolean(withReplace));
         // 찾기 전용(Ctrl+F)에는 바꿀 내용 칸이 없으므로 바꾸기 버튼도 둘 자리가
         // 없습니다. 숨기는 대신 문서에서 떼어 냅니다. 남겨 두면 화면에 보이지
         // 않으면서도 클릭·포커스·보조기술 탐색으로 닿을 수 있고, 빈 칸을 바꿀
@@ -6703,6 +6775,13 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         cycleReplacementFormat(button);
       });
 
+      // ? 도움말은 입력칸 포커스를 뺏지 않고 펼치고 접습니다. 펼친 상태는 다음에 열 때도 유지됩니다.
+      findHelpButton.addEventListener('mousedown', (event) => event.preventDefault());
+      findHelpButton.addEventListener('click', () => {
+        findHelp.hidden = !findHelp.hidden;
+        findHelpButton.setAttribute('aria-expanded', String(!findHelp.hidden));
+      });
+
       replaceFormatReset.addEventListener('click', () => {
         resetReplacementFormatStates();
         showToast('지정한 바꿀 서식을 모두 해제했습니다.');
@@ -6941,11 +7020,6 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
             return;
           }
         }
-        if (event.key === 'Enter' && !modified && !event.shiftKey && !event.isComposing
-          && exitQuoteFromEmptyLine()) {
-          event.preventDefault();
-          return;
-        }
         const cell = selectedTableCell();
         if (!cell) return;
         const table = cell.closest('table');
@@ -6982,6 +7056,13 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           target = appendTableRowUndoably(table);
         }
         placeCaretInCell(target);
+      });
+
+      // 한글을 입력하다 바로 Enter를 누르면 keydown은 조합 중으로 와서 놓칩니다.
+      // 조합이 끝난 뒤 오는 beforeinput의 문단 나눔에서 처리해야 늘 같은 결과가 됩니다.
+      editor.addEventListener('beforeinput', (event) => {
+        if (event.inputType !== 'insertParagraph' || event.isComposing) return;
+        if (handleEnterInQuote()) event.preventDefault();
       });
 
       editor.addEventListener('mouseover', (event) => {
