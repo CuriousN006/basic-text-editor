@@ -2691,6 +2691,12 @@
         strikeThrough: '취소선'
       };
       const FORMAT_STATE_LABELS = { none: '변경 없음', apply: '적용', remove: '제거' };
+      const FORMAT_SHORTCUT_LABELS = {
+        bold: 'Ctrl+B',
+        italic: 'Ctrl+I',
+        underline: 'Ctrl+U',
+        strikeThrough: 'Ctrl+Shift+X'
+      };
       const FORMAT_STATE_ORDER = ['none', 'apply', 'remove'];
 
       const replacementFormatState = (button) => button.dataset.formatState || 'none';
@@ -2811,7 +2817,8 @@
         const label = FORMAT_LABELS[button.dataset.replaceFormat] || '';
         const nextState = FORMAT_STATE_ORDER[(FORMAT_STATE_ORDER.indexOf(state) + 1) % FORMAT_STATE_ORDER.length];
         button.setAttribute('aria-label', `${label} 서식: ${FORMAT_STATE_LABELS[state]}`);
-        button.title = `${label}: ${FORMAT_STATE_LABELS[state]} (누르면 ${FORMAT_STATE_LABELS[nextState]})`;
+        const shortcut = FORMAT_SHORTCUT_LABELS[button.dataset.replaceFormat];
+        button.title = `${label}: ${FORMAT_STATE_LABELS[state]} (누르면 ${FORMAT_STATE_LABELS[nextState]}${shortcut ? ` · ${shortcut}` : ''})`;
       };
 
       const resetReplacementFormatStates = () => {
@@ -6663,13 +6670,37 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         });
       });
 
+      const cycleReplacementFormat = (button) => {
+        const currentIndex = FORMAT_STATE_ORDER.indexOf(replacementFormatState(button));
+        const nextState = FORMAT_STATE_ORDER[(currentIndex + 1) % FORMAT_STATE_ORDER.length];
+        setReplacementFormatState(button, nextState);
+        updateReplacementFormatSummary();
+      };
+
       replaceFormatButtons.forEach((button) => {
-        button.addEventListener('click', () => {
-          const currentIndex = FORMAT_STATE_ORDER.indexOf(replacementFormatState(button));
-          const nextState = FORMAT_STATE_ORDER[(currentIndex + 1) % FORMAT_STATE_ORDER.length];
-          setReplacementFormatState(button, nextState);
-          updateReplacementFormatSummary();
-        });
+        button.addEventListener('click', () => cycleReplacementFormat(button));
+      });
+
+      // 바꾸기 막대 안에서는 본문과 같은 서식 단축키로 바꿀 서식을 고릅니다.
+      // 누를 때마다 버튼을 누른 것처럼 변경 없음 → 적용 → 제거 순으로 바뀝니다.
+      // 한글 입력 상태에서도 같은 키로 동작하도록 event.code로 판단합니다.
+      const REPLACE_FORMAT_SHORTCUTS = {
+        KeyB: { format: 'bold', shift: false },
+        KeyI: { format: 'italic', shift: false },
+        KeyU: { format: 'underline', shift: false },
+        KeyX: { format: 'strikeThrough', shift: true }
+      };
+      findbar.addEventListener('keydown', (event) => {
+        if (!findbarReplaceMode || !(event.ctrlKey || event.metaKey) || event.altKey) return;
+        // 가상 키보드나 자동화 도구처럼 code를 비워 보내는 경우에는 key로 대신합니다.
+        const code = event.code || (/^[a-z]$/i.test(event.key) ? `Key${event.key.toUpperCase()}` : '');
+        const shortcut = REPLACE_FORMAT_SHORTCUTS[code];
+        if (!shortcut || shortcut.shift !== event.shiftKey) return;
+        const button = replaceFormatButtons.find((item) => item.dataset.replaceFormat === shortcut.format);
+        if (!button) return;
+        // Ctrl+U의 소스 보기처럼 브라우저 기본 동작이 끼어들지 않게 막습니다.
+        event.preventDefault();
+        cycleReplacementFormat(button);
       });
 
       replaceFormatReset.addEventListener('click', () => {

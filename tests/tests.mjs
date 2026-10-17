@@ -80,6 +80,55 @@ await withPage({}, async (page) => {
   r.check('B2 글자 보존', await page.evaluate(() => T.text()), 'x abcd y'.replace(' abcd', 'abcd'));
 });
 
+// B''. 바꾸기 막대 안에서는 Ctrl+B·I·U·Shift+X로 바꿀 서식을 고른다.
+await withPage({}, async (page) => {
+  const states = () => page.evaluate(() => Object.fromEntries(
+    [...document.querySelectorAll('[data-replace-format]')].map((button) => [button.dataset.replaceFormat, button.dataset.formatState])));
+  await page.evaluate(() => T.set('<p>사과 배 사과</p>'));
+  await openReplace(page, { find: '사과', replace: '' });
+  await page.focus('#replaceText');
+  await page.keyboard.press('Control+b');
+  r.check('B8 Ctrl+B로 굵게 적용',
+    await states(), { bold: 'apply', italic: 'none', underline: 'none', strikeThrough: 'none' });
+  await page.keyboard.press('Control+b');
+  await page.keyboard.press('Control+i');
+  await page.keyboard.press('Control+u');
+  await page.keyboard.press('Control+u');
+  await page.keyboard.press('Control+u');
+  await page.keyboard.press('Control+Shift+x');
+  r.check('B8 누를 때마다 적용 → 제거 → 변경 없음',
+    await states(), { bold: 'remove', italic: 'apply', underline: 'none', strikeThrough: 'apply' });
+  r.check('B8 단축키 뒤에도 바꿀 내용 칸에 포커스',
+    await page.evaluate(() => document.activeElement.id), 'replaceText');
+  r.check('B8 단축키가 바꿀 내용 칸에 글자를 넣지 않음',
+    await page.inputValue('#replaceText'), '');
+
+  await page.focus('#findText');
+  await page.keyboard.press('Control+b');
+  r.check('B8 찾을 내용 칸에서도 단축키 동작',
+    (await states()).bold, 'none');
+
+  await page.keyboard.press('Control+b');
+  await page.click('[data-find="replace-all"]');
+  await page.waitForTimeout(80);
+  r.check('B8 단축키로 고른 서식으로 모두 바꾸기',
+    await page.evaluate(() => [...T.ed().querySelectorAll('b,strong')].map((element) => element.textContent)),
+    ['사과', '사과']);
+  r.check('B8 본문 굵게는 건드리지 않음',
+    await page.evaluate(() => T.text()), '사과 배 사과');
+
+  // 찾기만 열었을 때는 바꿀 서식이 없으므로 단축키를 가로채지 않는다.
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Control+f');
+  await page.focus('#findText');
+  const prevented = await page.evaluate(() => {
+    const event = new KeyboardEvent('keydown', { key: 'b', code: 'KeyB', ctrlKey: true, bubbles: true, cancelable: true });
+    document.getElementById('findText').dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+  r.check('B8 찾기 막대에서는 단축키를 가로채지 않음', prevented, false);
+});
+
 // B'. 범위 전체가 굵은 조상 안에 있을 때도 해제된다 (조상 분할).
 await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<p><b>앞 대상 뒤</b></p>'));
