@@ -602,9 +602,15 @@
       display: none;
       position: fixed;
       width: min(360px, calc(100vw - 24px));
+      max-width: calc(100vw - 16px);
       max-height: min(520px, calc(100vh - 24px));
-      overflow-y: auto;
-      padding: 12px;
+      /* 사용자가 크기를 조절하면 width·height가 직접 지정되고 그때는 창 높이까지만 막습니다. */
+      min-width: 220px;
+      min-height: 160px;
+      flex-direction: column;
+      overflow: hidden;
+      /* 목록 스크롤 막대가 아래 모서리 손잡이와 겹치지 않게 띄웁니다. */
+      padding-bottom: 14px;
       border: 1px solid #c9d1dc;
       border-radius: 10px;
       background: #ffffff;
@@ -612,21 +618,40 @@
       z-index: 36;
     }
 
-    .symbol-picker.open { display: block; }
+    .symbol-picker.open { display: flex; }
+    .symbol-picker.resized { max-height: calc(100vh - 16px); }
 
-    /* 기호 창은 여러 개를 이어 넣을 수 있게 떠 있는 창이라 제목 줄로 옮깁니다. */
+    /* 기호 창은 여러 개를 이어 넣을 수 있게 떠 있는 창이라 제목 줄로 옮깁니다.
+       목록만 스크롤되므로 제목 줄과 크기 조절 손잡이는 늘 보입니다. */
     .symbol-picker .table-picker-header {
-      /* 창 안을 스크롤해도 제목 줄은 남아 있어야 옮기거나 닫을 수 있습니다. */
-      position: sticky;
-      top: -12px;
-      z-index: 1;
-      background: #ffffff;
-      margin: -12px -12px 9px;
+      flex: none;
+      margin: 0;
       padding: 8px 8px 8px 12px;
       border-bottom: 1px solid #e5e7eb;
       cursor: move;
       touch-action: none;
       user-select: none;
+    }
+
+    .symbol-picker-body {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 10px 12px 0;
+    }
+
+    .symbol-resize-handle {
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      width: 18px;
+      height: 18px;
+      cursor: nwse-resize;
+      touch-action: none;
+      /* 오른쪽 아래 모서리의 빗금 손잡이 */
+      background: linear-gradient(135deg,
+        transparent 0 55%, #9aa4b2 55% 61%, transparent 61% 70%, #9aa4b2 70% 76%, transparent 76%);
+      border-bottom-right-radius: 10px;
     }
 
     .symbol-picker.dragging { opacity: 0.92; }
@@ -647,7 +672,8 @@
 
     .symbol-grid {
       display: grid;
-      grid-template-columns: repeat(8, minmax(30px, 1fr));
+      /* 창을 넓히면 한 줄에 더 많은 기호가 들어갑니다. 기본 너비에서는 8칸입니다. */
+      grid-template-columns: repeat(auto-fill, minmax(34px, 1fr));
       gap: 5px;
     }
 
@@ -1128,26 +1154,29 @@
       <span>문자 기호 삽입</span>
       <button class="table-picker-close" type="button" data-symbol-action="close" title="닫기">✕</button>
     </div>
-    <div class="symbol-category">
-      <span class="symbol-category-title">글머리·강조 문자</span>
-      <div class="symbol-grid" data-symbol-group="bullets"></div>
+    <div class="symbol-picker-body">
+      <div class="symbol-category">
+        <span class="symbol-category-title">글머리·강조 문자</span>
+        <div class="symbol-grid" data-symbol-group="bullets"></div>
+      </div>
+      <div class="symbol-category">
+        <span class="symbol-category-title">작품명·인용 괄호</span>
+        <div class="symbol-grid" data-symbol-group="works"></div>
+      </div>
+      <div class="symbol-category">
+        <span class="symbol-category-title">화살표</span>
+        <div class="symbol-grid" data-symbol-group="arrows"></div>
+      </div>
+      <div class="symbol-category">
+        <span class="symbol-category-title">위첨자 숫자</span>
+        <div class="symbol-grid" data-symbol-group="superscriptNumbers"></div>
+      </div>
+      <div class="symbol-category">
+        <span class="symbol-category-title">아래첨자 숫자</span>
+        <div class="symbol-grid" data-symbol-group="subscriptNumbers"></div>
+      </div>
     </div>
-    <div class="symbol-category">
-      <span class="symbol-category-title">작품명·인용 괄호</span>
-      <div class="symbol-grid" data-symbol-group="works"></div>
-    </div>
-    <div class="symbol-category">
-      <span class="symbol-category-title">화살표</span>
-      <div class="symbol-grid" data-symbol-group="arrows"></div>
-    </div>
-    <div class="symbol-category">
-      <span class="symbol-category-title">위첨자 숫자</span>
-      <div class="symbol-grid" data-symbol-group="superscriptNumbers"></div>
-    </div>
-    <div class="symbol-category">
-      <span class="symbol-category-title">아래첨자 숫자</span>
-      <div class="symbol-grid" data-symbol-group="subscriptNumbers"></div>
-    </div>
+    <div class="symbol-resize-handle" data-symbol-resize title="끌어서 크기 조절"></div>
   </section>
 
   <!-- 글자 수가 바뀔 때마다 읽어 주면 입력을 방해하므로 aria-live를 두지 않습니다. -->
@@ -6737,28 +6766,50 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         focusEditor();
       });
 
+      // 기호 창의 제목 줄(옮기기)과 모서리 손잡이(크기 조절)가 함께 쓰는 끌기 처리입니다.
+      const trackSymbolPickerPointer = (handle, event, onMove) => {
+        // 눌러도 본문 선택이 풀리지 않게 합니다.
+        event.preventDefault();
+        handle.setPointerCapture(event.pointerId);
+        symbolPicker.classList.add('dragging');
+        const stop = () => {
+          symbolPicker.classList.remove('dragging');
+          handle.removeEventListener('pointermove', onMove);
+          handle.removeEventListener('pointerup', stop);
+          handle.removeEventListener('pointercancel', stop);
+        };
+        handle.addEventListener('pointermove', onMove);
+        handle.addEventListener('pointerup', stop);
+        handle.addEventListener('pointercancel', stop);
+      };
+
       const symbolDragHandle = symbolPicker.querySelector('[data-symbol-drag]');
       symbolDragHandle.addEventListener('pointerdown', (event) => {
         if (event.button !== 0 || event.target.closest('button')) return;
-        // 제목 줄을 눌러도 본문 선택이 풀리지 않게 합니다.
-        event.preventDefault();
         const pickerRect = symbolPicker.getBoundingClientRect();
         const offsetX = event.clientX - pickerRect.left;
         const offsetY = event.clientY - pickerRect.top;
-        symbolDragHandle.setPointerCapture(event.pointerId);
-        symbolPicker.classList.add('dragging');
-        const move = (moveEvent) => {
+        trackSymbolPickerPointer(symbolDragHandle, event, (moveEvent) => {
           movedSymbolPickerPosition = placeSymbolPicker(moveEvent.clientX - offsetX, moveEvent.clientY - offsetY);
-        };
-        const stop = () => {
-          symbolPicker.classList.remove('dragging');
-          symbolDragHandle.removeEventListener('pointermove', move);
-          symbolDragHandle.removeEventListener('pointerup', stop);
-          symbolDragHandle.removeEventListener('pointercancel', stop);
-        };
-        symbolDragHandle.addEventListener('pointermove', move);
-        symbolDragHandle.addEventListener('pointerup', stop);
-        symbolDragHandle.addEventListener('pointercancel', stop);
+        });
+      });
+
+      // 크기는 width·height로 직접 지정하므로 닫았다 다시 열어도 그대로 남습니다.
+      const symbolResizeHandle = symbolPicker.querySelector('[data-symbol-resize]');
+      symbolResizeHandle.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0) return;
+        const pickerRect = symbolPicker.getBoundingClientRect();
+        const startX = event.clientX;
+        const startY = event.clientY;
+        symbolPicker.classList.add('resized');
+        trackSymbolPickerPointer(symbolResizeHandle, event, (moveEvent) => {
+          // 오른쪽·아래 화면 밖으로는 늘리지 않습니다. 최소 크기는 CSS가 맡지만
+          // 음수 크기는 무시되어 직전 크기에 멈추므로 0에서 막습니다.
+          const width = Math.max(0, Math.min(pickerRect.width + moveEvent.clientX - startX, window.innerWidth - pickerRect.left - 8));
+          const height = Math.max(0, Math.min(pickerRect.height + moveEvent.clientY - startY, window.innerHeight - pickerRect.top - 8));
+          symbolPicker.style.width = `${Math.round(width)}px`;
+          symbolPicker.style.height = `${Math.round(height)}px`;
+        });
       });
 
       editor.addEventListener('keydown', (event) => {

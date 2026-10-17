@@ -675,12 +675,39 @@ await withPage({}, async (page) => {
   r.check('R33 끄는 동안 본문 내용 유지',
     await page.evaluate(() => T.html()), '<p>앞《→뒤</p>');
 
+  const columns = () => page.evaluate(() => getComputedStyle(document.querySelector('[data-symbol-group="bullets"]'))
+    .gridTemplateColumns.split(' ').length);
+  r.check('R33 기본 너비에서 한 줄 8칸', await columns(), 8);
+  const resizeBy = async (dx, dy) => {
+    const handle = await page.locator('#symbolPicker [data-symbol-resize]').boundingBox();
+    const x = handle.x + handle.width / 2;
+    const y = handle.y + handle.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + dx, y + dy, { steps: 5 });
+    await page.mouse.up();
+    return page.locator('#symbolPicker').boundingBox();
+  };
+  const resized = await resizeBy(160, -150);
+  r.check('R33 모서리를 끌어 크기 조절',
+    [Math.round(resized.width - moved.width), Math.round(resized.height - moved.height)], [160, -150]);
+  r.check('R33 크기를 조절해도 위치 유지',
+    [Math.round(resized.x), Math.round(resized.y)], [Math.round(moved.x), Math.round(moved.y)]);
+  r.check('R33 넓히면 한 줄에 기호가 더 들어감', (await columns()) > 8, true);
+  r.check('R33 크기를 조절해도 제목 줄 표시',
+    await page.locator('#symbolPicker [data-symbol-drag]').isVisible(), true);
+  const shrunk = await resizeBy(-1000, -1000);
+  r.check('R33 최소 크기 아래로는 줄지 않음',
+    [Math.round(shrunk.width), Math.round(shrunk.height)], [220, 160]);
+  const final = await resizeBy(100, 120);
+
   await page.click('[data-symbol-action="close"]');
   r.check('R33 ✕로 닫기', await pickerOpen(), false);
   await page.click('[data-action="symbol"]');
   const reopened = await page.locator('#symbolPicker').boundingBox();
-  r.check('R33 다시 열면 옮긴 자리에 표시',
-    [Math.round(reopened.x), Math.round(reopened.y)], [Math.round(moved.x), Math.round(moved.y)]);
+  r.check('R33 다시 열면 옮긴 자리와 크기 그대로',
+    [reopened.x, reopened.y, reopened.width, reopened.height].map(Math.round),
+    [final.x, final.y, final.width, final.height].map(Math.round));
 
   await page.keyboard.press('Control+f');
   await page.waitForTimeout(50);
