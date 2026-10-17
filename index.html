@@ -1399,6 +1399,41 @@
       // 사용자가 끌어서 옮긴 기호 창 위치입니다. 닫았다 다시 열어도 그 자리에 뜹니다.
       let movedSymbolPickerPosition = null;
 
+      // 옮긴 위치와 조절한 크기는 편집기를 새로 열어도 유지되도록 브라우저에 저장합니다.
+      // 저장한 크기가 지금 창보다 크면 CSS의 최대 크기가, 위치는 placeSymbolPicker가 화면 안으로 맞춥니다.
+      const SYMBOL_PICKER_LAYOUT_KEY = 'basic-text-editor-symbol-picker';
+
+      const saveSymbolPickerLayout = () => {
+        const layout = { ...movedSymbolPickerPosition };
+        if (symbolPicker.classList.contains('resized')) {
+          layout.width = parseFloat(symbolPicker.style.width);
+          layout.height = parseFloat(symbolPicker.style.height);
+        }
+        try {
+          localStorage.setItem(SYMBOL_PICKER_LAYOUT_KEY, JSON.stringify(layout));
+        } catch (error) {
+          // 저장할 수 없으면 이번 세션 동안만 유지합니다.
+        }
+      };
+
+      const restoreSymbolPickerLayout = () => {
+        let layout;
+        try {
+          layout = JSON.parse(localStorage.getItem(SYMBOL_PICKER_LAYOUT_KEY) || 'null');
+        } catch (error) {
+          return;
+        }
+        if (!layout || typeof layout !== 'object') return;
+        const finite = (...values) => values.every((value) => Number.isFinite(value));
+        if (finite(layout.left, layout.top)) movedSymbolPickerPosition = { left: layout.left, top: layout.top };
+        if (finite(layout.width, layout.height) && layout.width > 0 && layout.height > 0) {
+          symbolPicker.classList.add('resized');
+          symbolPicker.style.width = `${Math.round(layout.width)}px`;
+          symbolPicker.style.height = `${Math.round(layout.height)}px`;
+        }
+      };
+      restoreSymbolPickerLayout();
+
       const placeSymbolPicker = (left, top) => {
         const pickerRect = symbolPicker.getBoundingClientRect();
         // 창 밖으로 완전히 나가면 되찾을 수 없으므로 화면 안에 붙잡아 둡니다.
@@ -6774,6 +6809,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         symbolPicker.classList.add('dragging');
         const stop = () => {
           symbolPicker.classList.remove('dragging');
+          saveSymbolPickerLayout();
           handle.removeEventListener('pointermove', onMove);
           handle.removeEventListener('pointerup', stop);
           handle.removeEventListener('pointercancel', stop);

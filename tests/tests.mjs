@@ -709,6 +709,24 @@ await withPage({}, async (page) => {
     [reopened.x, reopened.y, reopened.width, reopened.height].map(Math.round),
     [final.x, final.y, final.width, final.height].map(Math.round));
 
+  await page.reload();
+  await page.waitForSelector('#editor');
+  await page.click('[data-action="symbol"]');
+  const afterReload = await page.locator('#symbolPicker').boundingBox();
+  r.check('R33 편집기를 새로 열어도 위치와 크기 유지',
+    [afterReload.x, afterReload.y, afterReload.width, afterReload.height].map(Math.round),
+    [final.x, final.y, final.width, final.height].map(Math.round));
+
+  // 저장한 크기가 지금 창보다 크면 화면 안에 들어오도록 줄이고 옮긴다.
+  await page.setViewportSize({ width: 500, height: 400 });
+  await page.reload();
+  await page.waitForSelector('#editor');
+  await page.evaluate(() => document.querySelector('[data-action="symbol"]').click());
+  const small = await page.locator('#symbolPicker').boundingBox();
+  r.check('R33 작아진 창에서도 기호 창이 화면 안에 표시',
+    small.x >= 0 && small.y >= 0 && small.x + small.width <= 500 && small.y + small.height <= 400, true);
+  await page.setViewportSize({ width: 1280, height: 720 });
+
   await page.keyboard.press('Control+f');
   await page.waitForTimeout(50);
   r.check('R33 찾기 막대와 함께 표시',
