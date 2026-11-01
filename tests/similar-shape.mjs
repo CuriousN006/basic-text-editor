@@ -26,8 +26,15 @@ async function openShape(page, html, example, { replace = true } = {}) {
 const state = (page) => page.evaluate(() => ({
   replace: document.getElementById('replaceText').value,
   count: document.getElementById('findCount').textContent,
-  example: document.getElementById('shapeExample').hidden ? null : document.getElementById('shapeExample').textContent
+  warning: document.getElementById('shapeWarning').hidden ? null : document.getElementById('shapeWarning').textContent
 }));
+
+// 검색 결과 목록의 "찾은 모양 → 바뀔 모양"
+const results = (page) => page.evaluate(() => [...document.querySelectorAll('.find-result-sentence')]
+  .map((item) => {
+    const to = item.querySelector('ins');
+    return to ? `${item.querySelector('mark').textContent} → ${to.textContent}` : item.querySelector('mark').textContent;
+  }));
 
 async function typeReplacement(page, value) {
   await page.fill('#replaceText', value);
@@ -50,12 +57,15 @@ await withPage(async (page) => {
   r.check('S2 숫자만 다른 날짜 개수', opened.count, '3개');
 
   await typeReplacement(page, '2024.3.15');
-  r.check('S3 다른 일치의 미리보기', (await state(page)).example, '예: 2025년 11월 2일 → 2025.11.2');
+  r.check('S3 검색 결과에 일치마다 바뀔 모양 표시', await results(page), [
+    '2024년 3월 15일 → 2024.3.15',
+    '2025년 11월 2일 → 2025.11.2',
+    '2025년 12월 1일 → 2025.12.1'
+  ]);
+  r.check('S3 입력칸 아래 안내 없음', (await state(page)).warning, null);
 
   await typeReplacement(page, '2024-03-15');
-  r.check('S4 0을 채우면 두 자리로 맞춤', (await state(page)).example, '예: 2025년 11월 2일 → 2025-11-02');
-  r.check('S4 검색 결과에 일치마다 바뀔 모양 표시', await page.evaluate(() => [...document.querySelectorAll('.find-result-sentence')]
-    .map((item) => `${item.querySelector('mark').textContent} → ${item.querySelector('ins')?.textContent}`)), [
+  r.check('S4 0을 채우면 두 자리로 맞춤', await results(page), [
     '2024년 3월 15일 → 2024-03-15',
     '2025년 11월 2일 → 2025-11-02',
     '2025년 12월 1일 → 2025-12-01'
@@ -115,7 +125,7 @@ await withPage(async (page) => {
 await withPage(async (page) => {
   await openShape(page, '<p>x^2 + 10^-3</p>', 'x^2');
   await typeReplacement(page, 'x**2');
-  r.check('S17 바꿀 모양을 글자로 고친 미리보기', (await state(page)).example, '예: 10^-3 → 10**-3');
+  r.check('S17 바꿀 모양을 글자로 고친 검색 결과', await results(page), ['^2 → **2', '^-3 → **-3']);
   await page.click('[data-find="replace-all"]');
   r.check('S18 고친 모양대로 바꿈', await page.evaluate(() => T.text()), 'x**2 + 10**-3');
 });
@@ -124,13 +134,9 @@ await withPage(async (page) => {
   const html = '<p>x^2 + 10^-3</p>';
   await openShape(page, html, 'x^2');
   await typeReplacement(page, 'y²');
-  const invalid = await page.evaluate(() => {
-    const hint = document.getElementById('shapeExample');
-    return { text: hint.textContent, invalid: hint.classList.contains('is-invalid') };
-  });
-  r.check('S19 예시 앞 글자를 고치면 안내', invalid, {
-    text: '예시의 앞뒤 글자는 그대로 두고 바뀌는 부분만 고쳐 주세요.', invalid: true
-  });
+  r.check('S19 예시 앞 글자를 고치면 안내', (await state(page)).warning,
+    '예시의 앞뒤 글자는 그대로 두고 바뀌는 부분만 고쳐 주세요.');
+  r.check('S19 읽을 수 없으면 검색 결과에 바뀔 모양 없음', await results(page), ['^2', '^-3']);
   await page.click('[data-find="replace-all"]');
   r.check('S20 읽을 수 없는 모양은 바꾸지 않음', await page.evaluate(() => T.html()), html);
 });
@@ -144,11 +150,9 @@ await withPage(async (page) => {
   await page.keyboard.press('Enter');
   await page.waitForTimeout(80);
   r.check('S21 Ctrl+F에서도 다음 일치로 이동', (await state(page)).count, '2 / 2');
-  r.check('S22 찾기 전용에서는 미리보기 없음', (await state(page)).example, null);
-  r.check('S22 찾기 전용 검색 결과는 찾은 모양만 표시', await page.evaluate(() => [...document.querySelectorAll('.find-result-sentence')]
-    .map((item) => [item.querySelector('mark').textContent, Boolean(item.querySelector('ins'))])), [
-    ['2024년 3월 15일', false],
-    ['2025년 11월 2일', false]
+  r.check('S22 찾기 전용 검색 결과는 찾은 모양만 표시', await results(page), [
+    '2024년 3월 15일',
+    '2025년 11월 2일'
   ]);
 
   await page.keyboard.press('Escape');

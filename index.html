@@ -961,19 +961,17 @@
 
     .replace-formats-label { margin-right: 2px; }
 
-    /* 비슷한 모양으로 바꿀 때 다른 일치 하나가 어떻게 바뀌는지 미리 보여 줍니다. */
-    .shape-example {
+    /* 비슷한 모양의 바꿀 내용을 읽을 수 없을 때만 입력칸 바로 아래에 알립니다.
+       바뀔 결과 자체는 검색 결과 목록에 일치마다 표시됩니다. */
+    .shape-warning {
       grid-column: 1 / -1;
       margin: -2px 2px 0;
-      color: var(--muted);
+      color: var(--danger);
       font-size: 12px;
       line-height: 1.5;
-      overflow-wrap: anywhere;
     }
 
-    .shape-example[hidden] { display: none; }
-    .shape-example b { color: var(--text); font-weight: 600; }
-    .shape-example.is-invalid { color: var(--danger); }
+    .shape-warning[hidden] { display: none; }
 
 
 
@@ -1140,7 +1138,7 @@
     </div>
     <div id="replaceRow" class="find-row">
       <input id="replaceText" class="find-input" type="text" placeholder="바꿀 내용" autocomplete="off" title="바꿀 서식을 적용한 결과가 이 칸에 그대로 표시됩니다.">
-      <div id="shapeExample" class="shape-example" aria-live="polite" hidden></div>
+      <div id="shapeWarning" class="shape-warning" role="status" hidden>예시의 앞뒤 글자는 그대로 두고 바뀌는 부분만 고쳐 주세요.</div>
     </div>
     <!-- 설명은 ? 도움말에 모으고 여기에는 실제로 고르는 항목만 둡니다. -->
     <div class="find-options">
@@ -1301,7 +1299,7 @@
       const findResultsLimit = document.getElementById('findResultsLimit');
       const matchCase = document.getElementById('matchCase');
       const similarShape = document.getElementById('similarShape');
-      const shapeExample = document.getElementById('shapeExample');
+      const shapeWarning = document.getElementById('shapeWarning');
       const replaceText = document.getElementById('replaceText');
       const particleOption = document.getElementById('particleOption');
       const replaceScopeOption = document.getElementById('replaceScopeOption');
@@ -5074,7 +5072,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         similarShape.checked = false;
         autoShapeReplacement = null;
         autoShapeKind = null;
-        shapeExample.hidden = true;
+        shapeWarning.hidden = true;
         findbar.classList.add('open');
         findResultsPanel.classList.add('open');
         findResultsPanel.setAttribute('aria-hidden', 'false');
@@ -5889,7 +5887,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       // 일치 개수 표시를 갱신합니다. 찾을 내용이 비면 아무것도 보이지 않습니다.
       const updateFindCountNow = () => {
         const query = findText.value;
-        if (!similarShape.checked || !findbarReplaceMode || !query) shapeExample.hidden = true;
+        if (!similarShape.checked || !findbarReplaceMode || !query) shapeWarning.hidden = true;
         if (!findbar.classList.contains('open') || !query) {
           clearFindHighlight();
           findCount.textContent = '';
@@ -5919,20 +5917,22 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
             showAllFindHighlights(model, lengthAt, indexes, current);
             // 바꾸기 창에서는 결과마다 바뀔 모양을 함께 보여 줍니다.
             let replacementAt = null;
+            let invalid = false;
             if (findbarReplaceMode) {
               const planned = collectShapeMatches(model.text, shape, replaceText.value);
-              if (!planned.invalid) {
+              invalid = planned.invalid;
+              if (!invalid) {
                 const insertions = new Map(planned.matches.map((match) => [match.start, match.insertion]));
                 replacementAt = (index) => insertions.get(index);
               }
             }
+            shapeWarning.hidden = !invalid;
             renderFindResults(model, parsedQuery.text, indexes, current, markers, lengthAt, replacementAt);
             const currentRange = current >= 0 && lengths.has(current)
               ? createRangeFromModel(model, current, lengths.get(current))
               : null;
             if (currentRange) showFindHighlight(currentRange);
             else clearCurrentFindHighlight();
-            updateShapeExample(model.text, shape, matches);
           } else if (parsedQuery.text) {
             const model = buildSpecialSearchModel(editor, markers);
             const stateKey = parsedQuery.usesCodes ? `special:${query}` : `literal:${query}`;
@@ -6809,46 +6809,6 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           });
         }
         return { matches, truncated, invalid };
-      };
-
-      // 바꿀 내용 아래에 다른 일치 하나가 어떻게 바뀌는지 보여 줍니다.
-      const updateShapeExample = (text, shape, matches) => {
-        const visible = similarShape.checked && findbarReplaceMode && Boolean(shape);
-        shapeExample.hidden = !visible;
-        shapeExample.classList.remove('is-invalid');
-        if (!visible) return;
-        const { matches: planned, invalid } = collectShapeMatches(text, shape, replaceText.value);
-        if (invalid) {
-          shapeExample.classList.add('is-invalid');
-          shapeExample.textContent = '예시의 앞뒤 글자는 그대로 두고 바뀌는 부분만 고쳐 주세요.';
-          return;
-        }
-        if (!matches.length) {
-          shapeExample.textContent = '';
-          shapeExample.hidden = true;
-          return;
-        }
-        const wordOf = (match) => (shape.type === 'symbol'
-          ? shapeWordAround(text, match.start, match.start + match.length)
-          : text.slice(match.start, match.start + match.length));
-        const sample = planned.find((match) => wordOf(match) !== shape.example) || planned[0];
-        const before = wordOf(sample);
-        let after = sample.insertion;
-        if (shape.type === 'symbol') {
-          // 같은 낱말 안의 기호(H_2SO_4의 _2와 _4)를 함께 바꾼 모습을 보여 줍니다.
-          after = '';
-          let cursor = 0;
-          collectShapeMatches(before, shape, replaceText.value).matches.forEach((match) => {
-            after += before.slice(cursor, match.start) + match.insertion;
-            cursor = match.start + match.length;
-          });
-          after += before.slice(cursor);
-        }
-        const from = document.createElement('b');
-        from.textContent = before.replace(/[-]/gu, ' ');
-        const to = document.createElement('b');
-        to.textContent = after || '(지움)';
-        shapeExample.replaceChildren('예: ', from, ' → ', to);
       };
 
       // 비슷한 모양을 켜거나 찾을 내용을 바꾸면 바꿀 내용을 기본값으로 채웁니다.
