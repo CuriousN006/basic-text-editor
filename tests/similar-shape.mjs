@@ -54,6 +54,12 @@ await withPage(async (page) => {
 
   await typeReplacement(page, '2024-03-15');
   r.check('S4 0을 채우면 두 자리로 맞춤', (await state(page)).example, '예: 2025년 11월 2일 → 2025-11-02');
+  r.check('S4 검색 결과에 일치마다 바뀔 모양 표시', await page.evaluate(() => [...document.querySelectorAll('.find-result-sentence')]
+    .map((item) => `${item.querySelector('mark').textContent} → ${item.querySelector('ins')?.textContent}`)), [
+    '2024년 3월 15일 → 2024-03-15',
+    '2025년 11월 2일 → 2025-11-02',
+    '2025년 12월 1일 → 2025-12-01'
+  ]);
   await page.click('[data-find="replace-all"]');
   r.check('S5 모두 바꾸기 결과', await page.evaluate(() => T.text()),
     '작성 2024-03-15, 수정 2025-11-02, 기한 2025-12-01.');
@@ -139,6 +145,11 @@ await withPage(async (page) => {
   await page.waitForTimeout(80);
   r.check('S21 Ctrl+F에서도 다음 일치로 이동', (await state(page)).count, '2 / 2');
   r.check('S22 찾기 전용에서는 미리보기 없음', (await state(page)).example, null);
+  r.check('S22 찾기 전용 검색 결과는 찾은 모양만 표시', await page.evaluate(() => [...document.querySelectorAll('.find-result-sentence')]
+    .map((item) => [item.querySelector('mark').textContent, Boolean(item.querySelector('ins'))])), [
+    ['2024년 3월 15일', false],
+    ['2025년 11월 2일', false]
+  ]);
 
   await page.keyboard.press('Escape');
   await page.evaluate(() => T.caretIn(0));
