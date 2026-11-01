@@ -109,6 +109,8 @@ await withPage(async (page) => {
   const html = '<p>H_2SO_4, CO_2, a_n, x_{10}, my_file_v2.txt, data_2024, https://a.com/b_1 ㅠ_ㅠ</p>';
   await openShape(page, html, 'H_2SO_4');
   r.check('S13 기본값은 아래첨자', (await state(page)).replace, 'H₂SO₄');
+  r.check('S13 검색 결과는 기호가 붙은 낱말 전체', await results(page),
+    ['H_2SO_4 → H₂SO₄', 'CO_2 → CO₂', 'a_n → aₙ', 'x_{10} → x₁₀']);
   await page.click('[data-find="replace-all"]');
   r.check('S14 이름·주소·이모티콘은 그대로', await page.evaluate(() => T.text()),
     'H₂SO₄, CO₂, aₙ, x₁₀, my_file_v2.txt, data_2024, https://a.com/b_1 ㅠ_ㅠ');
@@ -123,9 +125,16 @@ await withPage(async (page) => {
 });
 
 await withPage(async (page) => {
+  await openShape(page, '<p>물은 H_2O이고 황산은 H_2SO_4를</p>', 'H_2O');
+  r.check('S16 한글 조사는 낱말에 넣지 않음', await results(page), ['H_2O → H₂O', 'H_2SO_4 → H₂SO₄']);
+  await page.click('[data-find="replace-all"]');
+  r.check('S16 낱말 단위로 바꿔도 조사는 그대로', await page.evaluate(() => T.text()), '물은 H₂O이고 황산은 H₂SO₄를');
+});
+
+await withPage(async (page) => {
   await openShape(page, '<p>x^2 + 10^-3</p>', 'x^2');
   await typeReplacement(page, 'x**2');
-  r.check('S17 바꿀 모양을 글자로 고친 검색 결과', await results(page), ['^2 → **2', '^-3 → **-3']);
+  r.check('S17 바꿀 모양을 글자로 고친 검색 결과', await results(page), ['x^2 → x**2', '10^-3 → 10**-3']);
   await page.click('[data-find="replace-all"]');
   r.check('S18 고친 모양대로 바꿈', await page.evaluate(() => T.text()), 'x**2 + 10**-3');
 });
@@ -136,7 +145,7 @@ await withPage(async (page) => {
   await typeReplacement(page, 'y²');
   r.check('S19 예시 앞 글자를 고치면 안내', (await state(page)).warning,
     '예시의 앞뒤 글자는 그대로 두고 바뀌는 부분만 고쳐 주세요.');
-  r.check('S19 읽을 수 없으면 검색 결과에 바뀔 모양 없음', await results(page), ['^2', '^-3']);
+  r.check('S19 읽을 수 없으면 검색 결과에 바뀔 모양 없음', await results(page), ['x^2', '10^-3']);
   await page.click('[data-find="replace-all"]');
   r.check('S20 읽을 수 없는 모양은 바꾸지 않음', await page.evaluate(() => T.html()), html);
 });

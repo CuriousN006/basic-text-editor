@@ -6774,18 +6774,41 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         if (shape.type === 'symbol') {
           const template = replacement === null ? null : learnSymbolTemplate(shape, replacement);
           if (replacement !== null && !template) invalid = true;
-          for (const symbol of findSymbolsOfKind(text, shape.kind)) {
+          // 기호만(_2) 칠하면 무엇이 바뀌는지 알아보기 어려워 기호가 붙은 낱말(H_2SO_4)
+          // 하나를 일치 하나로 묶습니다. 한글 조사(H_2O이고의 '이고')는 낱말에 넣지 않습니다.
+          const isWordCharacter = (character) => /[\p{Script=Latin}\p{Script=Greek}\p{N}]/u.test(character || '');
+          const symbols = findSymbolsOfKind(text, shape.kind);
+          for (let index = 0; index < symbols.length;) {
             if (matches.length >= MATCH_LIMIT) {
               truncated = true;
               break;
             }
-            matches.push({
-              start: symbol.start,
-              length: symbol.length,
-              insertion: template
-                ? template.before + (template.ref ? symbol[template.ref] : '') + template.after
-                : null
-            });
+            const group = [symbols[index]];
+            index += 1;
+            while (index < symbols.length) {
+              const last = group[group.length - 1];
+              const gap = text.slice(last.start + last.length, symbols[index].start);
+              if (![...gap].every(isWordCharacter)) break;
+              group.push(symbols[index]);
+              index += 1;
+            }
+            let start = group[0].start;
+            let end = group[group.length - 1].start + group[group.length - 1].length;
+            while (start > 0 && isWordCharacter(text[start - 1])) start -= 1;
+            while (end < text.length && isWordCharacter(text[end])) end += 1;
+
+            let insertion = null;
+            if (template) {
+              insertion = '';
+              let cursor = start;
+              group.forEach((symbol) => {
+                insertion += text.slice(cursor, symbol.start)
+                  + template.before + (template.ref ? symbol[template.ref] : '') + template.after;
+                cursor = symbol.start + symbol.length;
+              });
+              insertion += text.slice(cursor, end);
+            }
+            matches.push({ start, length: end - start, insertion });
           }
           return { matches, truncated, invalid };
         }
