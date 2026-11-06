@@ -1333,7 +1333,8 @@
       const linkPreview = document.getElementById('linkPreview');
       const linkPreviewUrl = document.getElementById('linkPreviewUrl');
       const linkPreviewCopy = document.getElementById('linkPreviewCopy');
-      let currentFileName = '새 문서';
+      const UNTITLED_FILE_NAME = '새 문서';
+      let currentFileName = UNTITLED_FILE_NAME;
       let currentHtmlFileHandle = null;
       let currentMarkdownFileHandle = null;
       let currentDocxFileHandle = null;
@@ -3518,7 +3519,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${escapeHtml(currentFileName.replace(/\.[^.]+$/, '') || '문서')}</title>
+<title>${escapeHtml(documentBaseName())}</title>
 <style>
 body{max-width:780px;margin:40px auto;padding:0 24px;color:#202124;font-family:"Malgun Gothic","맑은 고딕",Arial,sans-serif;font-size:16px;line-height:1.75;tab-size:4;word-break:break-word}
 p,h1,h2,h3,blockquote,li,pre,th,td{white-space:pre-wrap}p{margin:0 0 1em}p.blank-line{min-height:1.75em;margin:0}h1{font-size:2em}h2{font-size:1.55em}h3{font-size:1.25em}blockquote{margin:1em 0;padding:.5em 1em;border-left:4px solid #94a3b8;background:#f8fafc;color:#475569}blockquote>p{margin:0}blockquote>p+p{margin-top:.75em}pre{overflow:auto;padding:14px 16px;border-radius:8px;background:#f4f5f7}code{font-family:Consolas,monospace}a{color:#1558d6}img{max-width:100%;height:auto}hr{border:0;border-top:1px solid #cdd2d9;margin:2em 0}table{width:100%;margin:.8em 0 1em;border-collapse:collapse;table-layout:fixed}th,td{padding:8px 10px;border:1px solid #9ca3af;vertical-align:top}th{background:#f1f5f9;font-weight:700}
@@ -3541,10 +3542,43 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       };
 
-      const suggestedName = (extension) => {
-        const base = (currentFileName || '문서').replace(/\.(md|markdown|txt|html?|docx?)$/i, '') || '문서';
-        return `${base}.${extension}`;
+      // 아직 파일 이름이 없는 문서는 Word처럼 첫 줄을 제목으로 씁니다.
+      // 첫 문장만 쓰고, 파일 이름에 쓸 수 없는 글자는 공백으로 바꾸며, 너무 길면 자릅니다.
+      const TITLE_MAX_LENGTH = 50;
+      const RESERVED_FILE_NAMES = /^(con|prn|aux|nul|com\d|lpt\d)$/i;
+      const titleFromFirstLine = () => {
+        // innerText는 화면에 붙어 있는 요소에서만 줄을 나눠 주므로 편집기 자체를 읽습니다.
+        const line = (editor.innerText || '')
+          .replace(/[​﻿]/g, '')
+          .split('\n')
+          .map((value) => value.trim())
+          .find(Boolean);
+        if (!line) return '';
+        let title = line
+          .replace(/[<>:"/\\|?*\u0000-\u001F\u007F]/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        // "오늘 회의. 다음 안건은…"처럼 문장이 이어지면 첫 문장까지만 씁니다.
+        // "1. 서론"의 번호 점은 문장 끝이 아닙니다.
+        const sentence = title.match(/^(.*?[^\d\s][.!?。])(?:\s|$)/u);
+        if (sentence) title = sentence[1];
+        if (title.length > TITLE_MAX_LENGTH) {
+          const cut = title.slice(0, TITLE_MAX_LENGTH);
+          const space = cut.lastIndexOf(' ');
+          title = space >= TITLE_MAX_LENGTH / 2 ? cut.slice(0, space) : cut;
+        }
+        // 윈도는 끝의 점·공백을 지우고, CON 같은 이름은 쓸 수 없습니다.
+        title = title.replace(/[.\s]+$/u, '');
+        return RESERVED_FILE_NAMES.test(title) ? '' : title;
       };
+
+      // 저장 파일 이름·HTML 제목·DOCX 제목에 함께 씁니다.
+      const documentBaseName = () => {
+        if (currentFileName === UNTITLED_FILE_NAME) return titleFromFirstLine() || UNTITLED_FILE_NAME;
+        return currentFileName.replace(/\.(md|markdown|txt|html?|docx?)$/i, '') || '문서';
+      };
+
+      const suggestedName = (extension) => `${documentBaseName()}.${extension}`;
 
       const xmlEscape = (value) => String(value ?? '')
         .replace(/&/g, '&amp;')
@@ -3835,7 +3869,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         const contentTypes = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>';
         const rootRelationships = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>';
         const documentRelationships = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + relationships.join('') + '</Relationships>';
-        const coreProperties = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>' + xmlEscape(currentFileName.replace(/\.[^.]+$/, '') || '문서') + '</dc:title><dc:creator>오프라인 리치 라이터</dc:creator><cp:lastModifiedBy>오프라인 리치 라이터</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">' + timestamp + '</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">' + timestamp + '</dcterms:modified></cp:coreProperties>';
+        const coreProperties = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>' + xmlEscape(documentBaseName()) + '</dc:title><dc:creator>오프라인 리치 라이터</dc:creator><cp:lastModifiedBy>오프라인 리치 라이터</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">' + timestamp + '</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">' + timestamp + '</dcterms:modified></cp:coreProperties>';
         const appProperties = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>오프라인 리치 라이터</Application><DocSecurity>0</DocSecurity><ScaleCrop>false</ScaleCrop><Company></Company><LinksUpToDate>false</LinksUpToDate><SharedDoc>false</SharedDoc><HyperlinksChanged>false</HyperlinksChanged><AppVersion>1.0</AppVersion></Properties>';
 
         return createStoredZip([
@@ -7727,7 +7761,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
             if ((editor.innerText.trim() || draftDirty)
               && !window.confirm('현재 문서를 지우고 새 문서를 만들까요?')) return;
             normalizeEmptyDocument(true);
-            currentFileName = '새 문서';
+            currentFileName = UNTITLED_FILE_NAME;
             currentHtmlFileHandle = null;
             currentMarkdownFileHandle = null;
             currentDocxFileHandle = null;

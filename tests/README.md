@@ -56,4 +56,5 @@ EDITOR_DIR=/tmp/baseline npm test
 - `quote-paste.mjs` — 제미나이 등에서 복사한 HTML 인용구를 실제 `Ctrl+V`로 붙여넣을 때 인용문을 유지하는지 검증
 - `replace-enter-format.mjs` — 바꿀 내용 칸에서 `Enter`로 이어 바꾸기, 서식 경계에 걸친 일치와 교정한 조사의 서식 검증
 - `similar-shape.mjs` — 비슷한 모양 찾아 바꾸기: 숫자 자리·0 채우기·두 자리 연도, 첨자·LaTeX 기호, 이름·경로·이모티콘 제외, 조사 교정 검증
+- `save-file-name.mjs` — 이름 없는 문서를 저장할 때 첫 줄로 고르는 파일 이름(다운로드·저장 창·복구한 초안)과 HTML·DOCX 제목 검증
 - `perf.mjs` — 일괄 치환 소요 시간 측정
