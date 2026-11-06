@@ -3124,11 +3124,20 @@
         const nodes = splitTextNodesInRange(range, root);
         if (!nodes.length) return range;
         const { tag } = FORMAT_DEFINITIONS[format];
+        // 바로 앞 형제가 이번에 만든 같은 서식이면 그 안에 넣어 <b>라</b><b>마</b>처럼
+        // 쪼개지지 않게 합니다. 원래 있던 요소에는 합치지 않습니다.
+        const created = new Set();
         nodes.forEach((node) => {
           if (formatActiveAt(node, root, format)) return;
+          const previous = node.previousSibling;
+          if (previous && created.has(previous)) {
+            previous.appendChild(node);
+            return;
+          }
           const wrapper = node.ownerDocument.createElement(tag);
           node.parentNode.insertBefore(wrapper, node);
           wrapper.appendChild(node);
+          created.add(wrapper);
         });
         return rangeAround(nodes);
       };

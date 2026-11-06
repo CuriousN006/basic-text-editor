@@ -116,6 +116,20 @@ await withPage(async (page) => {
 });
 
 await withPage(async (page) => {
+  await page.evaluate(() => T.set('<p>앞 <b>가</b>나</p><p>다 끝</p>'));
+  await openReplace(page, { find: '가나^p다', replace: '라^l마' });
+  await replaceAll(page);
+  r.check('F9 줄바꿈이 섞인 바꿀 내용도 서식 하나로 묶음', await page.evaluate(() => T.html()), '<p>앞 <b>라\n마</b> 끝</p>');
+});
+
+await withPage(async (page) => {
+  await page.evaluate(() => T.set('<p>가 나 다</p>'));
+  await openReplace(page, { find: '나', replace: '라^l마', formats: { bold: 'apply' } });
+  await replaceAll(page);
+  r.check('F10 지정한 서식도 쪼개지 않음', await page.evaluate(() => T.html()), '<p>가 <b>라\n마</b> 다</p>');
+});
+
+await withPage(async (page) => {
   await page.evaluate(() => T.set('<p><a href="https://example.com/">링크</a> 글</p>'));
   await openReplace(page, { find: '링크 글', replace: '새 글' });
   await replaceAll(page);
