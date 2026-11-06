@@ -62,12 +62,14 @@ const nameCases = [
   ['N12 서식이 섞여도 글자만', '<p><b>굵은</b> <a href="https://a.com/">링크</a> 제목</p>', '굵은 링크 제목']
 ];
 
-await withPage({ noFilePicker: true }, async (page) => {
-  for (const [name, html, expected] of nameCases) {
+// 리눅스 Chromium은 한 페이지에서 다운로드가 10번을 넘으면 다음 다운로드를 막으므로
+// 경우마다 새 페이지에서 내려받습니다.
+for (const [name, html, expected] of nameCases) {
+  await withPage({ noFilePicker: true }, async (page) => {
     await page.evaluate((value) => T.set(value), html);
     r.check(`${name} (HTML)`, (await download(page, 'save-html')).name, `${expected}.html`);
-  }
-});
+  });
+}
 
 await withPage({ noFilePicker: true }, async (page) => {
   await page.evaluate(() => T.set('<h1>분기 보고</h1><p>본문</p>'));
