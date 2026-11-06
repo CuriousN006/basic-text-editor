@@ -55,6 +55,53 @@ try {
     r.check('빈 줄 있는 표 붙여넣기 한 번에 취소', await page.evaluate(() => T.html()), '<p><br></p>');
   });
 
+  // 이 편집기로 저장한 HTML처럼 빈 문단을 직접 넣은 문서를 브라우저로 열어 실제로
+  // 복사합니다. 평문에는 문단 여백마다 빈 줄이 더 붙으므로(빈 문단 하나는 빈 줄 셋)
+  // 평문을 따르면 빈 줄이 두세 배로 늘어납니다. HTML 구조 그대로 들어와야 합니다.
+  const savedDocument = '<!doctype html><html lang="ko"><head><meta charset="utf-8"><style>'
+    + 'p,td{white-space:pre-wrap}p{margin:0 0 1em}table{border-collapse:collapse}td{border:1px solid #999}</style></head><body>\n'
+    + '<p>제목 줄</p><p>첫 문단입니다.</p><p><br></p><p>둘째 문단</p><p>바로 이어진 문단</p><p><br></p><p><br></p>'
+    + '<p>표 앞 설명</p><table><tbody><tr><td><b>항목</b></td><td><b>값</b></td></tr><tr><td>사과</td><td>1</td></tr></tbody></table>'
+    + '<p>표 뒤 첫 문단</p><p><br></p><p>마지막 <b>문단</b></p><p><br></p>\n\n\n</body></html>';
+  const savedBlocks = ['P', 'P', '빈', 'P', 'P', '빈', '빈', 'P', 'TABLE', 'P', '빈', 'P', '빈'];
+  const blockShape = (page) => page.evaluate(() => [...T.ed().children]
+    .map(node => (node.tagName === 'TABLE' ? 'TABLE' : node.textContent.trim() ? 'P' : '빈')));
+  for (const withTable of [true, false]) {
+    const label = withTable ? '표 있음' : '표 없음';
+    const html = withTable ? savedDocument : savedDocument.replace(/<table[\s\S]*<\/table>/, '');
+    const expected = withTable ? savedBlocks : savedBlocks.filter(block => block !== 'TABLE');
+    await withPage(async page => {
+      const viewer = await page.context().newPage();
+      await viewer.goto(`${base}/tests/README.md`);
+      await viewer.evaluate(source => { document.open(); document.write(source); document.close(); }, html);
+      await viewer.keyboard.press('Control+a');
+      await viewer.keyboard.press('Control+c');
+      await viewer.close();
+      await page.evaluate(() => { T.set('<p><br></p>'); T.caretIn(0, true); });
+      await page.keyboard.press('Control+v');
+      await page.waitForTimeout(300);
+      r.check(`브라우저로 연 저장 문서 복사: 빈 줄 그대로 (${label})`, await blockShape(page), expected);
+      r.check(`브라우저로 연 저장 문서 복사: 서식 유지 (${label})`,
+        await page.evaluate(() => [...T.ed().querySelectorAll('b')].map(node => node.textContent)),
+        withTable ? ['항목', '값', '문단'] : ['문단']);
+    });
+  }
+
+  // 편집기에서 연 HTML 파일을 그대로 복사해 새 문서에 붙여넣어도 같아야 합니다.
+  await withPage(async page => {
+    await page.setInputFiles('#fileInput', { name: 'saved.html', mimeType: 'text/html', buffer: Buffer.from(savedDocument) });
+    await waitForOpened(page, 'saved.html');
+    r.check('HTML 파일을 열 때 소스의 줄 맞춤 공백은 버림', await page.evaluate(() => [...T.ed().childNodes].filter(node => node.nodeType === Node.TEXT_NODE).length), 0);
+    r.check('연 HTML 파일의 블록 구성', await blockShape(page), savedBlocks);
+    await page.evaluate(() => T.ed().focus());
+    await page.keyboard.press('Control+a');
+    await page.keyboard.press('Control+c');
+    await page.evaluate(() => { T.set('<p><br></p>'); T.caretIn(0, true); });
+    await page.keyboard.press('Control+v');
+    await page.waitForTimeout(300);
+    r.check('편집기에서 복사한 저장 문서를 다시 붙여넣어도 같음', await blockShape(page), savedBlocks);
+  });
+
   // 평문이 HTML과 어긋나면 글자가 밀리지 않도록 HTML 구조를 그대로 씁니다.
   await withPage(async page => {
     await page.evaluate(() => { T.set('<p><br></p>'); T.caretIn(0, true); });

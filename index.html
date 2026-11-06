@@ -3968,6 +3968,11 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         if (/\.html?$/i.test(file.name)) {
           const parsed = new DOMParser().parseFromString(text, 'text/html');
           editor.innerHTML = sanitizeHtml(parsed.body.innerHTML);
+          // 블록 사이의 개행·들여쓰기는 HTML 소스의 줄 맞춤일 뿐입니다. 편집 영역은
+          // 공백을 그대로 보여 주므로 남겨 두면 빈 줄처럼 보이고 복사에도 빈 줄로 섞입니다.
+          [...editor.childNodes].forEach((node) => {
+            if (node.nodeType === Node.TEXT_NODE && !node.nodeValue.trim()) node.remove();
+          });
           currentHtmlFileHandle = handle;
           currentMarkdownFileHandle = null;
           currentDocxFileHandle = null;
@@ -4712,6 +4717,18 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       //
       // 두 표현의 "공백을 뺀 글자"가 정확히 같을 때만 겹칩니다. 다르면 글자와
       // 서식이 밀려 엉뚱한 곳이 굵어질 수 있으므로 HTML 구조를 그대로 씁니다.
+      //
+      // 빈 문단(<p><br></p>, <p>&nbsp;</p>)이 HTML에 직접 들어 있으면 쓴 사람이 빈 줄을
+      // 손수 넣은 글이므로 이 방법을 쓰지 않습니다(hasExplicitBlankParagraphs). 그런 글의
+      // 평문에는 문단 여백마다 빈 줄이 더 붙고 빈 문단 하나는 빈 줄 셋이 되어, 평문을
+      // 따르면 빈 줄이 두세 배로 늘어납니다. 이 편집기로 저장한 HTML이 그렇습니다.
+      const hasExplicitBlankParagraphs = (root) => [...root.querySelectorAll('p, div, li')].some((block) => (
+        !block.closest('table')
+        && !block.querySelector('p, div, li, img, table, hr, video, iframe, svg')
+        && !block.textContent.replace(/[\s ​﻿]/g, '')
+        && (Boolean(block.querySelector('br')) || /[  ]/.test(block.textContent))
+      ));
+
       const alignClipboardLinesToPlainText = (plain, htmlLines) => {
         const flat = [];
         htmlLines.forEach((line) => line.forEach((runs) => runs.forEach((run) => {
@@ -4995,7 +5012,8 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           .filter(keep)
           .map(run => run.text)
           .join(''));
-        const cursor = clipboardPlainCursor(plain);
+        // 빈 문단을 직접 넣은 글이면 평문을 맞대지 않고 HTML 구조를 씁니다.
+        const cursor = clipboardPlainCursor(hasExplicitBlankParagraphs(doc.body) ? '' : plain);
         const tokens = [];
         const remaining = doc.createRange();
         remaining.selectNodeContents(doc.body);
@@ -8109,12 +8127,16 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         }
 
         // 4) 일반 글은 평문의 줄 구조에 HTML의 글자 서식을 얹습니다.
+        //    빈 문단을 직접 넣은 글은 HTML 구조를 그대로 씁니다.
         const htmlLines = rich ? clipboardLinesFromHtml(rich) : [];
-        const alignedLines = (plain && htmlLines.length
+        const htmlKeepsBlankLines = Boolean(rich)
+          && hasExplicitBlankParagraphs(new DOMParser().parseFromString(rich, 'text/html').body);
+        const alignedLines = (plain && htmlLines.length && !htmlKeepsBlankLines
           ? alignClipboardLinesToPlainText(plain, htmlLines)
           : null);
         // HTML 번호와 평문이 다를 때도 복사한 번호를 임의로 다시 매기지 않습니다.
-        const preservePlainNumbers = plain && /<ol(?:\s|>)/i.test(rich) && /^\s*[+-]?\d+[.)]\s+\S/m.test(plain);
+        const preservePlainNumbers = !htmlKeepsBlankLines
+          && plain && /<ol(?:\s|>)/i.test(rich) && /^\s*[+-]?\d+[.)]\s+\S/m.test(plain);
         const lines = alignedLines || (preservePlainNumbers
           ? normalizeClipboardText(plain).split('\n').map(line => [[{ ...EMPTY_CLIPBOARD_STYLE, text: line }]])
           : htmlLines);
