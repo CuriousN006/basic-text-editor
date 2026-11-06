@@ -222,6 +222,17 @@
       color: inherit;
     }
 
+    /* 비슷한 모양으로 바꿀 때 일치마다 바뀔 결과를 바로 옆에 보여 줍니다. */
+    .find-result-sentence .find-result-arrow { color: var(--muted); }
+
+    .find-result-sentence ins {
+      padding: 0 1px;
+      border-radius: 2px;
+      background: #dcfce7;
+      color: inherit;
+      text-decoration: none;
+    }
+
     .find-results-empty,
     .find-results-limit {
       padding: 18px 10px;
@@ -950,6 +961,18 @@
 
     .replace-formats-label { margin-right: 2px; }
 
+    /* 비슷한 모양의 바꿀 내용을 읽을 수 없을 때만 입력칸 바로 아래에 알립니다.
+       바뀔 결과 자체는 검색 결과 목록에 일치마다 표시됩니다. */
+    .shape-warning {
+      grid-column: 1 / -1;
+      margin: -2px 2px 0;
+      color: var(--danger);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .shape-warning[hidden] { display: none; }
+
 
 
 
@@ -1115,6 +1138,7 @@
     </div>
     <div id="replaceRow" class="find-row">
       <input id="replaceText" class="find-input" type="text" placeholder="바꿀 내용" autocomplete="off" title="바꿀 서식을 적용한 결과가 이 칸에 그대로 표시됩니다.">
+      <div id="shapeWarning" class="shape-warning" role="status" hidden>예시의 앞뒤 글자는 그대로 두고 바뀌는 부분만 고쳐 주세요.</div>
     </div>
     <!-- 설명은 ? 도움말에 모으고 여기에는 실제로 고르는 항목만 둡니다. -->
     <div class="find-options">
@@ -1125,6 +1149,10 @@
       <label class="particle-option" title="끄면 영문 대문자와 소문자를 같은 글자로 봅니다.">
         <input id="matchCase" type="checkbox" checked>
         대소문자 구분
+      </label>
+      <label class="particle-option" title="찾을 내용을 예시로 보고, 숫자만 다른 같은 모양이나 x^2·H_2O·\alpha 같은 기호를 모두 찾습니다.">
+        <input id="similarShape" type="checkbox">
+        비슷한 모양
       </label>
       <label id="replaceScopeOption" class="replace-scope" title="전체는 문서 전체, 아래쪽과 위쪽은 현재 커서 또는 찾은 위치를 기준으로 바꿉니다.">
         <span>범위</span>
@@ -1148,6 +1176,8 @@
       <span><code>^p</code> 문단 · <code>^l</code> 줄바꿈 · <code>^t</code> 탭 · <code>^^</code> ^ 문자</span>
       <span class="find-help-term">이동</span>
       <span><code>Enter</code> 다음 · <code>Shift+Enter</code> 이전 · 본문에서는 <code>F3</code></span>
+      <span class="find-help-term">비슷한 모양</span>
+      <span>숫자는 아무 숫자로, <code>x^2</code> · <code>H_2O</code> · <code>\alpha</code>는 같은 기호를 쓴 곳 전부로 찾습니다<span data-replace-help><br>바꿀 내용의 예시를 원하는 모양으로 고치면 나머지도 똑같이 바뀝니다</span></span>
       <span class="find-help-term" data-replace-help>서식</span>
       <span data-replace-help><code>Ctrl+B</code> 굵게 · <code>Ctrl+I</code> 기울임 · <code>Ctrl+U</code> 밑줄<br><code>Ctrl+Shift+X</code> 취소선 · 누를 때마다 적용 → 제거 → 해제</span>
     </div>
@@ -1268,6 +1298,8 @@
       const findResultsList = document.getElementById('findResultsList');
       const findResultsLimit = document.getElementById('findResultsLimit');
       const matchCase = document.getElementById('matchCase');
+      const similarShape = document.getElementById('similarShape');
+      const shapeWarning = document.getElementById('shapeWarning');
       const replaceText = document.getElementById('replaceText');
       const particleOption = document.getElementById('particleOption');
       const replaceScopeOption = document.getElementById('replaceScopeOption');
@@ -5083,6 +5115,11 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           clearFindHighlight();
         }
         if (withReplace) resetReplacementFormatStates();
+        // 자주 쓰지 않는 기능이라 열 때마다 꺼 둡니다. 켠 채로 잊으면 일반 찾기가 달라 보입니다.
+        similarShape.checked = false;
+        autoShapeReplacement = null;
+        autoShapeKind = null;
+        shapeWarning.hidden = true;
         findbar.classList.add('open');
         findResultsPanel.classList.add('open');
         findResultsPanel.setAttribute('aria-hidden', 'false');
@@ -5862,7 +5899,16 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         };
       };
 
-      const renderFindResults = (model, needle, indexes, currentIndex, markers) => {
+      // replacementAt을 주면(비슷한 모양 바꾸기) 일치마다 바뀔 글자를 → 뒤에 덧붙입니다.
+      const renderFindResults = (
+        model,
+        needle,
+        indexes,
+        currentIndex,
+        markers,
+        lengthAt = () => needle.length,
+        replacementAt = null
+      ) => {
         findResultsList.replaceChildren();
         findResultsLimit.hidden = true;
         findResultsLimit.textContent = '';
@@ -5888,7 +5934,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         }
 
         indexes.slice(0, FIND_RESULTS_PANEL_LIMIT).forEach((index, ordinal) => {
-          const context = searchResultContext(model.text, index, needle.length, markers);
+          const context = searchResultContext(model.text, index, lengthAt(index), markers);
           const button = document.createElement('button');
           button.type = 'button';
           button.className = 'find-result-item';
@@ -5906,6 +5952,15 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           const mark = document.createElement('mark');
           mark.textContent = context.match || findText.value;
           sentence.appendChild(mark);
+          const replacement = replacementAt?.(index);
+          if (typeof replacement === 'string') {
+            const arrow = document.createElement('span');
+            arrow.className = 'find-result-arrow';
+            arrow.textContent = ' → ';
+            const result = document.createElement('ins');
+            result.textContent = replacement || '(지움)';
+            sentence.append(arrow, result);
+          }
           if (context.after) sentence.appendChild(document.createTextNode(context.after));
           button.append(location, sentence);
           findResultsList.appendChild(button);
@@ -5920,6 +5975,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       // 일치 개수 표시를 갱신합니다. 찾을 내용이 비면 아무것도 보이지 않습니다.
       const updateFindCountNow = () => {
         const query = findText.value;
+        if (!similarShape.checked || !findbarReplaceMode || !query) shapeWarning.hidden = true;
         if (!findbar.classList.contains('open') || !query) {
           clearFindHighlight();
           findCount.textContent = '';
@@ -5936,7 +5992,33 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         try {
           const markers = pickSpecialSearchMarkers(editor, [query, replaceText.value]);
           const parsedQuery = parseSpecialCodes(query, markers);
-          if (parsedQuery.text) {
+          if (parsedQuery.text && similarShape.checked) {
+            const model = buildSpecialSearchModel(editor, markers);
+            const current = specialSearchState.query === shapeStateKey(query) ? specialSearchState.index : -1;
+            const shape = shapeExampleFromQuery(markers);
+            const { matches, invalid } = shape
+              ? shapeMatchesForSearch(model.text, shape, markers)
+              : { matches: [], invalid: false };
+            const lengths = new Map(matches.map((match) => [match.start, match.length]));
+            const lengthAt = (index) => lengths.get(index);
+            indexes = matches.map((match) => match.start);
+            total = indexes.length;
+            ordinal = indexes.indexOf(current) + 1;
+            showAllFindHighlights(model, lengthAt, indexes, current);
+            // 바꾸기 창에서는 결과마다 바뀔 모양을 함께 보여 줍니다.
+            let replacementAt = null;
+            if (findbarReplaceMode && !invalid) {
+              const insertions = new Map(matches.map((match) => [match.start, match.insertion]));
+              replacementAt = (index) => insertions.get(index);
+            }
+            shapeWarning.hidden = !invalid;
+            renderFindResults(model, parsedQuery.text, indexes, current, markers, lengthAt, replacementAt);
+            const currentRange = current >= 0 && lengths.has(current)
+              ? createRangeFromModel(model, current, lengths.get(current))
+              : null;
+            if (currentRange) showFindHighlight(currentRange);
+            else clearCurrentFindHighlight();
+          } else if (parsedQuery.text) {
             const model = buildSpecialSearchModel(editor, markers);
             const stateKey = parsedQuery.usesCodes ? `special:${query}` : `literal:${query}`;
             const current = specialSearchState.query === stateKey ? specialSearchState.index : -1;
@@ -6029,15 +6111,17 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         clearCurrentFindHighlight();
       };
 
+      // length는 숫자이거나, 비슷한 모양처럼 일치마다 길이가 다르면 index → 길이 함수입니다.
       const showAllFindHighlights = (model, length, indexes, currentIndex) => {
         if (!supportsFindHighlight) return false;
         clearAllFindHighlights();
+        const lengthAt = typeof length === 'function' ? length : () => length;
         try {
           const highlight = new Highlight();
           indexes.forEach((index) => {
             // 현재 결과는 별도의 진한 하이라이트로 표시합니다.
             if (index === currentIndex) return;
-            const range = createRangeFromModel(model, index, length);
+            const range = createRangeFromModel(model, index, lengthAt(index));
             if (range) highlight.add(range);
           });
           if (!highlight.size) return true;
@@ -6088,11 +6172,21 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         const needle = parsedQuery.text;
         if (!needle) return false;
         const model = buildSpecialSearchModel(editor, markers);
-        if (searchIndexOf(model.text, needle, index) !== index) {
+        let length = needle.length;
+        if (similarShape.checked) {
+          const shape = shapeExampleFromQuery(markers);
+          const match = shape && shapeMatchesForSearch(model.text, shape, markers).matches
+            .find((item) => item.start === index);
+          if (!match) {
+            updateFindCount();
+            return false;
+          }
+          length = match.length;
+        } else if (searchIndexOf(model.text, needle, index) !== index) {
           updateFindCount();
           return false;
         }
-        const range = createRangeFromModel(model, index, needle.length);
+        const range = createRangeFromModel(model, index, length);
         if (!range) return false;
 
         if (showFindHighlight(range)) scrollFindRangeIntoView(range);
@@ -6101,8 +6195,10 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           selectEditorRange(range);
         }
         specialSearchState = {
-          query: parsedQuery.usesCodes ? `special:${query}` : `literal:${query}`,
-          nextIndex: index + Math.max(1, needle.length),
+          query: similarShape.checked
+            ? shapeStateKey(query)
+            : parsedQuery.usesCodes ? `special:${query}` : `literal:${query}`,
+          nextIndex: index + Math.max(1, length),
           index,
           range: range.cloneRange()
         };
@@ -6125,11 +6221,30 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         if (!needle) return false;
 
         const model = buildSpecialSearchModel(editor, markers);
-        const stateQuery = parsedQuery.usesCodes ? `special:${query}` : `literal:${query}`;
+        const stateQuery = similarShape.checked
+          ? shapeStateKey(query)
+          : parsedQuery.usesCodes ? `special:${query}` : `literal:${query}`;
         const sameQuery = specialSearchState.query === stateQuery;
         let index;
+        let length = needle.length;
 
-        if (direction < 0) {
+        if (similarShape.checked) {
+          const shape = shapeExampleFromQuery(markers);
+          const { matches } = shape ? shapeMatchesForSearch(model.text, shape, markers) : { matches: [] };
+          let match;
+          if (direction < 0) {
+            const anchor = sameQuery && specialSearchState.index >= 0
+              ? specialSearchState.index
+              : shapeMatchIndexForSelection(model, matches);
+            const before = anchor >= 0 ? matches.filter((item) => item.start < anchor) : matches;
+            match = before[before.length - 1] || matches[matches.length - 1];
+          } else {
+            const startIndex = sameQuery ? specialSearchState.nextIndex : 0;
+            match = matches.find((item) => item.start >= startIndex) || matches[0];
+          }
+          index = match ? match.start : -1;
+          if (match) length = match.length;
+        } else if (direction < 0) {
           // 현재 일치 구간의 바로 앞에서부터 뒤로 찾습니다. 검색 상태가 없으면
           // 화면에서 선택된 구간을 기준으로 삼아, 직접 드래그한 뒤에도 이어집니다.
           const anchor = sameQuery && specialSearchState.index >= 0
@@ -6152,7 +6267,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           return false;
         }
 
-        const range = createRangeFromModel(model, index, needle.length);
+        const range = createRangeFromModel(model, index, length);
         if (!range) {
           showToast('찾을 수 없습니다');
           clearFindHighlight();
@@ -6174,7 +6289,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
 
         specialSearchState = {
           query: stateQuery,
-          nextIndex: index + Math.max(1, needle.length),
+          nextIndex: index + Math.max(1, length),
           index,
           range: range.cloneRange()
         };
@@ -6536,6 +6651,491 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
 
       const MATCH_LIMIT = 10000;
 
+      // ===== 비슷한 모양 찾기 =====
+      // "비슷한 모양"을 켜면 찾을 내용을 그대로 찾지 않고 예시로 읽습니다.
+      //  - 숫자는 아무 숫자로 봅니다. 2024년 3월 15일 → 숫자만 다른 날짜 전부
+      //  - x^2 · H_2O · \alpha처럼 ^ _ \명령어가 있으면 같은 기호를 쓴 곳 전부
+      // 바꿀 내용에는 예시를 원하는 모양으로 고쳐 적습니다. 예시와 맞대어 숫자나
+      // 지수가 어디로 옮겨졌는지 알아내 나머지 일치에도 똑같이 적용합니다.
+      //
+      // 이 편집기는 위·아래첨자 서식을 쓰지 않습니다(붙여넣기와 카페 복사에서 빠짐).
+      // 그래서 기호 창의 첨자 숫자처럼 유니코드 첨자 문자(x², H₂O)로 바꿉니다.
+      const SUPERSCRIPT_CHARACTERS = {
+        0: '⁰', 1: '¹', 2: '²', 3: '³', 4: '⁴', 5: '⁵', 6: '⁶', 7: '⁷', 8: '⁸', 9: '⁹',
+        '+': '⁺', '-': '⁻', '−': '⁻', '=': '⁼', '(': '⁽', ')': '⁾',
+        a: 'ᵃ', b: 'ᵇ', c: 'ᶜ', d: 'ᵈ', e: 'ᵉ', f: 'ᶠ', g: 'ᵍ', h: 'ʰ', i: 'ⁱ', j: 'ʲ', k: 'ᵏ', l: 'ˡ', m: 'ᵐ',
+        n: 'ⁿ', o: 'ᵒ', p: 'ᵖ', r: 'ʳ', s: 'ˢ', t: 'ᵗ', u: 'ᵘ', v: 'ᵛ', w: 'ʷ', x: 'ˣ', y: 'ʸ', z: 'ᶻ',
+        A: 'ᴬ', B: 'ᴮ', D: 'ᴰ', E: 'ᴱ', G: 'ᴳ', H: 'ᴴ', I: 'ᴵ', J: 'ᴶ', K: 'ᴷ', L: 'ᴸ', M: 'ᴹ', N: 'ᴺ',
+        O: 'ᴼ', P: 'ᴾ', R: 'ᴿ', T: 'ᵀ', U: 'ᵁ', V: 'ⱽ', W: 'ᵂ',
+        α: 'ᵅ', β: 'ᵝ', γ: 'ᵞ', δ: 'ᵟ', ε: 'ᵋ', θ: 'ᶿ', φ: 'ᵠ', χ: 'ᵡ'
+      };
+      const SUBSCRIPT_CHARACTERS = {
+        0: '₀', 1: '₁', 2: '₂', 3: '₃', 4: '₄', 5: '₅', 6: '₆', 7: '₇', 8: '₈', 9: '₉',
+        '+': '₊', '-': '₋', '−': '₋', '=': '₌', '(': '₍', ')': '₎',
+        a: 'ₐ', e: 'ₑ', h: 'ₕ', i: 'ᵢ', j: 'ⱼ', k: 'ₖ', l: 'ₗ', m: 'ₘ', n: 'ₙ', o: 'ₒ', p: 'ₚ',
+        r: 'ᵣ', s: 'ₛ', t: 'ₜ', u: 'ᵤ', v: 'ᵥ', x: 'ₓ',
+        β: 'ᵦ', γ: 'ᵧ', ρ: 'ᵨ', φ: 'ᵩ', χ: 'ᵪ'
+      };
+      const LATEX_SYMBOLS = {
+        alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', varepsilon: 'ε', zeta: 'ζ', eta: 'η',
+        theta: 'θ', iota: 'ι', kappa: 'κ', lambda: 'λ', mu: 'μ', nu: 'ν', xi: 'ξ', pi: 'π', rho: 'ρ',
+        sigma: 'σ', tau: 'τ', upsilon: 'υ', phi: 'φ', varphi: 'φ', chi: 'χ', psi: 'ψ', omega: 'ω',
+        Gamma: 'Γ', Delta: 'Δ', Theta: 'Θ', Lambda: 'Λ', Xi: 'Ξ', Pi: 'Π', Sigma: 'Σ', Phi: 'Φ', Psi: 'Ψ', Omega: 'Ω',
+        times: '×', cdot: '·', div: '÷', pm: '±', mp: '∓', leq: '≤', le: '≤', geq: '≥', ge: '≥',
+        neq: '≠', ne: '≠', approx: '≈', equiv: '≡', sim: '∼', propto: '∝', infty: '∞', partial: '∂',
+        nabla: '∇', sum: '∑', prod: '∏', int: '∫', sqrt: '√', to: '→', rightarrow: '→', leftarrow: '←',
+        Rightarrow: '⇒', Leftarrow: '⇐', Leftrightarrow: '⇔', leftrightarrow: '↔', in: '∈', notin: '∉',
+        subset: '⊂', subseteq: '⊆', supset: '⊃', cup: '∪', cap: '∩', forall: '∀', exists: '∃',
+        emptyset: '∅', angle: '∠', perp: '⊥', parallel: '∥', circ: '∘', ldots: '…', cdots: '⋯', hbar: 'ℏ'
+      };
+
+      // 지수·첨자 자리: {묶음}, (묶음), 부호 붙은 숫자, 글자 한 개
+      const SCRIPT_SYMBOL_PATTERN = /([\^_])(\{[^{}]{1,20}\}|\([^()]{1,20}\)|[-+−]?\d+(?:\.\d+)?|[A-Za-zΑ-Ωα-ω])/gu;
+
+      const toScriptCharacters = (body, table) => {
+        let result = '';
+        for (const character of body) {
+          if (!table[character]) return null;
+          result += table[character];
+        }
+        return result;
+      };
+
+      // 주소·파일 이름 안의 _를 첨자로 바꾸지 않도록 일치가 들어 있는 낱말을 봅니다.
+      const shapeWordAround = (text, start, end) => {
+        const isBreak = (character) => /[\s-]/u.test(character);
+        let from = start;
+        let to = end;
+        while (from > 0 && !isBreak(text[from - 1])) from -= 1;
+        while (to < text.length && !isBreak(text[to])) to += 1;
+        return text.slice(from, to).replace(/[,.;:!?)\]}"'”’]+$/u, '');
+      };
+
+      // 첨자 자리에 여러 글자가 들어 있으면(n+1, 2x) 글자로 옮길 때 괄호로 묶어야
+      // 뜻이 유지됩니다. 숫자 하나(−3, 2.5)나 글자 하나는 묶지 않아도 됩니다.
+      const isSimpleScriptBody = (body) => /^(?:[-+−]?\d+(?:\.\d+)?|\p{L})$/u.test(body);
+
+      // ^ _ 기호를 모읍니다. all이 거짓이면 유니코드 첨자로 옮길 수 있는 것만 모읍니다.
+      // ^^ · ^_^ · ㅠ_ㅠ · o_o 같은 이모티콘은 앞뒤 글자 조건에서, my_file · data_2024 ·
+      // user_id_2 · my_1 · a_b.txt · https://… 같은 이름은 낱말 조건에서 걸러집니다.
+      const findScriptSymbols = (text, { all = false } = {}) => {
+        const symbols = [];
+        for (const match of text.matchAll(SCRIPT_SYMBOL_PATTERN)) {
+          const start = match.index;
+          const end = start + match[0].length;
+          const kind = match[1] === '^' ? 'sup' : 'sub';
+          const before = text[start - 1] || '';
+          if (!/[\p{L}\p{N})\]}]/u.test(before)) continue;
+          let body = match[2];
+          const grouped = /^[{(]/.test(body);
+          if (grouped) body = body.slice(1, -1);
+          const word = shapeWordAround(text, start, end);
+          if (/:\/\/|www\.|@/i.test(word) || /\.[A-Za-z]{2,4}$/.test(word)) continue;
+          if (kind === 'sub') {
+            const letterBody = !grouped && /^\p{L}$/u.test(body);
+            if (letterBody && /[\p{L}\p{N}_]/u.test(text[start - 2] || '')) continue;
+            // 소문자 두 글자 이상 뒤의 _는 변수 이름입니다(my_1, user_id_2). CO_2·Na_2는 첨자입니다.
+            if (/\p{Ll}{2,}$/u.test(text.slice(Math.max(0, start - 8), start))) continue;
+            // x_ab처럼 _ 뒤에 영문이 이어지면 이름입니다. 한글 조사(a_n을)는 괜찮습니다.
+            if (letterBody && /[A-Za-z]/.test(text[end] || '')) continue;
+            // o_o · x_x처럼 같은 글자 사이에 _만 있으면 이모티콘입니다.
+            if (letterBody && before.toLowerCase() === body.toLowerCase()
+              && !/[\p{L}\p{N}]/u.test(text[end] || '')) continue;
+          }
+          const out = toScriptCharacters(body, kind === 'sup' ? SUPERSCRIPT_CHARACTERS : SUBSCRIPT_CHARACTERS);
+          if (out === null && !all) continue;
+          symbols.push({ start, length: match[0].length, kind, body, grouped, out });
+        }
+        return symbols;
+      };
+
+      // 명령어 뒤의 {묶음}을 읽습니다. 안쪽 묶음도 짝을 맞춥니다.
+      const readLatexGroup = (text, at) => {
+        if (text[at] !== '{') return null;
+        let depth = 0;
+        for (let index = at; index < text.length; index += 1) {
+          if (text[index] === '{') depth += 1;
+          else if (text[index] === '}') {
+            depth -= 1;
+            if (!depth) return { inner: text.slice(at + 1, index), end: index + 1 };
+          }
+        }
+        return null;
+      };
+
+      // 묶음 안의 기호도 함께 바꿉니다(\frac{\pi}{2} → π/2).
+      const latexInnerText = (inner) => inner.replace(/\\([A-Za-z]+)/g, (whole, name) => LATEX_SYMBOLS[name] ?? whole);
+      const latexOperand = (inner) => {
+        const value = latexInnerText(inner);
+        return /^[\p{L}\p{N}.]+$/u.test(value) ? value : `(${value})`;
+      };
+      const LATEX_TEXT_COMMANDS = new Set(['text', 'mathrm', 'mathbf', 'mathit', 'operatorname', 'textbf', 'textit']);
+
+      // 윈도 경로(C:\Users\pi, data\in\file)의 \는 LaTeX 명령어가 아닙니다.
+      const isLatexInPath = (text, start, end) => {
+        const word = shapeWordAround(text, start, end);
+        if (/^[A-Za-z]:[\\/]/.test(word) || word.startsWith('\\\\') || /\\[^\\]*\.[A-Za-z0-9]{1,5}$/.test(word)) return true;
+        // \Users\처럼 대문자로 시작하는 모르는 이름이 \로 이어지면 폴더 이름입니다.
+        for (const segment of word.matchAll(/\\([A-Za-z]+)(?=\\|$)/g)) {
+          if (/^[A-Z][a-z]/.test(segment[1]) && !Object.hasOwn(LATEX_SYMBOLS, segment[1])) return true;
+        }
+        // src\in\main처럼 글자 사이에 끼어 있고 뒤가 모르는 이름이면 경로입니다.
+        // x\in\mathbb{R}처럼 뒤에 {가 오는 명령어는 LaTeX로 봅니다.
+        const following = text.slice(end).match(/^\\([A-Za-z]+)(\{?)/);
+        return /[\p{L}\p{N}]/u.test(text[start - 1] || '')
+          && Boolean(following)
+          && !Object.hasOwn(LATEX_SYMBOLS, following[1])
+          && !following[2];
+      };
+
+      const findLatexSymbols = (text) => {
+        const symbols = [];
+        let consumed = 0;
+        for (const match of text.matchAll(/\\([A-Za-z]+)/g)) {
+          const name = match[1];
+          const start = match.index;
+          // \frac{\pi}{2}의 \pi처럼 앞 명령어의 묶음 안에 있으면 이미 함께 바꿨습니다.
+          if (start < consumed) continue;
+          let end = start + match[0].length;
+          let out = null;
+          if (name === 'sqrt') {
+            const group = readLatexGroup(text, end);
+            out = group ? `√${latexOperand(group.inner)}` : '√';
+            if (group) end = group.end;
+          } else if (name === 'frac') {
+            const top = readLatexGroup(text, end);
+            const bottom = top && readLatexGroup(text, top.end);
+            if (!bottom) continue;
+            out = `${latexOperand(top.inner)}/${latexOperand(bottom.inner)}`;
+            end = bottom.end;
+          } else if (LATEX_TEXT_COMMANDS.has(name)) {
+            const group = readLatexGroup(text, end);
+            if (!group) continue;
+            out = latexInnerText(group.inner);
+            end = group.end;
+          } else if (Object.hasOwn(LATEX_SYMBOLS, name)) {
+            out = LATEX_SYMBOLS[name];
+          } else continue;
+          if (isLatexInPath(text, start, start + match[0].length)) continue;
+          consumed = end;
+          symbols.push({ start, length: end - start, kind: 'latex', body: text.slice(start + 1, end), out });
+        }
+        return symbols;
+      };
+
+      const findSymbolsOfKind = (text, kind, options = {}) => (kind === 'latex'
+        ? findLatexSymbols(text)
+        : findScriptSymbols(text, options).filter((symbol) => symbol.kind === kind));
+
+      // 예시에 기호가 있으면 그 종류로, 없으면 숫자 모양으로 찾습니다.
+      // x^q처럼 유니코드 첨자가 없는 예시도 기호 모양으로 봅니다(x**q처럼 고칠 수 있음).
+      const shapeFromExample = (example) => {
+        if (findLatexSymbols(example).length) return { type: 'symbol', kind: 'latex', example };
+        const script = findScriptSymbols(example, { all: true })[0];
+        if (script) return { type: 'symbol', kind: script.kind, example };
+
+        const numbers = [];
+        let pattern = '';
+        for (const part of example.split(/(\d+|\s+)/u)) {
+          if (!part) continue;
+          if (/^\d+$/.test(part)) {
+            numbers.push(part);
+            pattern += '(\\d+)';
+          } else if (/^\s+$/u.test(part)) {
+            pattern += '[^\\S\\n]+';
+          } else {
+            pattern += part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          }
+        }
+        return { type: 'digits', example, numbers, pattern };
+      };
+
+      // 기본 바꿀 내용: 기호는 바꾼 결과(x²), 숫자 모양은 예시 그대로입니다.
+      // 유니코드 첨자가 없는 기호(x^q)는 예시 그대로 둡니다.
+      const defaultShapeReplacement = (shape) => {
+        if (shape.type !== 'symbol') return shape.example;
+        let result = '';
+        let cursor = 0;
+        findSymbolsOfKind(shape.example, shape.kind, { all: true }).forEach((symbol) => {
+          result += shape.example.slice(cursor, symbol.start)
+            + (symbol.out ?? shape.example.slice(symbol.start, symbol.start + symbol.length));
+          cursor = symbol.start + symbol.length;
+        });
+        return result + shape.example.slice(cursor);
+      };
+
+      // 바꿀 내용에서 예시의 숫자가 어디로 갔는지 읽습니다. 순서를 바꾸거나
+      // 붙여 써도(010-1234-5678 → 01012345678) 알아보고, 다음 모양도 읽습니다.
+      //  - 3을 03처럼 0을 채우면 두 자리 이하 숫자를 모두 두 자리로(2025-11-02)
+      //  - 03을 3처럼 0을 빼면 두 자리 이하 숫자의 앞 0을 모두 빼서(2025.11.2)
+      //  - 2024를 24처럼 끝 두 자리만 쓰면 일치마다 그 숫자의 끝 두 자리로(25.11.2)
+      // 바꿀 내용에 예시 숫자와 같은 숫자를 그대로 남기면 그 자리는 고정 글자가 됩니다.
+      const DIGIT_FORM_PRIORITY = { same: 0, padded: 0, unpadded: 1, tail: 2 };
+      const withoutLeadingZeros = (value) => value.replace(/^0+(?=\d)/, '');
+
+      const learnDigitPlan = (target, numbers) => {
+        const used = new Set();
+        const plan = [];
+        let next = 0;
+        for (let at = 0; at < target.length;) {
+          const options = [];
+          numbers.forEach((number, ref) => {
+            if (used.has(ref)) return;
+            const zeroPadded = number.length > 1 && number[0] === '0';
+            if (target.startsWith(number, at)) {
+              options.push({ ref, length: number.length, form: zeroPadded ? 'padded' : 'same' });
+            }
+            const bare = withoutLeadingZeros(number);
+            if (bare !== number && target.startsWith(bare, at)) {
+              options.push({ ref, length: bare.length, form: 'unpadded' });
+            }
+            if (number.length === 1 && target.startsWith(`0${number}`, at)) {
+              options.push({ ref, length: 2, form: 'padded' });
+            }
+            if (number.length >= 3 && target.startsWith(number.slice(-2), at)) {
+              options.push({ ref, length: 2, form: 'tail' });
+            }
+          });
+          // 긴 숫자를 먼저 읽습니다. 12번 1번에서 12를 1로 읽으면 2가 고정 글자로 남습니다.
+          // 같은 숫자가 둘이면(1월 1일) 예시의 순서를 따릅니다.
+          options.sort((left, right) => right.length - left.length
+            || DIGIT_FORM_PRIORITY[left.form] - DIGIT_FORM_PRIORITY[right.form]
+            || (right.ref === next) - (left.ref === next)
+            || left.ref - right.ref);
+          const [option] = options;
+          if (option) {
+            used.add(option.ref);
+            next = option.ref + 1;
+            plan.push({ ref: option.ref, form: option.form });
+            at += option.length;
+          } else {
+            plan.push({ text: target[at] });
+            at += 1;
+          }
+        }
+        // 한 자리에서 0을 채우거나 뺐으면 같은 길이의 다른 숫자도 똑같이 맞춥니다.
+        // 둘이 섞여 있으면 무엇을 원하는지 알 수 없으므로 자리마다 따로 둡니다.
+        const forms = new Set(plan.map((step) => step.form));
+        const shared = forms.has('padded') !== forms.has('unpadded')
+          ? (forms.has('padded') ? 'padded' : 'unpadded')
+          : null;
+        if (shared) {
+          plan.forEach((step) => {
+            if (step.ref !== undefined && step.form !== 'tail' && numbers[step.ref].length <= 2) step.form = shared;
+          });
+        }
+        return plan;
+      };
+
+      const digitStepText = (step, value) => {
+        if (step.form === 'padded') return value.padStart(2, '0');
+        if (step.form === 'unpadded') return withoutLeadingZeros(value);
+        if (step.form === 'tail') return value.slice(-2).padStart(2, '0');
+        return value;
+      };
+
+      // 예시와 고친 모양을 맞대어 기호 하나를 어떻게 바꿀지 배웁니다.
+      // x^2 → x**2 이면 { before: '**', ref: 'body', after: '' }입니다.
+      // 예시의 기호 앞뒤 글자까지 고치면 무엇을 바꾸려는지 알 수 없으므로 null입니다.
+      const learnSymbolTemplate = (shape, target) => {
+        const symbols = findSymbolsOfKind(shape.example, shape.kind, { all: true });
+        const first = symbols[0];
+        const prefix = shape.example.slice(0, first.start);
+        const nextSymbol = symbols[1];
+        const between = nextSymbol ? shape.example.slice(first.start + first.length, nextSymbol.start) : '';
+        let suffix = shape.example.slice(first.start + first.length);
+        // 기호가 둘 이상이면 첫 기호와 다음 기호 사이 글자를 경계로 씁니다.
+        if (nextSymbol && !between) return null;
+        if (!target.startsWith(prefix)) return null;
+        let end;
+        if (nextSymbol) {
+          end = target.indexOf(between, prefix.length);
+        } else {
+          if (!target.endsWith(suffix) || target.length < prefix.length + suffix.length) return null;
+          end = target.length - suffix.length;
+        }
+        if (end < prefix.length) return null;
+        const middle = target.slice(prefix.length, end);
+        for (const ref of ['out', 'body']) {
+          const index = first[ref] ? middle.indexOf(first[ref]) : -1;
+          if (index >= 0) {
+            const before = middle.slice(0, index);
+            const after = middle.slice(index + first[ref].length);
+            // a^(n+1) → a**(n+1)처럼 예시의 묶음을 따라 쓴 괄호인지, x^2 → x^{2}처럼
+            // 일부러 고른 괄호인지 구분합니다. 앞의 것은 숫자 하나에는 붙이지 않습니다.
+            const closer = { '(': ')', '{': '}', '[': ']' }[before.slice(-1)];
+            const wrapped = ref === 'body' && Boolean(closer) && after.startsWith(closer);
+            return {
+              before,
+              ref,
+              after,
+              wrapped,
+              mirrorsGroup: wrapped && Boolean(first.grouped) && !isSimpleScriptBody(first.body)
+            };
+          }
+        }
+        return { before: middle, ref: null, after: '' };
+      };
+
+      // 배운 모양으로 기호 하나를 바꿉니다.
+      const applySymbolTemplate = (template, symbol, original) => {
+        if (!template.ref) return template.before + template.after;
+        if (template.ref === 'out') return symbol.out === null ? original : template.before + symbol.out + template.after;
+        const simple = isSimpleScriptBody(symbol.body);
+        if (template.wrapped) {
+          return template.mirrorsGroup && simple
+            ? template.before.slice(0, -1) + symbol.body + template.after.slice(1)
+            : template.before + symbol.body + template.after;
+        }
+        // x^2 → x**2를 a^(n+1)에 그대로 쓰면 a**n+1이 되어 뜻이 바뀌므로 괄호로 묶습니다.
+        const body = symbol.kind !== 'latex' && !simple ? `(${symbol.body})` : symbol.body;
+        return template.before + body + template.after;
+      };
+
+      // 문서 모델에서 모양에 맞는 구간을 모읍니다. replacement를 주면 구간마다
+      // 바꿀 글자(insertion)도 계산합니다. 바꿀 내용을 읽을 수 없으면 invalid입니다.
+      const collectShapeMatches = (text, shape, replacement = null) => {
+        const matches = [];
+        let truncated = false;
+        let invalid = false;
+
+        if (shape.type === 'symbol') {
+          const template = replacement === null ? null : learnSymbolTemplate(shape, replacement);
+          if (replacement !== null && !template) invalid = true;
+          // 기호만(_2) 칠하면 무엇이 바뀌는지 알아보기 어려워 기호가 붙은 낱말(H_2SO_4)
+          // 하나를 일치 하나로 묶습니다. 한글 조사(H_2O이고의 '이고')는 낱말에 넣지 않습니다.
+          const isWordCharacter = (character) => /[\p{Script=Latin}\p{Script=Greek}\p{N}]/u.test(character || '');
+          // 유니코드 첨자로 옮기지 않는 모양(x**2)이면 첨자 문자가 없는 x^q도 바꿀 수 있습니다.
+          const symbols = findSymbolsOfKind(text, shape.kind, { all: Boolean(template && template.ref !== 'out') });
+          for (let index = 0; index < symbols.length;) {
+            if (matches.length >= MATCH_LIMIT) {
+              truncated = true;
+              break;
+            }
+            const group = [symbols[index]];
+            index += 1;
+            while (index < symbols.length) {
+              const last = group[group.length - 1];
+              const gap = text.slice(last.start + last.length, symbols[index].start);
+              if (![...gap].every(isWordCharacter)) break;
+              group.push(symbols[index]);
+              index += 1;
+            }
+            let start = group[0].start;
+            let end = group[group.length - 1].start + group[group.length - 1].length;
+            while (start > 0 && isWordCharacter(text[start - 1])) start -= 1;
+            while (end < text.length && isWordCharacter(text[end])) end += 1;
+
+            let insertion = null;
+            if (template) {
+              insertion = '';
+              let cursor = start;
+              group.forEach((symbol) => {
+                insertion += text.slice(cursor, symbol.start)
+                  + applySymbolTemplate(template, symbol, text.slice(symbol.start, symbol.start + symbol.length));
+                cursor = symbol.start + symbol.length;
+              });
+              insertion += text.slice(cursor, end);
+            }
+            matches.push({ start, length: end - start, insertion });
+          }
+          return { matches, truncated, invalid };
+        }
+
+        const plan = replacement === null ? null : learnDigitPlan(replacement, shape.numbers);
+        const expression = new RegExp(shape.pattern, searchIsCaseSensitive() ? 'gu' : 'giu');
+        for (const match of text.matchAll(expression)) {
+          if (!match[0]) continue;
+          if (matches.length >= MATCH_LIMIT) {
+            truncated = true;
+            break;
+          }
+          matches.push({
+            start: match.index,
+            length: match[0].length,
+            insertion: plan
+              ? plan.map((step) => (step.ref === undefined
+                ? step.text
+                : digitStepText(step, match[step.ref + 1]))).join('')
+              : null
+          });
+        }
+        return { matches, truncated, invalid };
+      };
+
+      // 비슷한 모양을 켜거나 찾을 내용을 바꾸면 바꿀 내용을 기본값으로 채웁니다.
+      // 사용자가 고쳐 쓴 바꿀 내용은 덮어쓰지 않습니다. 다만 날짜에서 첨자처럼
+      // 모양의 종류가 바뀌면 예전 바꿀 내용은 맞지 않으므로 새로 채웁니다.
+      let autoShapeReplacement = null;
+      let autoShapeKind = null;
+      // 찾을 내용과 바꿀 내용도 일반 찾아 바꾸기처럼 ^p·^l·^t·^^를 읽습니다.
+      // 문단 끝까지 드래그하면 예시 끝에 ^p가 붙는데, 예시 앞뒤의 문단·줄 구분은
+      // 모양에 넣지 않습니다. 넣으면 문단 끝에 있는 것만 찾고, 바꿀 내용에도
+      // 구분 표식이 그대로 들어가 맞대어 보지 못합니다.
+      const trimShapeEdges = (text, markers) => {
+        const edge = new Set([markers.paragraph, markers.line]);
+        let start = 0;
+        let end = text.length;
+        while (start < end && edge.has(text[start])) start += 1;
+        while (end > start && edge.has(text[end - 1])) end -= 1;
+        return text.slice(start, end);
+      };
+      const shapeExampleText = (markers) => trimShapeEdges(parseSpecialCodes(findText.value, markers).text, markers);
+      const shapeReplacementText = (markers) => trimShapeEdges(parseSpecialCodes(replaceText.value, markers).text, markers);
+      const shapeExampleFromQuery = (markers) => {
+        const example = shapeExampleText(markers);
+        return example ? shapeFromExample(example) : null;
+      };
+
+      // 모델 글자로 된 바꿀 글자를 넣을 토큰으로 바꿉니다(문단·줄 구분 포함).
+      const shapeInsertionTokens = (insertion, markers) => {
+        const tokens = [];
+        let buffer = '';
+        for (const character of insertion) {
+          if (character !== markers.paragraph && character !== markers.line) {
+            buffer += character;
+            continue;
+          }
+          if (buffer) tokens.push({ type: 'text', value: buffer });
+          buffer = '';
+          tokens.push({ type: character === markers.paragraph ? 'paragraph' : 'line' });
+        }
+        if (buffer) tokens.push({ type: 'text', value: buffer });
+        return tokens;
+      };
+
+      // 바꿀 내용 칸에 넣을 글자로 되돌립니다. ^는 특수기호로 읽히지 않도록 ^^로 씁니다.
+      const shapeTextForInput = (text, markers) => text
+        .replace(/\^(?=[\^plt])/gi, '^^')
+        .split(markers.paragraph).join('^p')
+        .split(markers.line).join('^l');
+
+      const fillShapeReplacement = ({ force = false } = {}) => {
+        if (!similarShape.checked || !findbarReplaceMode) return;
+        const markers = pickSpecialSearchMarkers(editor, [findText.value]);
+        const shape = shapeExampleFromQuery(markers);
+        const kind = shape ? `${shape.type}:${shape.kind || ''}` : null;
+        const edited = replaceText.value && replaceText.value !== autoShapeReplacement;
+        if (!force && edited && kind === autoShapeKind) return;
+        autoShapeKind = kind;
+        autoShapeReplacement = shape ? shapeTextForInput(defaultShapeReplacement(shape), markers) : '';
+        replaceText.value = autoShapeReplacement;
+        updateReplacementFormatSummary();
+      };
+
+      const shapeStateKey = (query) => `shape:${query}`;
+
+      // 개수·이동·검색 결과가 실제로 바꿀 대상과 같도록, 바꾸기 창에서는 바꿀 내용까지
+      // 넣어 모읍니다(x**2 모양이면 x^q도 대상). 바꿀 내용을 읽을 수 없으면 찾은 모양만 씁니다.
+      const shapeMatchesForSearch = (text, shape, markers) => {
+        if (findbarReplaceMode) {
+          const planned = collectShapeMatches(text, shape, shapeReplacementText(markers));
+          if (!planned.invalid) return planned;
+          return { ...collectShapeMatches(text, shape), invalid: true };
+        }
+        return collectShapeMatches(text, shape);
+      };
+
       // 모델 텍스트에서 일치 구간을 모읍니다. 조사 교정 계산도 여기서 함께 합니다.
       // 단일 바꾸기와 모두 바꾸기가 같은 규칙을 쓰도록 한곳에 모았습니다.
       const collectMatches = (model, query, { replacement = null, withParticles = false } = {}) => {
@@ -6690,10 +7290,162 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         }
       };
 
+      // 비슷한 모양 일치는 길이가 제각각이라 선택 영역과 시작·끝을 함께 비교합니다.
+      const shapeMatchIndexForSelection = (model, matches) => {
+        const selection = window.getSelection();
+        if (!selection || !selection.rangeCount || !selectionIsInsideEditor()) return -1;
+        const target = selection.getRangeAt(0);
+        const match = matches.find((item) => {
+          const range = createRangeFromModel(model, item.start, item.length);
+          try {
+            return range
+              && range.compareBoundaryPoints(Range.START_TO_START, target) === 0
+              && range.compareBoundaryPoints(Range.END_TO_END, target) === 0;
+          } catch (error) {
+            return false;
+          }
+        });
+        return match ? match.start : -1;
+      };
+
+      // 일치마다 바꿀 글자가 다르므로 조사 교정도 일치마다 따로 계산합니다.
+      // 조사는 낱말과 따로 바꿉니다. 함께 바꾸면 조사가 낱말의 서식을 따라갑니다.
+      const withShapeParticle = (text, match, enabled) => {
+        const plain = { ...match, particle: null, particleAdjusted: false };
+        if (!enabled) return plain;
+        const adjustment = getParticleAdjustment(text.slice(match.start + match.length), match.insertion);
+        if (!adjustment || adjustment.current === adjustment.desired) return plain;
+        return {
+          ...match,
+          particle: {
+            start: match.start + match.length,
+            length: adjustment.prefix.length + adjustment.current.length,
+            insertion: adjustment.prefix + adjustment.desired
+          },
+          particleAdjusted: true
+        };
+      };
+
+      // 뒤쪽(조사)부터 바꿔야 앞쪽 구간의 위치가 그대로 남습니다.
+      const replaceShapeMatch = (model, root, planned, markers, settings) => {
+        if (planned.particle) {
+          const particleRange = createRangeFromModel(model, planned.particle.start, planned.particle.length);
+          if (particleRange) {
+            replaceRangeWithTokens(particleRange, [{ type: 'text', value: planned.particle.insertion }], root, settings);
+          }
+        }
+        const range = createRangeFromModel(model, planned.start, planned.length);
+        if (!range) return false;
+        replaceRangeWithTokens(range, shapeInsertionTokens(planned.insertion, markers), root, settings);
+        return true;
+      };
+
+      const SHAPE_INVALID_MESSAGE = '바꿀 내용에서 예시의 앞뒤 글자는 그대로 두고 바뀌는 부분만 고쳐 주세요.';
+
+      const replaceCurrentShape = () => {
+        const query = findText.value;
+        const settings = getReplacementFormatSettings();
+        const formattingOnly = !replaceText.value && hasReplacementFormatSettings(settings);
+        const markers = pickSpecialSearchMarkers(editor, [query, replaceText.value]);
+        const shape = shapeExampleFromQuery(markers);
+        if (!shape) {
+          findNext();
+          return;
+        }
+        const liveModel = buildSpecialSearchModel(editor, markers);
+        const { matches, invalid } = collectShapeMatches(liveModel.text, shape, shapeReplacementText(markers));
+        if (invalid && !formattingOnly) {
+          showToast(SHAPE_INVALID_MESSAGE);
+          return;
+        }
+        const stateKey = shapeStateKey(query);
+        const index = specialSearchState.query === stateKey && specialSearchState.index >= 0
+          ? specialSearchState.index
+          : shapeMatchIndexForSelection(liveModel, matches);
+        const match = matches.find((item) => item.start === index);
+        if (!match) {
+          findNext();
+          return;
+        }
+        const planned = formattingOnly
+          ? { ...match, insertion: liveModel.text.slice(index, index + match.length), particle: null, particleAdjusted: false }
+          : withShapeParticle(liveModel.text, match, adjustParticles.checked);
+
+        const changed = runBulkEdit((root) => {
+          const model = buildSpecialSearchModel(root, markers);
+          if (formattingOnly) {
+            const range = createRangeFromModel(model, index, planned.length);
+            if (!range) return 0;
+            applyFormatSettingsToRange(range, root, settings);
+            return 1;
+          }
+          return replaceShapeMatch(model, root, planned, markers, settings) ? 1 : 0;
+        });
+
+        specialSearchState = {
+          query: stateKey,
+          nextIndex: index + planned.insertion.length + (planned.particle?.insertion.length || 0),
+          index: -1,
+          range: null
+        };
+        findNext();
+        if (changed && planned.particleAdjusted) showToast('단어와 조사를 받침에 맞게 바꿨습니다.');
+      };
+
+      const replaceAllShape = () => {
+        const query = findText.value;
+        const settings = getReplacementFormatSettings();
+        const formattingOnly = !replaceText.value && hasReplacementFormatSettings(settings);
+        const markers = pickSpecialSearchMarkers(editor, [query, replaceText.value]);
+        const shape = shapeExampleFromQuery(markers);
+        if (!shape) {
+          showToast('바꿀 항목이 없습니다.');
+          return;
+        }
+        const replacement = shapeReplacementText(markers);
+        const liveModel = buildSpecialSearchModel(editor, markers);
+        const anchor = replacementScopeAnchor(liveModel, shapeStateKey(query));
+        if (!formattingOnly && collectShapeMatches(liveModel.text, shape, replacement).invalid) {
+          showToast(SHAPE_INVALID_MESSAGE);
+          return;
+        }
+        let particleCount = 0;
+        let truncated = false;
+
+        const count = runBulkEdit((root) => {
+          const model = buildSpecialSearchModel(root, markers);
+          const collected = collectShapeMatches(model.text, shape, replacement);
+          truncated = collected.truncated;
+          const matches = matchesInReplacementScope(collected.matches, anchor).map((match) => {
+            if (formattingOnly) return match;
+            const planned = withShapeParticle(model.text, match, adjustParticles.checked);
+            if (planned.particleAdjusted) particleCount += 1;
+            return planned;
+          });
+          return applyMatchesDescending(model, matches, (range, match) => {
+            if (formattingOnly) applyFormatSettingsToRange(range, root, settings);
+            else replaceShapeMatch(model, root, match, markers, settings);
+          });
+        }, { preserveViewport: true });
+
+        specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
+        const particleMessage = particleCount ? ` · 조사 ${particleCount}개 자동 교정` : '';
+        showToast((formattingOnly
+          ? `${count}개 항목의 서식을 변경했습니다.`
+          : count
+            ? `비슷한 모양 ${count}개를 바꿨습니다${particleMessage}.`
+            : '바꿀 항목이 없습니다.') + truncationNotice(truncated));
+        updateFindCount();
+      };
+
       const replaceCurrent = () => {
         const query = findText.value;
         if (!query) {
           showToast('찾을 내용을 입력하세요.');
+          return;
+        }
+        if (similarShape.checked) {
+          replaceCurrentShape();
           return;
         }
         const markers = pickSpecialSearchMarkers(editor, [query, replaceText.value]);
@@ -6798,6 +7550,11 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           showToast(changed
             ? `${replacementScopeLabel()}의 서식을 지정한 대로 변경했습니다.`
             : '변경할 내용이 없습니다.');
+          return;
+        }
+
+        if (similarShape.checked) {
+          replaceAllShape();
           return;
         }
 
@@ -7412,12 +8169,30 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
         clearFindHighlight();
         updateReplacementFormatPreview();
+        fillShapeReplacement();
         scheduleFindCount();
       });
 
       matchCase.addEventListener('change', () => {
         specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
         clearFindHighlight();
+        updateFindCount();
+      });
+
+      similarShape.addEventListener('change', () => {
+        specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
+        clearFindHighlight();
+        if (similarShape.checked) {
+          // 드래그로 채운 찾을 내용은 ^를 ^^로 적어 둡니다. x^^2보다 x^2가 예시로
+          // 읽기 쉬우므로, 특수기호(^p·^l·^t)로 오인되지 않는 ^^만 ^로 되돌립니다.
+          findText.value = findText.value.replace(/\^\^(?![\^plt])/gi, '^');
+          fillShapeReplacement({ force: true });
+        } else if (replaceText.value === autoShapeReplacement) {
+          // 켜면서 자동으로 채운 바꿀 내용은 끄면 되돌립니다.
+          replaceText.value = '';
+          updateReplacementFormatSummary();
+        }
+        autoShapeReplacement = similarShape.checked ? autoShapeReplacement : null;
         updateFindCount();
       });
 
