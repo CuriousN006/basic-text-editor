@@ -3177,29 +3177,36 @@
         return doc.body.innerHTML;
       };
 
+      // 강조 표시입니다. _는 CommonMark처럼 단어 안(snake_case_name)에서는 강조로 보지 않습니다.
+      const emphasizeInlineMarkdown = (value) => value
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/(^|[^\p{L}\p{N}_])__([^_]+)__(?![\p{L}\p{N}_])/gu, '$1<strong>$2</strong>')
+        .replace(/~~([^~]+)~~/g, '<s>$1</s>')
+        .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>')
+        .replace(/(^|[^\p{L}\p{N}_])_([^_\n]+)_(?![\p{L}\p{N}_])/gu, '$1<em>$2</em>');
+
       const parseInlineMarkdown = (source) => {
-        const codeTokens = [];
-        let value = String(source).replace(/`([^`]+)`/g, (_, code) => {
-          const token = `\u0000CODE${codeTokens.length}\u0000`;
-          codeTokens.push(`<code>${escapeHtml(code)}</code>`);
+        // 코드·링크·이미지는 완성된 HTML을 자리표시로 빼 둡니다. 그대로 두면 강조
+        // 치환이 주소 속의 _나 *까지 바꿔 href가 깨집니다(…/my<em>file</em>name).
+        const protectedHtml = [];
+        const protect = (html) => {
+          const token = `\u0000P${protectedHtml.length}\u0000`;
+          protectedHtml.push(html);
           return token;
-        });
+        };
+        let value = String(source).replace(/`([^`]+)`/g, (_, code) => protect(`<code>${escapeHtml(code)}</code>`));
         value = escapeHtml(value);
         value = value
-          .replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, '<img src="$2" alt="$1">')
-          .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2">$1</a>')
-          .replace(/&lt;(https?:\/\/[^&]+)&gt;/g, '<a href="$1">$1</a>')
-          .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-          .replace(/__([^_]+)__/g, '<strong>$1</strong>')
-          .replace(/~~([^~]+)~~/g, '<s>$1</s>')
-          .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>')
-          .replace(/(^|[^_])_([^_\n]+)_(?!_)/g, '$1<em>$2</em>')
-          .replace(/  $/, '<br>');
+          .replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, (_, alt, url) => protect(`<img src="${url}" alt="${alt}">`))
+          .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, text, url) => protect(`<a href="${url}">${emphasizeInlineMarkdown(text)}</a>`))
+          .replace(/&lt;(https?:\/\/[^&]+)&gt;/g, (_, url) => protect(`<a href="${url}">${url}</a>`));
+        value = emphasizeInlineMarkdown(value).replace(/  $/, '<br>');
+        // 링크 글자 안에 코드 스팬이 있으면 자리표시가 겹치므로 나중 것부터 풉니다.
         // 치환값을 문자열로 넘기면 $&, $`, $' 가 특수 치환으로 해석됩니다.
         // 코드 스팬에 그런 문자가 들어 있으면 내용이 깨지므로 함수로 넘깁니다.
-        codeTokens.forEach((html, index) => {
-          value = value.replace(`\u0000CODE${index}\u0000`, () => html);
-        });
+        for (let index = protectedHtml.length - 1; index >= 0; index -= 1) {
+          value = value.replace(`\u0000P${index}\u0000`, () => protectedHtml[index]);
+        }
         return value;
       };
 
@@ -4907,25 +4914,65 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         return table.outerHTML;
       };
 
-      const clipboardTableTokens = (doc, { quotes = false } = {}) => {
+      // 표 앞뒤 글도 일반 붙여넣기처럼 평문의 줄 구조를 따릅니다. HTML만 보면
+      // 문단 사이의 빈 줄이 사라지기 때문입니다(alignClipboardLinesToPlainText 참고).
+      // 평문은 표까지 포함한 전체이므로, 공백을 뺀 글자 수로 각 덩어리에 해당하는
+      // 평문 구간을 차례로 잘라 냅니다. 어긋나면 그 뒤로는 HTML 구조를 그대로 씁니다.
+      const clipboardPlainCursor = (plain) => {
+        const text = normalizeClipboardText(plain);
+        const positions = [];
+        for (let index = 0; index < text.length; index += 1) {
+          if (!/\s/.test(text[index])) positions.push(index);
+        }
+        const compact = positions.map(index => text[index]).join('');
+        let at = 0;
+        let lost = !plain;
+        return {
+          // candidates 중 평문의 현재 위치와 맞는 첫 글자열만큼 평문을 잘라 냅니다.
+          take(candidates) {
+            if (lost) return null;
+            const match = candidates.find(value => value && compact.startsWith(value, at));
+            if (!match) {
+              lost = true;
+              return null;
+            }
+            const slice = text.slice(positions[at], positions[at + match.length - 1] + 1);
+            at += match.length;
+            return slice;
+          }
+        };
+      };
+
+      const clipboardTableTokens = (doc, { quotes = false, plain = '' } = {}) => {
         const tables = [...doc.body.querySelectorAll('table')]
           .filter(table => !table.parentElement.closest('table'));
         if (!tables.length) return null;
         literalizeClipboardOrderedLists(doc.body);
+        const withoutSpaces = value => value.replace(/\s/g, '');
+        const linesCompact = (lines, keep = () => true) => withoutSpaces(lines
+          .flatMap(line => line.flat())
+          .filter(keep)
+          .map(run => run.text)
+          .join(''));
+        const cursor = clipboardPlainCursor(plain);
         const tokens = [];
         const remaining = doc.createRange();
         remaining.selectNodeContents(doc.body);
         const appendText = (fragment) => {
           const container = doc.createElement('div');
           container.appendChild(fragment);
-          const lines = clipboardLinesFromHtml(container.innerHTML);
-          if (lines.some(line => line.some(runs => runs.some(run => run.text.trim())))) {
-            tokens.push(...clipboardTokensFromLines(lines, true, { quotes }));
-          }
+          const htmlLines = clipboardLinesFromHtml(container.innerHTML);
+          const compact = linesCompact(htmlLines);
+          if (!compact) return;
+          // 브라우저 평문에는 목록 번호가 빠질 수 있으므로 번호를 뺀 글자도 맞춰 봅니다.
+          const slice = cursor.take([compact, linesCompact(htmlLines, run => !run.orderedMarker)]);
+          const lines = (slice && alignClipboardLinesToPlainText(slice, htmlLines)) || htmlLines;
+          tokens.push(...clipboardTokensFromLines(lines, true, { quotes }));
         };
         tables.forEach((table) => {
           remaining.setEndBefore(table);
           appendText(remaining.cloneContents());
+          cursor.take([withoutSpaces(clipboardPlainTextFromHtml(table.outerHTML))]);
           tokens.push({ type: 'block', html: clipboardTableHtml(table) });
           remaining.setStartAfter(table);
           remaining.setEnd(doc.body, doc.body.childNodes.length);
@@ -5600,7 +5647,37 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         if (style.href) applyLinkToRange(next, root, style.href);
       };
 
-      const replaceRangeWithTokens = (range, tokens, root, settings = { apply: [], remove: [] }) => {
+      // 구간의 첫 글자가 지닌 글자 서식입니다. 구간 안에 글자가 없으면 null입니다.
+      const formatStateAtRangeStart = (range, root) => {
+        let node = range.startContainer;
+        if (node.nodeType !== Node.TEXT_NODE || range.startOffset >= node.length) {
+          node = null;
+          const walker = document.createTreeWalker(range.commonAncestorContainer, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            const candidate = walker.currentNode;
+            if (!candidate.length || !range.intersectsNode(candidate)) continue;
+            if (candidate === range.startContainer && range.startOffset >= candidate.length) continue;
+            node = candidate;
+            break;
+          }
+        }
+        if (!node) return null;
+        const chain = [];
+        for (let element = node.parentElement; element && element !== root && root.contains(element); element = element.parentElement) {
+          chain.push(element);
+        }
+        let state = { ...EMPTY_FORMAT_STATE };
+        chain.reverse().forEach((element) => { state = docxStateForElement(element, state); });
+        return state;
+      };
+
+      // settings를 주는 찾아 바꾸기에서는 Word처럼 바꾼 글자가 찾은 글자 첫 글자의
+      // 서식을 따릅니다. 서식 경계에 걸친 구간(<b>2024</b>년)을 지우면 그 서식
+      // 요소도 함께 사라져서, 예전에는 바꾼 글자에서 굵게가 빠졌습니다.
+      // 붙여넣기처럼 settings 없이 부르면 삽입 위치의 서식을 그대로 따릅니다.
+      const replaceRangeWithTokens = (range, tokens, root, findSettings = null) => {
+        const settings = findSettings || { apply: [], remove: [] };
+        const inherited = findSettings && !range.collapsed ? formatStateAtRangeStart(range, root) : null;
         const styled = tokens.some((token) => token.style);
         // 빠른 경로: 한 텍스트 노드 안에서 글자만 바꾸는 흔한 경우입니다.
         // 노드를 쪼개거나 새로 만들지 않으므로 한 문단에 일치가 수천 개 있어도
@@ -5660,8 +5737,19 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           if (token.style) styledNodes.push({ node, style: token.style });
         });
 
-        if (inserted.length && (settings.apply.length || settings.remove.length)) {
-          applyFormatSettingsToRange(rangeAround(inserted), root, settings);
+        // 지정한 서식이 정해 둔 것은 그 설정을 따르고, 나머지는 첫 글자 서식을 잇습니다.
+        const inheritedFormats = inherited
+          ? CLIPBOARD_FORMAT_KEYS
+            .filter(([key, format]) => inherited[key]
+              && !settings.apply.includes(format)
+              && !settings.remove.includes(format))
+            .map(([, format]) => format)
+          : [];
+        if (inserted.length && (settings.apply.length || settings.remove.length || inheritedFormats.length)) {
+          applyFormatSettingsToRange(rangeAround(inserted), root, {
+            apply: [...inheritedFormats, ...settings.apply],
+            remove: settings.remove
+          });
         }
 
         // 서식은 글자를 모두 넣은 뒤 뒤에서부터 적용합니다. 넣는 도중에 감싸면
@@ -6467,18 +6555,21 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
             break;
           }
           let end = start + query.length;
-          let insertion = replacement;
-          let particleAdjusted = false;
+          // 조사는 낱말과 따로 바꿉니다. 함께 바꾸면 조사가 낱말 첫 글자의 서식을 따라갑니다.
+          let particle = null;
           if (withParticles && replacement !== null) {
             const adjustment = getParticleAdjustment(model.text.slice(end), replacement);
             if (adjustment && adjustment.current !== adjustment.desired) {
-              end += adjustment.prefix.length + adjustment.current.length;
-              insertion += adjustment.prefix + adjustment.desired;
+              particle = {
+                start: end,
+                length: adjustment.prefix.length + adjustment.current.length,
+                insertion: adjustment.prefix + adjustment.desired
+              };
+              end += particle.length;
               particleCount += 1;
-              particleAdjusted = true;
             }
           }
-          matches.push({ start, length: end - start, insertion, particleAdjusted });
+          matches.push({ start, length: query.length, insertion: replacement, particle, particleAdjusted: Boolean(particle) });
           cursor = end;
         }
         return { matches, particleCount, truncated };
@@ -6624,10 +6715,10 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           return;
         }
 
-        let length = parsedQuery.text.length;
-        let tokens = parsedReplacement.tokens;
+        const length = parsedQuery.text.length;
+        const tokens = parsedReplacement.tokens;
         let insertedLength = parsedReplacement.text.length;
-        let particleAdjusted = false;
+        let particle = null;
 
         // 조사 교정도 모델 텍스트를 기준으로 봅니다. 예전에는 같은 텍스트 노드
         // 안에서만 조사를 찾아, 조사가 다른 서식에 들어 있으면 단일 바꾸기에서만
@@ -6638,22 +6729,30 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
             replaceText.value
           );
           if (adjustment && adjustment.current !== adjustment.desired) {
-            length += adjustment.prefix.length + adjustment.current.length;
-            tokens = [...parsedReplacement.tokens, {
-              type: 'text',
-              value: adjustment.prefix + adjustment.desired
-            }];
-            insertedLength += adjustment.prefix.length + adjustment.desired.length;
-            particleAdjusted = true;
+            // 조사는 낱말과 따로 바꿔 원래 조사의 서식을 따르게 합니다.
+            particle = {
+              start: index + length,
+              length: adjustment.prefix.length + adjustment.current.length,
+              insertion: adjustment.prefix + adjustment.desired
+            };
+            insertedLength += particle.insertion.length;
           }
         }
+        const particleAdjusted = Boolean(particle);
 
         const changed = runBulkEdit((root) => {
           const model = buildSpecialSearchModel(root, markers);
           const range = createRangeFromModel(model, index, length);
           if (!range) return 0;
-          if (formattingOnly) applyFormatSettingsToRange(range, root, settings);
-          else replaceRangeWithTokens(range, tokens, root, settings);
+          if (formattingOnly) {
+            applyFormatSettingsToRange(range, root, settings);
+            return 1;
+          }
+          const particleRange = particle && createRangeFromModel(model, particle.start, particle.length);
+          if (particleRange) {
+            replaceRangeWithTokens(particleRange, [{ type: 'text', value: particle.insertion }], root, settings);
+          }
+          replaceRangeWithTokens(range, tokens, root, settings);
           return 1;
         });
 
@@ -6738,8 +6837,17 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           const matches = matchesInReplacementScope(collected.matches, anchor);
           particleCount = matches.filter((match) => match.particleAdjusted).length;
           return applyMatchesDescending(model, matches, (range, match) => {
-            if (formattingOnly) applyFormatSettingsToRange(range, root, settings);
-            else replaceRangeWithTokens(range, [{ type: 'text', value: match.insertion }], root, settings);
+            if (formattingOnly) {
+              applyFormatSettingsToRange(range, root, settings);
+              return;
+            }
+            // 뒤쪽(조사)부터 바꿔야 낱말 구간의 위치가 그대로 남습니다.
+            const particleRange = match.particle
+              && createRangeFromModel(model, match.particle.start, match.particle.length);
+            if (particleRange) {
+              replaceRangeWithTokens(particleRange, [{ type: 'text', value: match.particle.insertion }], root, settings);
+            }
+            replaceRangeWithTokens(range, [{ type: 'text', value: match.insertion }], root, settings);
           });
         }, { preserveViewport: true });
 
@@ -7208,7 +7316,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         // 인용구는 표 칸이나 기존 인용구 안에 겹쳐 넣지 않고 글자만 넣습니다.
         const quotes = keepFormatting && !selectedTableCell() && !quoteAncestorForSelection();
         if (keepFormatting && !selectedTableCell()) {
-          const tableTokens = richDocument && clipboardTableTokens(richDocument, { quotes });
+          const tableTokens = richDocument && clipboardTableTokens(richDocument, { quotes, plain });
           if (tableTokens) {
             insertClipboardTokens(tableTokens);
             updateFormattingControlsState();
@@ -7284,10 +7392,13 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         if (event.key === 'Escape') closeFindbar();
       });
 
+      // 찾을 내용 칸처럼 Enter를 계속 눌러 하나씩 바꿉니다. 예전에는 바꾼 뒤 다음
+      // 일치를 고르며 포커스가 본문으로 넘어가서, 다음 Enter가 고른 글자를 지웠습니다.
       replaceText.addEventListener('keydown', (event) => {
         if (event.key === 'Enter') {
           event.preventDefault();
           replaceCurrent();
+          replaceText.focus({ preventScroll: true });
         }
         if (event.key === 'Escape') closeFindbar();
       });

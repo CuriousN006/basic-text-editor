@@ -15,6 +15,9 @@ const paste = async (page, html, text, plain = false) => {
   await page.keyboard.press(plain ? 'Control+Shift+v' : 'Control+v');
   await page.waitForTimeout(250);
 };
+const waitForOpened = (page, name) => page.waitForFunction(
+  (fileName) => document.getElementById('toast').textContent.includes(fileName), name, { timeout: 5000 }
+).catch(() => {});
 const withPage = async (fn) => {
   const { context, page } = await openEditor(browser, base);
   const errors = [];
@@ -37,6 +40,26 @@ try {
     r.check('표와 설명 한 번에 실행 취소', await page.evaluate(() => T.html()), '<p><br></p>');
     await page.keyboard.press('Control+y');
     r.check('표 다시 실행', await page.locator('#editor table').count(), 1);
+  });
+
+  // 웹 페이지를 Chrome에서 복사하면 평문에는 문단 사이에 빈 줄이 있습니다.
+  // 표가 없을 때처럼 표 앞뒤 글도 그 빈 줄을 지켜야 합니다.
+  await withPage(async page => {
+    await page.evaluate(() => { T.set('<p><br></p>'); T.caretIn(0, true); });
+    await paste(page,
+      '<p>첫 문단</p><p>둘째 문단</p><table><tr><th>항목</th><th>값</th></tr><tr><td>사과</td><td>1</td></tr></table><p>셋째 <b>문단</b></p><p>넷째 문단</p>',
+      '첫 문단\r\n\r\n둘째 문단\r\n\r\n항목\t값\r\n사과\t1\r\n셋째 문단\r\n\r\n넷째 문단');
+    r.check('표 앞뒤 글의 문단 사이 빈 줄 유지', await page.evaluate(() => T.blocks()), 'P P:빈 P TABLE P P:빈 P');
+    r.check('표 뒤 글의 서식 유지', await page.evaluate(() => T.ed().querySelector('table ~ p b')?.textContent), '문단');
+    await page.keyboard.press('Control+z');
+    r.check('빈 줄 있는 표 붙여넣기 한 번에 취소', await page.evaluate(() => T.html()), '<p><br></p>');
+  });
+
+  // 평문이 HTML과 어긋나면 글자가 밀리지 않도록 HTML 구조를 그대로 씁니다.
+  await withPage(async page => {
+    await page.evaluate(() => { T.set('<p><br></p>'); T.caretIn(0, true); });
+    await paste(page, '<p>앞 글</p><table><tr><td>칸</td></tr></table><p>뒤 글</p>', '전혀 다른 평문');
+    r.check('평문이 다르면 HTML 줄 구조 사용', await page.evaluate(() => [...T.ed().children].map(node => node.textContent)), ['앞 글', '칸', '뒤 글']);
   });
 
   await withPage(async page => {
@@ -108,7 +131,36 @@ try {
 
   await withPage(async page => {
     await page.setInputFiles('#fileInput', { name: 'table.md', mimeType: 'text/markdown', buffer: Buffer.from(markdown) });
+    // 파일 읽기는 비동기이므로 불러온 알림을 기다립니다.
+    await waitForOpened(page, 'table.md');
     r.check('마크다운 파일 불러오기도 표 지원', await page.locator('#editor table').count(), 1);
+  });
+
+  // 주소와 단어 속의 _·*는 강조가 아닙니다.
+  const underscoreMarkdown = '[문서](https://example.com/my_file_name.html) 와 snake_case_name, _강조_ 그리고 '
+    + '[**굵은** 링크](https://example.com/a*b*c) <https://example.com/x_y_z> ![a_b_c](https://example.com/i_m_g.png)';
+  const underscoreChecks = async (page, label) => {
+    // 붙여넣기는 서식 구간마다 <a>를 따로 만들 수 있으므로 주소 종류만 비교합니다.
+    r.check(`${label} 링크 주소의 _·* 보존`, await page.evaluate(() => [...new Set([...T.ed().querySelectorAll('a')].map(a => a.getAttribute('href')))]),
+      ['https://example.com/my_file_name.html', 'https://example.com/a*b*c', 'https://example.com/x_y_z']);
+    r.check(`${label} 단어 속 _는 강조 아님`, await page.evaluate(() => T.ed().textContent.includes('snake_case_name')), true);
+    r.check(`${label} 띄어 쓴 _강조_는 기울임`, await page.evaluate(() => [...T.ed().querySelectorAll('em,i')].map(node => node.textContent)), ['강조']);
+    r.check(`${label} 링크 글자의 굵게 유지`, await page.evaluate(() => [...T.ed().querySelectorAll('strong,b')]
+      .filter(node => node.closest('a') || node.querySelector('a')).map(node => node.textContent)), ['굵은']);
+  };
+  await withPage(async page => {
+    await page.setInputFiles('#fileInput', { name: 'links.md', mimeType: 'text/markdown', buffer: Buffer.from(underscoreMarkdown) });
+    await waitForOpened(page, 'links.md');
+    await underscoreChecks(page, '마크다운 파일');
+    r.check('이미지 주소와 대체 글자 보존', await page.evaluate(() => {
+      const image = T.ed().querySelector('img');
+      return [image?.getAttribute('src'), image?.getAttribute('alt')];
+    }), ['https://example.com/i_m_g.png', 'a_b_c']);
+  });
+  await withPage(async page => {
+    await page.evaluate(() => { T.set('<p><br></p>'); T.caretIn(0, true); });
+    await paste(page, '', underscoreMarkdown);
+    await underscoreChecks(page, '마크다운 붙여넣기');
   });
 
   await withPage(async page => {

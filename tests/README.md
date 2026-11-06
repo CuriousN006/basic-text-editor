@@ -54,4 +54,5 @@ EDITOR_DIR=/tmp/baseline npm test
 - `link-paste-scroll.mjs` — 실제 URL 붙여넣기, 연속 링크 변경, 스크롤 유지와 붙여넣기 뒤 커서 위치 검증
 - `link-paste-half-window.mjs` — 반쪽 창 크기, 실제 마우스 선택, 붙여넣기 전·후 지연 스크롤 보정 검증
 - `quote-paste.mjs` — 제미나이 등에서 복사한 HTML 인용구를 실제 `Ctrl+V`로 붙여넣을 때 인용문을 유지하는지 검증
+- `replace-enter-format.mjs` — 바꿀 내용 칸에서 `Enter`로 이어 바꾸기, 서식 경계에 걸친 일치와 교정한 조사의 서식 검증
 - `perf.mjs` — 일괄 치환 소요 시간 측정
