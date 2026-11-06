@@ -4,9 +4,7 @@ const browser = await launch();
 const r = makeReporter();
 const withPage = async fn => {
   const { page, context } = await openEditor(browser, base);
-  const errors = [];
-  page.on('pageerror', error => errors.push(error.message));
-  try { await fn(page); r.check('인용구 붙여넣기 런타임 오류 없음', errors, []); }
+  try { await fn(page); }
   finally { await context.close(); }
 };
 const paste = async (page, html, text, { plain = false, start = '<p><br></p>' } = {}) => {

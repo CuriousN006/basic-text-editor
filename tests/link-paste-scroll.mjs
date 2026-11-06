@@ -12,7 +12,6 @@ const metrics = page => page.evaluate(() => {
 try {
   for (const scenario of ['url', 'spaced-url', 'rich', 'selection', 'existing-link', 'multi-selection', 'backward-selection', 'backward-multi', 'bottom-selection', 'native-scroll', 'window-scroll', 'plain-url', 'bare-domain', 'plain-label', 'text-caret']) {
     const { page, context } = await openEditor(browser, base);
-    const errors = []; page.on('pageerror', error => errors.push(error.message));
     try {
       await page.setViewportSize({ width: 1000, height: 760 });
       await page.evaluate(sample => T.set(sample), sample);
@@ -66,7 +65,6 @@ try {
       r.check(`${scenario} 붙여넣기 후 같은 문단 유지`, after.label, before.label);
       r.check(`${scenario} 붙여넣기 후 화면 위치 유지`, Math.abs(after.top-before.top) < 1, true);
       if (!['plain-url','bare-domain','plain-label','text-caret'].includes(scenario)) r.check(`${scenario} 링크 실제 적용`, await page.evaluate(() => Boolean(T.ed().querySelector('a[href="https://example.com/"]'))), true);
-      r.check(`${scenario} 런타임 오류 없음`, errors, []);
       r.check(`${scenario} 페이지 바깥쪽 스크롤도 유지`, await page.evaluate(() => window.scrollY), 0);
       if (scenario === 'text-caret') {
         r.check('평문 붙여넣기 후 커서가 삽입한 문단에 남음', await page.evaluate(() => {

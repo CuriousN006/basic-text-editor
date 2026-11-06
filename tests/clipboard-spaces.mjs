@@ -84,5 +84,30 @@ try {
     r.check('URL 붙여넣기도 앞뒤 공백 유지', await page.evaluate(() => T.ed().textContent), '[ https://example.com ]');
     r.check('URL 자동 링크 유지', await page.evaluate(() => T.ed().querySelector('a')?.getAttribute('href')), 'https://example.com');
   });
+  // 뮤테이션 테스트에서 드러난 구멍
+  await withPage(async page => {
+    // 서식 없이 붙여넣으면 글자가 놓인 자리의 서식을 따릅니다(굵은 글 안이면 굵게).
+    await page.evaluate(() => {
+      T.set('<p><b>굵은글</b></p>'); T.ed().focus();
+      const range = document.createRange(); range.setStart(T.ed().querySelector('b').firstChild, 2); range.collapse(true);
+      const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range);
+    });
+    await page.evaluate(() => T.writeClipboard('<i>기울임</i>', '넣음'));
+    await paste(page, true);
+    r.check('Ctrl+Shift+V는 놓인 자리의 서식을 따름', await page.evaluate(() => T.html()), '<p><b>굵은넣음글</b></p>');
+  });
+  await withPage(async page => {
+    // 찾기 칸 같은 입력칸에서의 복사·붙여넣기는 편집기가 가로채지 않습니다.
+    await page.evaluate(() => T.set('<p>본문</p>'));
+    await page.keyboard.press('Control+f');
+    await page.fill('#findText', '찾을 말');
+    await page.locator('#findText').selectText();
+    await page.keyboard.press('Control+c');
+    r.check('찾기 칸에서 고른 글자를 복사', (await clipboard(page)).plain, '찾을 말');
+    await page.locator('#findText').press('End');
+    await page.keyboard.press('Control+v');
+    r.check('찾기 칸에 붙여넣기', await page.inputValue('#findText'), '찾을 말찾을 말');
+    r.check('본문은 그대로', await page.evaluate(() => T.html()), '<p>본문</p>');
+  });
   process.exitCode = r.summary() ? 1 : 0;
 } finally { await browser.close(); server.close(); }

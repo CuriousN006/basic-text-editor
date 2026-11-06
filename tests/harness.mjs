@@ -29,6 +29,41 @@ export async function launch() {
   return chromium.launch({ args: ['--no-sandbox'] });
 }
 
+let coverageSerial = 0;
+let pageErrorCount = 0;
+// 페이지를 닫기 전에 V8 코드 실행 범위를 파일로 남긴다. 테스트마다 context.close()를
+// 직접 부르므로 그 함수를 감싼다. 새로 고침에도 이어서 모으도록 resetOnNavigation을 끈다.
+async function recordCoverage(context, page) {
+  const options = { resetOnNavigation: false, reportAnonymousScripts: false };
+  await page.coverage.startJSCoverage(options);
+  // 새로 고치면 이전 문서의 스크립트 기록이 함께 사라지므로 새로 고치기 직전에 받아 둡니다.
+  const earlier = [];
+  for (const method of ['reload', 'goto']) {
+    const original = page[method].bind(page);
+    page[method] = async (...args) => {
+      try {
+        earlier.push(...await page.coverage.stopJSCoverage());
+        await page.coverage.startJSCoverage(options);
+      } catch {
+        // 처음 열 때(goto)는 아직 기록이 없습니다.
+      }
+      return original(...args);
+    };
+  }
+  const close = context.close.bind(context);
+  context.close = async (...args) => {
+    try {
+      const entries = [...earlier, ...await page.coverage.stopJSCoverage()].filter((entry) => /\/index\.html$/.test(entry.url));
+      await fs.mkdir(process.env.COVERAGE_DIR, { recursive: true });
+      const name = `${path.basename(process.argv[1] || 'test', '.mjs')}-${process.pid}-${coverageSerial += 1}.json`;
+      await fs.writeFile(path.join(process.env.COVERAGE_DIR, name), JSON.stringify(entries));
+    } catch {
+      // 페이지가 이미 닫혔으면 그 페이지의 기록은 버립니다.
+    }
+    return close(...args);
+  };
+}
+
 // 페이지를 열고 편집기 조작용 헬퍼를 주입한다.
 export async function openEditor(browser, base, opts = {}) {
   const context = await browser.newContext({ acceptDownloads: true, hasTouch: Boolean(opts.hasTouch) });
@@ -68,6 +103,14 @@ export async function openEditor(browser, base, opts = {}) {
   }
 
   page.on('dialog', (d) => d.accept(opts.promptAnswer ?? ''));
+  // 편집기 페이지에서 처리되지 않은 오류가 나면 그 테스트 파일을 실패로 칩니다.
+  // 파일마다 따로 확인하지 않아도 모든 테스트에 적용됩니다.
+  page.on('pageerror', (error) => {
+    pageErrorCount += 1;
+    console.log(`FAIL  페이지 오류: ${error.message}`);
+  });
+  // COVERAGE_DIR를 주면 페이지마다 실행된 코드 범위를 기록합니다(coverage.mjs가 합산).
+  if (process.env.COVERAGE_DIR) await recordCoverage(context, page);
   await page.goto(`${base}/index.html`);
   await page.waitForSelector('#editor');
   // 초안 복구는 탭 잠금을 확보한 뒤 비동기로 끝납니다. 끝나면 탭 ID가 기록됩니다.
@@ -201,7 +244,8 @@ export function makeReporter() {
     summary() {
       const bad = rows.filter((r) => !r.ok);
       console.log(`\n=== ${rows.length - bad.length}/${rows.length} PASS ===`);
-      return bad.length;
+      if (pageErrorCount) console.log(`=== 페이지 오류 ${pageErrorCount}건 ===`);
+      return bad.length + pageErrorCount;
     },
   };
 }

@@ -26,9 +26,7 @@ const drag = async (page, axis, from, to) => {
 };
 const withPage = async (fn, opts = {}) => {
   const { page, context } = await openEditor(browser, base, opts);
-  const errors = [];
-  page.on('pageerror', error => errors.push(error.message));
-  try { await fn(page); r.check('표 편집 런타임 오류 없음', errors, []); }
+  try { await fn(page); }
   finally { await context.close(); }
 };
 try {
@@ -72,6 +70,27 @@ try {
     await page.waitForTimeout(80);
     await page.locator('#tableAddColumn').click();
     r.check('세로 선 + 버튼으로 열 삽입', await read(page), [['항목','','가격','수량'],['사과','','100','1'],['배','','200','2'],['포도','','300','3']]);
+  });
+  // 뮤테이션 테스트에서 드러난 구멍: + 버튼 위치, Shift+Tab
+  await withPage(async page => {
+    await active(page);
+    const cell = await page.locator('#editor tr').nth(1).locator('td').first().boundingBox();
+    await page.mouse.move(cell.x+cell.width, cell.y+cell.height/2);
+    await page.waitForTimeout(80);
+    const button = await page.locator('#tableAddColumn').boundingBox();
+    r.check('열 + 버튼은 가리킨 세로 선 위에 놓임', Math.abs((button.x+button.width/2) - (cell.x+cell.width)) <= 2, true);
+  });
+  await withPage(async page => {
+    await active(page);
+    await page.locator('#editor tr').nth(2).locator('td').nth(1).click();
+    await page.keyboard.press('Shift+Tab');
+    await page.keyboard.type('앞칸');
+    // 칸을 옮기면 커서는 그 칸의 맨 앞에 놓입니다.
+    r.check('Shift+Tab은 이전 칸으로', await read(page), [['항목','가격','수량'],['사과','100','1'],['앞칸배','200','2'],['포도','300','3']]);
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('뒷칸');
+    r.check('Tab은 다음 칸으로', await read(page), [['항목','가격','수량'],['사과','100','1'],['앞칸배','200','뒷칸2'],['포도','300','3']]);
   });
   await withPage(async page => {
     await active(page);
@@ -117,6 +136,8 @@ try {
     await act(page, 'row-before');
     r.check('병합 안 행 삽입 시 세로 병합 확장', await page.evaluate(() => T.ed().querySelector('td[rowspan]').rowSpan), 3);
     r.check('병합 셀 내용 보존', await page.evaluate(() => T.ed().querySelector('td[rowspan]').textContent), '세로 내용');
+    // 병합이 1칸으로 줄어든 셀에 colspan="1" 같은 쓸모없는 속성을 남기지 않습니다.
+    r.check('병합 표 편집 뒤 1칸짜리 병합 속성 없음', await page.locator('#editor [colspan="1"], #editor [rowspan="1"]').count(), 0);
     await page.keyboard.press('Control+z');
     r.check('병합 표 행 추가 취소', await page.evaluate(() => T.html()), merged);
   });

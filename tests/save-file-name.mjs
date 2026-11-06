@@ -23,11 +23,8 @@ const readStoredZipEntry = (buffer, wantedName) => {
 
 async function withPage(options, fn) {
   const { context, page } = await openEditor(browser, base, options);
-  const errors = [];
-  page.on('pageerror', (error) => errors.push(error.message));
   try {
     await fn(page);
-    r.check('런타임 오류 없음', errors, []);
   } finally {
     await context.close();
   }

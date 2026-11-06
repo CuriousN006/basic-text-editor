@@ -20,9 +20,7 @@ const waitForOpened = (page, name) => page.waitForFunction(
 ).catch(() => {});
 const withPage = async (fn) => {
   const { context, page } = await openEditor(browser, base);
-  const errors = [];
-  page.on('pageerror', error => errors.push(error.message));
-  try { await fn(page); r.check('표 붙여넣기 런타임 오류 없음', errors, []); }
+  try { await fn(page); }
   finally { await context.close(); }
 };
 
@@ -174,6 +172,14 @@ try {
     await page.evaluate(() => { T.set('<p><br></p>'); T.caretIn(0, true); });
     await paste(page, '', '항목 | 값\n--- | ---\n사과 | 1\n배 | 2');
     r.check('바깥 파이프 없는 표 지원', await page.evaluate(() => T.ed().querySelector('table')?.rows.length), 3);
+  });
+
+  await withPage(async page => {
+    // 들여 쓰거나 줄 끝에 공백이 붙은 마크다운 표도 표로 읽습니다.
+    await page.evaluate(() => { T.set('<p><br></p>'); T.caretIn(0, true); });
+    await paste(page, '', '  | 항목 | 값 |  \n  | --- | --- |  \n  | 사과 | 1 |  ');
+    r.check('앞뒤 공백 있는 마크다운 표', await page.evaluate(() => [...T.ed().querySelectorAll('tr')].map(row => [...row.cells].map(cell => cell.textContent))),
+      [['항목', '값'], ['사과', '1']]);
   });
 
   await withPage(async page => {
