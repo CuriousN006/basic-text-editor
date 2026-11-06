@@ -441,9 +441,10 @@ await withPage({}, async (page) => {
 await withPage({ noFilePicker: true }, async (page) => {
   const md = '# 제목\n\n본문 **굵게** *기울임*\n\n- 하나\n- 둘\n\n> 인용\n\n```\n코드\n```\n';
   await page.setInputFiles('#fileInput', { name: 'a.md', mimeType: 'text/markdown', buffer: Buffer.from(md) });
-  await page.waitForTimeout(200);
+  await page.waitForFunction(() => document.getElementById('toast').textContent.includes('a.md'));
   const out = (await readDownload(page, () => page.click('[data-action="save-md"]'))).toString();
-  r.check('R19 마크다운 왕복', out.replace(/\n{3,}/g, '\n\n').trim(), md.trim());
+  // 예전에는 빈 줄 수를 맞춰 놓고 비교해서, 저장할 때마다 문단 사이 빈 줄이 늘던 문제를 놓쳤습니다.
+  r.check('R19 마크다운 왕복은 글자 하나 바뀌지 않음', out, md);
 });
 
 // DOCX 저장이 유효한 zip 인지 (로컬 파일 헤더 + 필수 파트)
@@ -2352,6 +2353,32 @@ await withPage({}, async (page) => {
   await page.click('[data-find="replace-all"]');
   await page.waitForTimeout(250);
   r.check('X14 위쪽 범위', await page.evaluate(() => T.text()), '배 첫째\n\n배 둘째\n\n사과 셋째');
+});
+
+// 커서가 문서 맨 앞이면 위쪽에는 바꿀 것이 없다(위치 0을 "위치 없음"으로 착각하면 전부 바뀜).
+await withPage({}, async (page) => {
+  await page.evaluate(() => {
+    T.set('<p>사과 첫째</p><p>사과 둘째</p>');
+    T.caretIn(0, false);
+  });
+  await openReplace(page, {
+    find: '사과', replace: '배', particles: false, scope: 'up'
+  });
+  await page.click('[data-find="replace-all"]');
+  await page.waitForTimeout(250);
+  r.check('X14 문서 맨 앞에서 위쪽 범위는 바꿀 것 없음', await page.evaluate(() => T.text()), '사과 첫째\n\n사과 둘째');
+});
+
+// 인용구 안의 여러 문단과 바로 들어 있는 글자도 찾는다.
+await withPage({}, async (page) => {
+  await page.evaluate(() => T.set('<blockquote><p>인용 첫 사과</p><p>인용 둘 사과</p></blockquote><blockquote>바로 쓴 사과<p>문단 사과</p></blockquote>'));
+  await page.keyboard.press('Control+f');
+  await page.fill('#findText', '사과');
+  await page.waitForTimeout(300);
+  r.check('X14 인용구 안 일치 개수', await page.textContent('#findCount'), '4개');
+  await page.fill('#findText', '사과^p인용');
+  await page.waitForTimeout(300);
+  r.check('X14 인용구 안 문단 경계 ^p', await page.textContent('#findCount'), '1개');
 });
 
 // 특수기호 치환도 같은 방향 범위를 따른다.

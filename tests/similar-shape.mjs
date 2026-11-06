@@ -220,6 +220,47 @@ await withPage(async (page) => {
   r.check('S43 Enter 이동도 같은 대상', await page.evaluate(() => document.getElementById('findCount').textContent), '2 / 2');
 });
 
+console.log('\n--- 비슷한 모양: 하나씩 바꾸기 ---');
+
+await withPage(async (page) => {
+  const html = '<p>가 2024년 3월 15일, 나 2025년 11월 2일을, 다 2026년 1월 1일 끝</p>';
+  await openShape(page, html, '2024년 3월 15일');
+  await typeReplacement(page, '2024.3.15');
+  const steps = [];
+  for (let index = 0; index < 4; index += 1) {
+    await page.click('[data-find="replace"]');
+    await page.waitForTimeout(80);
+    steps.push(await page.evaluate(() => [T.text(), document.getElementById('findCount').textContent]));
+  }
+  // Word처럼 처음 누르면 찾기만 하고, 그다음부터 찾은 것을 바꾸고 다음으로 넘어갑니다.
+  r.check('S44 바꾸기 버튼으로 하나씩 차례로 바꿈(조사 교정 포함)', steps, [
+    ['가 2024년 3월 15일, 나 2025년 11월 2일을, 다 2026년 1월 1일 끝', '1 / 3'],
+    ['가 2024.3.15, 나 2025년 11월 2일을, 다 2026년 1월 1일 끝', '1 / 2'],
+    ['가 2024.3.15, 나 2025.11.2를, 다 2026년 1월 1일 끝', '1 / 1'],
+    ['가 2024.3.15, 나 2025.11.2를, 다 2026.1.1 끝', '없음']
+  ]);
+  await undo(page);
+  r.check('S44 Ctrl+Z는 한 개씩 되돌림', await page.evaluate(() => T.text()), '가 2024.3.15, 나 2025.11.2를, 다 2026년 1월 1일 끝');
+});
+
+await withPage(async (page) => {
+  // 검색 상태 없이 일치 하나를 직접 골라 바꾸면 그 일치만 바꿉니다.
+  await openShape(page, '<p>H_2O 와 CO_2 그리고 N_2 끝</p>', 'H_2O');
+  await page.evaluate(() => T.select('CO_2'));
+  await page.click('[data-find="replace"]');
+  await page.waitForTimeout(80);
+  r.check('S45 직접 고른 일치를 바꿈', await page.evaluate(() => T.text()), 'H_2O 와 CO₂ 그리고 N_2 끝');
+});
+
+await withPage(async (page) => {
+  await openShape(page, '<p>x^2 와 y^3 끝</p>', 'x^2');
+  await typeReplacement(page, 'y²');
+  await page.click('[data-find="replace"]');
+  await page.waitForTimeout(80);
+  r.check('S46 읽을 수 없는 바꿀 내용이면 하나씩 바꾸기도 막음', [await page.evaluate(() => T.text()), await page.evaluate(() => T.toast())],
+    ['x^2 와 y^3 끝', '바꿀 내용에서 예시의 앞뒤 글자는 그대로 두고 바뀌는 부분만 고쳐 주세요.']);
+});
+
 console.log('\n--- 비슷한 모양: 찾기와 기본 상태 ---');
 
 await withPage(async (page) => {

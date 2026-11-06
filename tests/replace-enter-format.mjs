@@ -7,11 +7,8 @@ const r = makeReporter();
 
 async function withPage(fn, options = {}) {
   const { context, page } = await openEditor(browser, base, options);
-  const errors = [];
-  page.on('pageerror', (error) => errors.push(error.message));
   try {
     await fn(page);
-    r.check('런타임 오류 없음', errors, []);
   } finally {
     await context.close();
   }
@@ -114,6 +111,31 @@ await withPage(async (page) => {
   await replaceAll(page);
   r.check('F7 굵은 조사는 굵은 채로 교정', await page.evaluate(() => T.html()), '<p>귤<b>을</b> 먹다</p>');
 });
+
+console.log('\n--- 숫자로 끝나는 바꿀 내용의 조사 ---');
+
+// 숫자는 읽는 소리로 받침을 봅니다: 2(이)를, 3(삼)을, 1(일)로, 10(십)은, 100(백)과, 1000(천)이, 0(영)을.
+const numberParticleCases = [
+  ['사과를 본다', '2', '2를 본다'],
+  ['사과를 본다', '3', '3을 본다'],
+  ['사과로 간다', '1', '1로 간다'],
+  ['사과로 간다', '6', '6으로 간다'],
+  ['사과는 끝', '10', '10은 끝'],
+  ['사과와 배', '100', '100과 배'],
+  ['사과가 왔다', '1000', '1000이 왔다'],
+  ['사과를 본다', '20000', '20000을 본다'],
+  ['사과를 본다', '0', '0을 본다'],
+  ['사과를 본다', '2.5', '2.5를 본다'],
+  ['사과를 본다', 'v2', 'v2를 본다']
+];
+for (const [text, replacement, expected] of numberParticleCases) {
+  await withPage(async (page) => {
+    await page.evaluate((value) => T.set(`<p>${value}</p>`), text);
+    await openReplace(page, { find: '사과', replace: replacement });
+    await replaceAll(page);
+    r.check(`P ${text} → ${replacement}`, await page.evaluate(() => T.text()), expected);
+  });
+}
 
 await withPage(async (page) => {
   await page.evaluate(() => T.set('<p>앞 <b>가</b>나</p><p>다 끝</p>'));

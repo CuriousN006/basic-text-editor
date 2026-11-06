@@ -3293,7 +3293,11 @@
         return { html: `<table><thead>${rowHtml(header, 'th')}</thead><tbody>${rows.join('')}</tbody></table>`, end };
       };
 
-      const markdownToHtml = (markdown, { literalOrderedLists = false } = {}) => {
+      // blankLineSeparates: 마크다운 파일을 열 때는 블록 사이의 빈 줄 하나를 문단 구분으로
+      // 봅니다. 편집기 문단에는 이미 아래 여백이 있으므로 빈 문단을 더 넣으면 간격이 두 배가
+      // 되고, MD로 저장하면 빈 줄이 하나 더 붙습니다. 두 줄 이상 비었을 때만 남는 만큼 빈
+      // 문단으로 둡니다. 붙여넣기는 Ctrl+Shift+V와 줄 수를 맞추려고 빈 줄을 그대로 둡니다.
+      const markdownToHtml = (markdown, { literalOrderedLists = false, blankLineSeparates = false } = {}) => {
         const lines = String(markdown).replace(/\r\n?/g, '\n').split('\n');
         const output = [];
         let paragraph = [];
@@ -3329,6 +3333,7 @@
         };
 
         const emitBlanks = () => {
+          if (blankLineSeparates && output.length) pendingBlankLines -= 1;
           for (let i = 0; i < pendingBlankLines; i += 1) {
             output.push('<p class="blank-line"><br></p>');
           }
@@ -4011,7 +4016,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           currentMarkdownFileHandle = null;
           currentDocxFileHandle = null;
         } else if (/\.(md|markdown)$/i.test(file.name)) {
-          editor.innerHTML = markdownToHtml(text);
+          editor.innerHTML = markdownToHtml(text, { blankLineSeparates: true });
           currentHtmlFileHandle = null;
           currentMarkdownFileHandle = handle;
           currentDocxFileHandle = null;
@@ -6378,8 +6383,26 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         { consonant: '과', vowel: '와' }
       ];
 
+      // 숫자로 끝나면 읽는 소리로 받침을 정합니다. 2(이)를, 3(삼)을, 1(일)로,
+      // 10(십)을, 100(백)을, 1000(천)을, 10000(만)을, 0(영)을.
+      const DIGIT_READING_ENDINGS = ['영', '일', '이', '삼', '사', '오', '육', '칠', '팔', '구'];
+      const numberReadingEnding = (value) => {
+        const digits = String(value).match(/(\d+)$/)?.[1];
+        if (!digits) return null;
+        const last = Number(digits.at(-1));
+        if (last) return DIGIT_READING_ENDINGS[last];
+        const zeros = digits.length - digits.replace(/0+$/, '').length;
+        if (zeros === digits.length) return '영';
+        if (zeros === 1) return '십';
+        if (zeros === 2) return '백';
+        if (zeros === 3) return '천';
+        if (zeros < 8) return '만';
+        if (zeros < 12) return '억';
+        return '조';
+      };
+
       const getHangulEnding = (value) => {
-        const lastCharacter = String(value).slice(-1);
+        const lastCharacter = numberReadingEnding(value) || String(value).slice(-1);
         if (!lastCharacter) return null;
         const code = lastCharacter.charCodeAt(0);
         if (code < 0xAC00 || code > 0xD7A3) return null;
