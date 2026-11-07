@@ -1392,6 +1392,19 @@
         const selectionInside = selectionIsInsideEditor();
         quoteButton.classList.remove('is-active');
         quoteButton.setAttribute('aria-pressed', 'false');
+        // 손잡이로 행·열을 골랐으면 그 칸들의 서식을 버튼에 보여 줍니다.
+        const tableCells = selectedTableCells();
+        if (tableCells.length) {
+          const alignment = tableCellsAlignment(tableCells);
+          statefulCommandButtons.forEach((button) => {
+            const command = button.dataset.command;
+            const isActive = TABLE_CELL_FORMATS[command] ? tableCellsHaveFormat(tableCells, command)
+              : TABLE_CELL_ALIGNMENTS[command] ? TABLE_CELL_ALIGNMENTS[command].value === alignment : false;
+            button.classList.toggle('is-active', isActive);
+            button.setAttribute('aria-pressed', String(isActive));
+          });
+          return;
+        }
         statefulCommandButtons.forEach((button) => {
           let isActive = false;
           if (selectionInside) {
@@ -2184,6 +2197,23 @@
       const tableMenuIsOpen = () => Boolean(tableEditState.menu
         || (tableEditState.selection && !tableEditState.drag));
 
+      // 고른 행·열에 걸친 칸입니다. 병합 칸은 일부만 걸쳐도 포함합니다.
+      const selectedTableEntries = (model, selection) => {
+        const start = Math.min(selection.anchor, selection.end), end = Math.max(selection.anchor, selection.end);
+        return model.entries.filter(entry => {
+          const position = selection.axis === 'row' ? entry.row : entry.col;
+          const span = selection.axis === 'row' ? entry.rowSpan : entry.colSpan;
+          return position <= end && position + span > start;
+        });
+      };
+
+      // 손잡이로 행·열을 고른 채 메뉴가 떠 있을 때만 칸 단위 서식의 대상이 있습니다.
+      const selectedTableCells = () => {
+        const { table, selection, drag } = tableEditState;
+        if (!table || !selection || drag || !editor.contains(table)) return [];
+        return selectedTableEntries(tableGridModel(table), selection).map(entry => entry.cell);
+      };
+
       const tableControlGeometry = (table, model) => {
         const rect = table.getBoundingClientRect();
         const edges = Array(model.columns + 1).fill(null);
@@ -2248,10 +2278,7 @@
         model.rows.forEach((row, i) => addHandle('row', i, Math.max(view.left, rect.left - 26), (rows[i] + rows[i+1]) / 2 - 12));
         for (let i = 0; i < model.columns; i += 1) addHandle('column', i, (columns[i] + columns[i+1]) / 2 - 12, rect.top - 26);
         if (selection) {
-          model.entries.forEach(entry => {
-            const position = selection.axis === 'row' ? entry.row : entry.col;
-            const span = selection.axis === 'row' ? entry.rowSpan : entry.colSpan;
-            if (position > end || position + span <= start) return;
+          selectedTableEntries(model, selection).forEach(entry => {
             const cellRect = entry.cell.getBoundingClientRect();
             const top = Math.max(cellRect.top, view.top), bottom = Math.min(cellRect.bottom, view.bottom);
             const left = Math.max(cellRect.left, view.left), right = Math.min(cellRect.right, view.right);
@@ -2306,11 +2333,22 @@
             : tableAxisHandles.querySelector(`[data-table-select="${selection.axis}"][data-index="${selection.end}"]`) || tableMenuButton;
           const anchorRect = anchor.getBoundingClientRect();
           const menuRect = tableMenu.getBoundingClientRect();
-          const below = anchorRect.bottom + 4;
-          const top = below + menuRect.height <= view.bottom - 8 ? below : Math.max(view.top + 8, anchorRect.top - menuRect.height - 4);
-          tableMenu.style.left = `${Math.max(view.left + 8, Math.min(anchorRect.left, view.right - menuRect.width - 8))}px`;
+          let left = anchorRect.left;
+          let below = anchorRect.bottom + 4;
+          let above = anchorRect.top - menuRect.height - 4;
+          // 고른 행·열의 서식을 바꾸면 결과가 보여야 하므로 메뉴는 고른 칸을 덮지 않게 둡니다.
+          // 열은 오른쪽(자리가 없으면 왼쪽) 옆에, 행은 고른 행들의 아래(자리가 없으면 위)에 띄웁니다.
+          if (selection && mode === 'column') {
+            left = columns[end + 1] + 4 + menuRect.width <= view.right - 8 ? columns[end + 1] + 4 : columns[start] - menuRect.width - 4;
+          } else if (selection) {
+            below = rows[end + 1] + 4;
+            above = rows[start] - menuRect.height - 4;
+          }
+          const top = below + menuRect.height <= view.bottom - 8 ? below : Math.max(view.top + 8, above);
+          tableMenu.style.left = `${Math.max(view.left + 8, Math.min(left, view.right - menuRect.width - 8))}px`;
           tableMenu.style.top = `${top}px`;
         }
+        if (selection) updateFormattingControlsState();
         if (focusAxis) tableAxisHandles.querySelector(`[data-table-select="${focusAxis}"][data-index="${focusIndex}"]`)?.focus({ preventScroll: true });
       };
 
@@ -2412,6 +2450,141 @@
         focusEditor();
         if (cell && editor.contains(cell)) placeCaretInCell(cell);
       };
+
+      // ===== 고른 행·열의 서식 =====
+      // 손잡이로 고른 행·열에는 도구막대 버튼과 Ctrl+B·I·U가 칸 전체에 적용됩니다.
+      // 열은 하나의 연속 범위로 나타낼 수 없으므로 칸마다 따로 바꾸고, 실행 취소는 한 번에 됩니다.
+      const TABLE_CELL_FORMATS = { bold: '굵게', italic: '기울임', underline: '밑줄', strikeThrough: '취소선' };
+      const TABLE_CELL_ALIGNMENTS = {
+        justifyLeft: { value: '', label: '왼쪽 정렬' },
+        justifyCenter: { value: 'center', label: '가운데 정렬' },
+        justifyRight: { value: 'right', label: '오른쪽 정렬' }
+      };
+      const TABLE_CELL_INLINE_FORMATTING = 'b,strong,i,em,u,s,strike,del,ins,mark,font,span,a,code,sub,sup,small,big';
+      const TABLE_CELL_TEXT_STYLES = ['font-weight', 'font-style', 'text-decoration', 'color', 'background-color', 'text-align'];
+
+      // 제목 칸(th)의 굵게나 칸 자체에 걸린 서식은 칸 안에서 풀 수 없으므로 이미 적용된 것으로 봅니다.
+      const cellCarriesFormat = (cell, format) => elementCarriesFormat(cell, format)
+        || (format === 'bold' && cell.tagName === 'TH');
+      const cellTextNodes = (cell) => {
+        const nodes = [];
+        const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) if (/\S/.test(walker.currentNode.nodeValue)) nodes.push(walker.currentNode);
+        return nodes;
+      };
+      // Word처럼 고른 칸의 글자가 모두 그 서식일 때만 해제하고, 하나라도 아니면 적용합니다.
+      const tableCellsHaveFormat = (cells, format) => {
+        let hasText = false;
+        const every = cells.every(cell => {
+          if (cellCarriesFormat(cell, format)) { hasText = true; return true; }
+          const nodes = cellTextNodes(cell);
+          if (nodes.length) hasText = true;
+          return nodes.every(node => formatActiveAt(node, cell, format));
+        });
+        return hasText && every;
+      };
+      const tableCellsAlignment = (cells) => {
+        const values = new Set(cells.map(cell => {
+          const align = getComputedStyle(cell).textAlign;
+          return align === 'start' || align === 'left' ? '' : align;
+        }));
+        return values.size === 1 ? [...values][0] : null;
+      };
+
+      const clearTableCellFormatting = (cell) => {
+        [...cell.querySelectorAll(TABLE_CELL_INLINE_FORMATTING)].forEach(unwrapElement);
+        [...cell.querySelectorAll('blockquote')].forEach(unwrapElement);
+        [...cell.querySelectorAll('h1,h2,h3,h4,h5,h6,pre')].forEach(block => {
+          const paragraph = block.ownerDocument.createElement('p');
+          while (block.firstChild) paragraph.appendChild(block.firstChild);
+          block.replaceWith(paragraph);
+        });
+        [cell, ...cell.querySelectorAll('[style]')].forEach(element => {
+          TABLE_CELL_TEXT_STYLES.forEach(property => element.style.removeProperty(property));
+          if (!element.getAttribute('style')?.trim()) element.removeAttribute('style');
+        });
+        cell.normalize();
+      };
+
+      const alignTableCell = (cell, value) => {
+        cell.querySelectorAll('[style]').forEach(element => {
+          element.style.removeProperty('text-align');
+          if (!element.getAttribute('style')?.trim()) element.removeAttribute('style');
+        });
+        cell.style.textAlign = value;
+        if (!cell.getAttribute('style')?.trim()) cell.removeAttribute('style');
+      };
+
+      // 고른 칸이 없거나 칸 단위로 다루지 않는 명령이면 false를 돌려 원래 동작에 맡깁니다.
+      const applyTableCellCommand = (command) => {
+        const format = TABLE_CELL_FORMATS[command] ? command : null;
+        const alignment = TABLE_CELL_ALIGNMENTS[command];
+        if (!format && !alignment && command !== 'clear-format') return false;
+        const cells = selectedTableCells();
+        if (!cells.length) return false;
+        const { table, cell: currentCell, selection } = tableEditState;
+        // 일괄 편집은 문서를 통째로 바꾸므로 표와 칸을 순서로 기억했다가 다시 찾습니다.
+        const tableIndex = [...editor.querySelectorAll('table')].indexOf(table);
+        const tableCells = [...table.querySelectorAll('th,td')];
+        const cellIndexes = cells.map(cell => tableCells.indexOf(cell));
+        const currentIndex = tableCells.indexOf(currentCell);
+        const remove = format && tableCellsHaveFormat(cells, format);
+        const changed = runBulkEdit(clone => {
+          const cloneTable = clone.querySelectorAll('table')[tableIndex];
+          const cloneCells = [...cloneTable.querySelectorAll('th,td')];
+          let count = 0;
+          cellIndexes.forEach(index => {
+            const cell = cloneCells[index];
+            const before = cell.outerHTML;
+            if (format) {
+              if (remove || !cellCarriesFormat(cell, format)) {
+                const range = document.createRange();
+                range.selectNodeContents(cell);
+                (remove ? removeFormatFromRange : applyFormatToRange)(range, cell, format);
+                cell.normalize();
+              }
+            } else if (alignment) alignTableCell(cell, alignment.value);
+            else clearTableCellFormatting(cell);
+            if (cell.outerHTML !== before) count += 1;
+          });
+          return count;
+        }, {
+          afterCommit: () => {
+            const nextTable = editor.querySelectorAll('table')[tableIndex];
+            if (!nextTable) { hideTableControls(); return; }
+            tableEditState = emptyTableEditState(nextTable, nextTable.querySelectorAll('th,td')[currentIndex] || null);
+            tableEditState.selection = selection;
+          }
+        });
+        if (changed) {
+          renderTableControls();
+          tableAxisHandles.querySelector(`[data-table-select="${selection.axis}"][data-index="${selection.end}"]`)?.focus({ preventScroll: true });
+        }
+        const label = format ? TABLE_CELL_FORMATS[format] : alignment ? alignment.label : '서식 제거';
+        const headerOnly = format === 'bold' && remove && cells.some(cell => cell.tagName === 'TH');
+        showToast(!changed ? (headerOnly ? '제목 칸은 원래 굵게 표시되므로 굵게를 해제할 수 없습니다.' : `${label}: 고른 칸에 바꿀 글자가 없습니다.`)
+          : format ? `칸 ${changed}개에 ${label} 서식을 ${remove ? '해제' : '적용'}했습니다. Ctrl+Z로 되돌릴 수 있습니다.`
+          : alignment ? `칸 ${changed}개를 ${label}했습니다. Ctrl+Z로 되돌릴 수 있습니다.`
+          : `칸 ${changed}개의 글자와 문단 서식을 제거했습니다. Ctrl+Z로 되돌릴 수 있습니다.`);
+        return true;
+      };
+
+      // Word처럼 Shift+Alt+Home·End는 현재 행을, Shift+Alt+PageUp·PageDown은 현재 열을 고릅니다.
+      const TABLE_SELECT_SHORTCUTS = { Home: 'row', End: 'row', PageUp: 'column', PageDown: 'column' };
+      const selectTableAxisFromCaret = (cell, axis) => {
+        const table = cell.closest('table');
+        const entry = tableGridModel(table).entries.find(item => item.cell === cell);
+        if (!entry) return false;
+        const index = axis === 'row' ? entry.row : entry.col;
+        activateTableControls(table, cell, true);
+        tableEditState.selection = { axis, anchor: index, end: index };
+        window.getSelection()?.removeAllRanges();
+        hideSelectionToolbar();
+        renderTableControls();
+        tableAxisHandles.querySelector(`[data-table-select="${axis}"][data-index="${index}"]`)?.focus({ preventScroll: true });
+        updateFormattingControlsState();
+        return true;
+      };
       document.addEventListener('pointermove', event => {
         const { drag, table } = tableEditState;
         if (drag && table) {
@@ -2488,11 +2661,15 @@
         if (cell) activateTableControls(cell.closest('table'), cell, true);
         else hideTableControls();
       });
+      // 서식 버튼은 고른 행·열에 적용되어야 하므로 눌러도 선택을 풀지 않습니다.
+      const keepsTableSelection = (target) => Boolean(target.closest?.('.formatbar [data-command], [data-action="clear-format"]'));
       document.addEventListener('pointerdown', event => {
-        if (!editor.contains(event.target) && !event.composedPath().includes(tableControls)) hideTableControls();
+        if (!editor.contains(event.target) && !event.composedPath().includes(tableControls)
+          && !keepsTableSelection(event.target)) hideTableControls();
       });
       document.addEventListener('focusin', event => {
-        if (!editor.contains(event.target) && !tableControls.contains(event.target)) hideTableControls();
+        if (!editor.contains(event.target) && !tableControls.contains(event.target)
+          && !keepsTableSelection(event.target)) hideTableControls();
       });
       document.addEventListener('selectionchange', () => {
         if (tableMenuIsOpen() || tableEditState.drag) return;
@@ -2627,7 +2804,8 @@
         restoreSelection();
         document.execCommand('removeFormat', false, null);
         document.execCommand('unlink', false, null);
-        document.execCommand('formatBlock', false, 'P');
+        // 표 칸 안에서 formatBlock을 쓰면 칸 내용이 <p>로 한 겹 더 싸입니다.
+        if (!selectedTableCell()) document.execCommand('formatBlock', false, 'P');
         normalizeEmptyDocument();
         blockFormat.value = 'P';
         updateCount();
@@ -7716,7 +7894,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         button.addEventListener('click', () => {
           if (button.dataset.command === 'undo') performUndo();
           else if (button.dataset.command === 'redo') performRedo();
-          else runCommand(button.dataset.command);
+          else if (!applyTableCellCommand(button.dataset.command)) runCommand(button.dataset.command);
         });
       });
 
@@ -7809,7 +7987,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           } else if (action === 'link') {
             insertLink();
           } else if (action === 'clear-format') {
-            clearFormatting();
+            if (!applyTableCellCommand('clear-format')) clearFormatting();
           } else if (action === 'quote') {
             toggleQuoteBlock();
           } else if (action === 'table') {
@@ -8000,6 +8178,11 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         }
         const cell = selectedTableCell();
         if (!cell) return;
+        if (event.shiftKey && event.altKey && !event.ctrlKey && !event.metaKey && TABLE_SELECT_SHORTCUTS[event.key]) {
+          event.preventDefault();
+          selectTableAxisFromCaret(cell, TABLE_SELECT_SHORTCUTS[event.key]);
+          return;
+        }
         const table = cell.closest('table');
         const cells = [...table.querySelectorAll('th,td')];
         const index = cells.indexOf(cell);
@@ -8316,6 +8499,13 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           return;
         }
         if (!ctrl) return;
+        // 한글 입력 상태에서도 같은 키로 동작하도록 event.code로 판단합니다.
+        const tableCommand = !event.shiftKey && !event.altKey
+          && { KeyB: 'bold', KeyI: 'italic', KeyU: 'underline' }[event.code || `Key${key.toUpperCase()}`];
+        if (tableCommand && applyTableCellCommand(tableCommand)) {
+          event.preventDefault();
+          return;
+        }
         if (key === 'g' && findText.value) {
           event.preventDefault();
           if (event.shiftKey) findPrevious();
