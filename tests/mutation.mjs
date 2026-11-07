@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
+import { testJobs } from './test-files.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(HERE, '..');
@@ -117,8 +118,7 @@ for (const candidate of shuffled) {
   chosen.push({ ...candidate, before: text.trim(), after: mutated[candidate.line - 1].trim(), source });
 }
 
-const testFiles = [...JSON.parse(await fs.readFile(path.join(HERE, 'package.json'), 'utf8'))
-  .scripts.test.matchAll(/node (\S+\.mjs)/g)].map((match) => match[1]);
+const jobs = testJobs();
 const work = await fs.mkdtemp(path.join(os.tmpdir(), 'bte-mutant-'));
 
 // 도는 동안 테스트 파일을 고쳐도 결과가 섞이지 않도록 시작할 때의 테스트를 복사해 씁니다.
@@ -144,21 +144,21 @@ const runMutant = (mutant, dir) => new Promise((resolve) => {
     resolve(result);
   };
   const timer = setTimeout(() => finish({ status: 'killed', by: '시간 초과' }), MUTANT_TIMEOUT);
-  for (const file of testFiles) {
-    const child = spawn(process.execPath, [file], { cwd: TESTS, env: { ...process.env, EDITOR_DIR: dir } });
+  for (const { file, name, env } of jobs) {
+    const child = spawn(process.execPath, [file], { cwd: TESTS, env: { ...process.env, ...env, EDITOR_DIR: dir } });
     children.push(child);
     let buffer = '';
     const watch = (chunk) => {
       buffer += chunk;
       const failure = buffer.match(/^FAIL {2}(.+)$/m);
-      if (failure) finish({ status: 'killed', by: `${file}: ${failure[1].trim()}` });
+      if (failure) finish({ status: 'killed', by: `${name}: ${failure[1].trim()}` });
     };
     child.stdout.on('data', watch);
     child.stderr.on('data', (chunk) => { buffer += chunk; });
     child.on('exit', (code) => {
-      if (code !== 0 && code !== null) finish({ status: 'killed', by: `${file}: 종료 코드 ${code}` });
+      if (code !== 0 && code !== null) finish({ status: 'killed', by: `${name}: 종료 코드 ${code}` });
       finished += 1;
-      if (finished === testFiles.length) finish({ status: 'survived' });
+      if (finished === jobs.length) finish({ status: 'survived' });
     });
   }
 });

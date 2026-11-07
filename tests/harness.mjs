@@ -25,6 +25,26 @@ export async function startServer() {
   return { server, base: `http://127.0.0.1:${server.address().port}` };
 }
 
+// run.mjs가 오래 걸리는 파일을 TEST_SHARD="i/n"로 나눠 돌릴 때, 이 조각이 맡을 블록인지 알려 줍니다.
+// withPage 블록마다 한 번 불러 n개 중 하나씩만 실행합니다.
+const [shardIndex, shardCount] = (process.env.TEST_SHARD || '0/1').split('/').map(Number);
+let shardBlock = 0;
+export function inShard() {
+  const mine = shardBlock % shardCount === shardIndex;
+  shardBlock += 1;
+  return mine;
+}
+
+// 요소 안쪽을 마우스로 바로 누릅니다. locator.click()은 부하로 한 번 실패하면 다시 시도하면서
+// 요소를 화면 위쪽 등으로 스크롤하는데, 표가 도구막대 밑으로 올라가면 열 손잡이가 나타나지 않습니다.
+// 높이는 가운데와 위에서 18px 중 위쪽을 누릅니다. 세로로 병합한 칸의 가운데는 행 경계선
+// 위라서, 마우스를 옮기는 사이에 그 자리에 뜬 행 추가(+) 버튼이 눌릴 수 있기 때문입니다.
+export async function mouseClick(page, locator) {
+  await locator.scrollIntoViewIfNeeded();
+  const box = await locator.boundingBox();
+  await page.mouse.click(box.x + box.width / 2, box.y + Math.min(box.height / 2, 18));
+}
+
 export async function launch() {
   return chromium.launch({ args: ['--no-sandbox'] });
 }

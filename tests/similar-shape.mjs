@@ -1,11 +1,12 @@
 // 비슷한 모양 찾아 바꾸기: 숫자 모양(날짜·전화번호)과 ^ _ \명령어 기호를 예시 하나로 일괄 변경한다.
-import { startServer, launch, openEditor, makeReporter } from './harness.mjs';
+import { startServer, launch, openEditor, makeReporter, inShard } from './harness.mjs';
 
 const { server, base } = await startServer();
 const browser = await launch();
 const r = makeReporter();
 
 async function withPage(fn) {
+  if (!inShard()) return;
   const { context, page } = await openEditor(browser, base);
   try {
     await fn(page);

@@ -1,11 +1,12 @@
 // 수정 사항 검증 + 침습적 변경(전체 문서 insertHTML 커밋)에 대한 회귀 검증.
-import { startServer, launch, openEditor, openReplace, makeReporter } from './harness.mjs';
+import { startServer, launch, openEditor, openReplace, makeReporter, inShard } from './harness.mjs';
 
 const { server, base } = await startServer();
 const browser = await launch();
 const r = makeReporter();
 
 async function withPage(opts, fn) {
+  if (!inShard()) return;
   const { context, page } = await openEditor(browser, base, opts);
   try {
     await fn(page);

@@ -1,6 +1,6 @@
 // 표의 행·열을 손잡이나 Shift+Alt 단축키로 고른 뒤, 도구막대 서식 버튼과
 // Ctrl+B·I·U로 고른 칸 전체의 글자 서식과 정렬을 한 번에 바꿉니다.
-import { startServer, launch, openEditor, makeReporter } from './harness.mjs';
+import { startServer, launch, openEditor, makeReporter, mouseClick } from './harness.mjs';
 const { server, base } = await startServer();
 const browser = await launch();
 const r = makeReporter();
@@ -11,7 +11,7 @@ const pressed = (page, command) => page.locator(`[data-command="${command}"]`).g
 const handle = (page, axis, i) => page.locator(`[data-table-select="${axis}"][data-index="${i}"]`);
 const select = async (page, axis, i, source = html) => {
   await page.evaluate(source => T.set(source), source);
-  await page.locator('#editor td').first().click();
+  await mouseClick(page, page.locator('#editor td').first());
   await page.waitForTimeout(80);
   await handle(page, axis, i).click();
   await page.waitForTimeout(60);
@@ -43,6 +43,11 @@ try {
     await page.keyboard.press('Control+z');
     r.check('C10 Ctrl+Z 한 번에 열 전체 되돌림', await cells(page),
       ['항목', '가격', '수량', '사과 빨강', '100', '1', '배', '200', '<br>']);
+    // 되돌리면 편집 UI가 닫혀도 초점은 숨은 손잡이에 남습니다. 그때 키를 눌러도 오류가 없어야 합니다.
+    // 실제 키 입력으로는 초점이 빠지는 시점과 겹쳐야만 나므로 숨은 손잡이에 직접 보냅니다.
+    await page.waitForTimeout(100);
+    await page.evaluate(() => document.querySelector('[data-table-select]')
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', bubbles: true })));
     await page.keyboard.press('Control+y');
     r.check('C11 Ctrl+Y로 다시 실행', (await cells(page))[6], '<i>배</i>');
   });
@@ -77,7 +82,7 @@ try {
   console.log('\n--- 드래그와 단축키로 고르기 ---');
   await withPage(async page => {
     await page.evaluate(source => T.set(source), html);
-    await page.locator('#editor td').first().click();
+    await mouseClick(page, page.locator('#editor td').first());
     await page.waitForTimeout(80);
     const a = await handle(page, 'column', 1).boundingBox(), b = await handle(page, 'column', 2).boundingBox();
     await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
@@ -91,7 +96,7 @@ try {
   });
   await withPage(async page => {
     await page.evaluate(source => T.set(source), html);
-    await page.locator('#editor td').nth(1).click();
+    await mouseClick(page, page.locator('#editor td').nth(1));
     await page.keyboard.press('Shift+Alt+End');
     await page.waitForTimeout(60);
     r.check('K1 Shift+Alt+End로 현재 행 선택', await page.locator('#tableEditLabel').textContent(), '2행 선택');
@@ -102,17 +107,17 @@ try {
     await page.keyboard.press('Shift+ArrowDown');
     r.check('K4 서식을 바꾼 뒤에도 Shift+↓로 이어 고름', await page.locator('#tableEditLabel').textContent(), '2–3행 선택');
     await page.keyboard.press('Escape');
-    await page.locator('#editor td').nth(2).click();
+    await mouseClick(page, page.locator('#editor td').nth(2));
     await page.keyboard.press('Shift+Alt+PageUp');
     await page.waitForTimeout(60);
     r.check('K5 Shift+Alt+PageUp으로 현재 열 선택', await page.locator('#tableEditLabel').textContent(), '3열 선택');
     await page.keyboard.press('Escape');
-    await page.locator('#editor td').nth(0).click();
+    await mouseClick(page, page.locator('#editor td').nth(0));
     await page.keyboard.press('Shift+Alt+PageDown');
     await page.waitForTimeout(60);
     r.check('K6 Shift+Alt+PageDown으로 현재 열 선택', await page.locator('#tableEditLabel').textContent(), '1열 선택');
     await page.keyboard.press('Escape');
-    await page.locator('#editor td').nth(0).click();
+    await mouseClick(page, page.locator('#editor td').nth(0));
     await page.keyboard.press('Shift+Alt+Home');
     await page.waitForTimeout(60);
     r.check('K7 Shift+Alt+Home으로 현재 행 선택', await page.locator('#tableEditLabel').textContent(), '2행 선택');
@@ -147,9 +152,9 @@ try {
     await page.evaluate(() => T.select('100'));
     await page.keyboard.press('Control+b');
     r.check('E8 선택 없이 칸 글자만 고르면 그 글자만 굵게', (await cells(page)).slice(4, 6), ['<b>100</b>', '1']);
-    await page.locator('#editor td').nth(1).click();
+    await mouseClick(page, page.locator('#editor td').nth(1));
     await page.keyboard.press('Shift+Alt+End');
-    await page.locator('#editor p').click();
+    await mouseClick(page, page.locator('#editor p'));
     r.check('E9 본문을 누르면 행 선택이 풀림', await page.locator('#tableMenu').isVisible(), false);
     await page.evaluate(() => T.select('뒤'));
     await page.locator('[data-command="italic"]').click();

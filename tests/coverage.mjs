@@ -7,16 +7,12 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { testJobs } from './test-files.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = process.env.EDITOR_DIR || path.join(HERE, '..');
 const OUT = path.join(HERE, '.coverage');
 const reportOnly = process.argv.includes('--report');
-
-const testFiles = async () => {
-  const pkg = JSON.parse(await fs.readFile(path.join(HERE, 'package.json'), 'utf8'));
-  return [...pkg.scripts.test.matchAll(/node (\S+\.mjs)/g)].map((match) => match[1]);
-};
 
 const runAll = async (files) => {
   // 지난 커버리지 기록만 지웁니다. 같은 폴더의 뮤테이션 결과는 남겨 둡니다.
@@ -28,17 +24,17 @@ const runAll = async (files) => {
   const failed = [];
   const worker = async () => {
     while (queue.length) {
-      const file = queue.shift();
+      const job = queue.shift();
       const code = await new Promise((resolve) => {
-        const child = spawn(process.execPath, [file], {
+        const child = spawn(process.execPath, [job.file], {
           cwd: HERE,
-          env: { ...process.env, COVERAGE_DIR: OUT },
+          env: { ...process.env, ...job.env, COVERAGE_DIR: OUT },
           stdio: ['ignore', 'ignore', 'inherit']
         });
         child.on('exit', resolve);
       });
-      console.log(`${code === 0 ? '완료' : '실패'}  ${file}`);
-      if (code !== 0) failed.push(file);
+      console.log(`${code === 0 ? '완료' : '실패'}  ${job.name}`);
+      if (code !== 0) failed.push(job.name);
     }
   };
   await Promise.all(Array.from({ length: Math.min(files.length, Math.max(2, os.cpus().length >> 1)) }, worker));
@@ -146,7 +142,7 @@ const report = async () => {
 };
 
 if (!reportOnly) {
-  const failed = await runAll(await testFiles());
+  const failed = await runAll(testJobs());
   if (failed.length) console.log(`\n실패한 테스트 파일: ${failed.join(', ')} (커버리지는 실행된 만큼만 집계)`);
 }
 await report();

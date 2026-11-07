@@ -1,4 +1,4 @@
-import { startServer, launch, openEditor, makeReporter } from './harness.mjs';
+import { startServer, launch, openEditor, makeReporter, inShard, mouseClick } from './harness.mjs';
 const { server, base } = await startServer();
 const browser = await launch();
 const r = makeReporter();
@@ -6,7 +6,7 @@ const html = '<p>표 앞 설명</p><table><tbody><tr><th>항목</th><th>가격</
 const read = page => page.evaluate(() => [...T.ed().querySelector('table').rows].map(row => [...row.cells].map(cell => cell.textContent)));
 const active = async (page, source = html) => {
   await page.evaluate(source => T.set(source), source);
-  await page.locator('#editor td').first().click();
+  await mouseClick(page, page.locator('#editor td').first());
   await page.waitForTimeout(80);
 };
 // 메뉴 항목이 닫혀 있으면 표 모서리의 ⋯ 메뉴를 열고 누릅니다.
@@ -25,6 +25,7 @@ const drag = async (page, axis, from, to) => {
   await page.waitForTimeout(80);
 };
 const withPage = async (fn, opts = {}) => {
+  if (!inShard()) return;
   const { page, context } = await openEditor(browser, base, opts);
   try { await fn(page); }
   finally { await context.close(); }
@@ -82,7 +83,7 @@ try {
   });
   await withPage(async page => {
     await active(page);
-    await page.locator('#editor tr').nth(2).locator('td').nth(1).click();
+    await mouseClick(page, page.locator('#editor tr').nth(2).locator('td').nth(1));
     await page.keyboard.press('Shift+Tab');
     await page.keyboard.type('앞칸');
     // 칸을 옮기면 커서는 그 칸의 맨 앞에 놓입니다.
@@ -266,7 +267,7 @@ try {
   await withPage(async page => {
     const source = '<table><tbody><tr><td>첫 표</td></tr></tbody></table><p>사이</p><table><tbody><tr><td>둘째 표</td></tr></tbody></table>';
     await page.evaluate(source => T.set(source), source);
-    await page.locator('#editor td').last().click();
+    await mouseClick(page, page.locator('#editor td').last());
     await act(page, 'delete-table');
     r.check('여러 표 중 현재 표만 삭제', await page.evaluate(() => [...T.ed().querySelectorAll('table')].map(table => table.textContent)), ['첫 표']);
     await page.keyboard.press('Control+z');
@@ -286,7 +287,7 @@ try {
   }, { hasTouch: true });
   await withPage(async page => {
     await page.evaluate(() => T.set('<table><tbody><tr><td>옆 칸</td><td>앞<table><tbody><tr><td>안쪽</td></tr></tbody></table>뒤</td></tr></tbody></table>'));
-    await page.locator('#editor table table td').click();
+    await mouseClick(page, page.locator('#editor table table td'));
     await act(page, 'delete-table');
     r.check('중첩 표는 현재 안쪽 표만 삭제', await page.locator('#editor table').count(), 1);
     r.check('안쪽 표 앞뒤의 셀 내용 보존', await page.evaluate(() => T.ed().querySelector('tr').cells[1].textContent), '앞뒤');
@@ -325,7 +326,7 @@ try {
   const belowTable = '<table><tbody><tr><td>칸</td></tr></tbody></table><p data-table-exit=""><br></p>';
   const pasteBelowTable = async (page, html) => {
     await page.evaluate(source => T.set(source), belowTable);
-    await page.locator('#editor p').last().click();
+    await mouseClick(page, page.locator('#editor p').last());
     await page.evaluate(([h, t]) => T.writeClipboard(h, t), [html, '첫 줄\n\n둘째 줄\n\n\n셋째 줄']);
     await page.keyboard.press('Control+v');
     await page.waitForTimeout(120);
@@ -352,7 +353,7 @@ try {
   }, { noFilePicker: true });
   await withPage(async page => {
     await page.evaluate(source => T.set(source), belowTable);
-    await page.locator('#editor p').last().click();
+    await mouseClick(page, page.locator('#editor p').last());
     await page.keyboard.press('Enter');
     r.check('표 아래 빈 문단에서 Enter하면 빈 줄 추가', await page.locator('#editor > p').count(), 2);
   });
@@ -360,7 +361,7 @@ try {
   const rootShape = page => page.evaluate(() => [...T.ed().childNodes].map(node => node.nodeType === 3 ? `#text:${node.data}` : node.tagName));
   await withPage(async page => {
     await page.evaluate(source => T.set(source), topTable);
-    await page.locator('#editor td').first().click();
+    await mouseClick(page, page.locator('#editor td').first());
     await page.keyboard.press('Home');
     await page.keyboard.press('ArrowUp');
     await page.keyboard.type('위');
@@ -373,7 +374,7 @@ try {
   });
   await withPage(async page => {
     await page.evaluate(source => T.set(source), topTable);
-    await page.locator('#editor td').first().click();
+    await mouseClick(page, page.locator('#editor td').first());
     await page.keyboard.press('Home');
     await page.keyboard.press('ArrowUp');
     await page.keyboard.type('ab');
@@ -384,7 +385,7 @@ try {
   });
   await withPage(async page => {
     await page.evaluate(source => T.set(source), '<div>위<br><table><tbody><tr><td>칸</td></tr></tbody></table>아래</div>');
-    await page.locator('#editor td').first().click();
+    await mouseClick(page, page.locator('#editor td').first());
     await page.keyboard.type('!');
     r.check('div에 갇힌 표를 입력 뒤 최상위로 복구', await rootShape(page), ['P', 'TABLE', 'P']);
     r.check('복구 후 앞뒤 글자 유지', await page.evaluate(() => [...T.ed().children].map(node => node.textContent)), ['위', '칸!', '아래']);
@@ -403,7 +404,7 @@ try {
   });
   await withPage(async page => {
     await page.evaluate(source => T.set(source), topTable);
-    await page.locator('#editor td').first().click();
+    await mouseClick(page, page.locator('#editor td').first());
     await page.keyboard.press('Home');
     await page.keyboard.press('Enter');
     r.check('맨 위 표 첫 칸 맨 앞 Enter는 표 위에 문단 추가', await rootShape(page), ['P', 'TABLE', 'P']);
@@ -416,7 +417,7 @@ try {
   });
   await withPage(async page => {
     await page.evaluate(source => T.set(source), '<p>앞</p>' + topTable);
-    await page.locator('#editor td').first().click();
+    await mouseClick(page, page.locator('#editor td').first());
     await page.keyboard.press('Home');
     await page.keyboard.press('Enter');
     r.check('앞에 문단이 있으면 첫 칸 Enter는 칸 안 줄바꿈', await page.evaluate(() => T.ed().children.length), 3);
