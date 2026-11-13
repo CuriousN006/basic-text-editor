@@ -1202,6 +1202,9 @@
       <button type="button" role="menuitem" data-table-edit="row-after">아래에 행 삽입</button>
       <button type="button" role="menuitem" data-table-edit="column-before">왼쪽에 열 삽입</button>
       <button type="button" role="menuitem" data-table-edit="column-after">오른쪽에 열 삽입</button>
+      <div id="tableMergeSeparator" class="table-menu-separator" role="separator"></div>
+      <button type="button" role="menuitem" data-table-edit="merge-cells" title="고른 칸을 하나로 합칩니다">셀 병합</button>
+      <button type="button" role="menuitem" data-table-edit="split-cells" title="병합한 칸을 원래 칸 수로 되돌립니다">셀 병합 해제</button>
       <div class="table-menu-separator" role="separator"></div>
       <button type="button" role="menuitem" data-table-edit="delete-row" class="danger">행 삭제</button>
       <button type="button" role="menuitem" data-table-edit="delete-column" class="danger">열 삭제</button>
@@ -1277,6 +1280,7 @@
     <button class="mini-format-button" type="button" data-selection-command="italic" aria-pressed="false" title="기울임 (Ctrl+I)"><i>I</i></button>
     <button class="mini-format-button" type="button" data-selection-command="underline" aria-pressed="false" title="밑줄 (Ctrl+U)"><u>U</u></button>
     <button class="mini-format-button" type="button" data-selection-command="strikeThrough" aria-pressed="false" title="취소선"><s>S</s></button>
+    <button id="selectionMergeCells" class="mini-format-button" type="button" title="드래그한 칸을 하나로 병합" hidden>셀 병합</button>
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
@@ -1321,6 +1325,7 @@
       const supportedBlockFormats = new Set(['P', 'H1', 'H2', 'H3', 'BLOCKQUOTE', 'PRE']);
       const selectionToolbar = document.getElementById('selectionToolbar');
       const selectionCommandButtons = [...document.querySelectorAll('[data-selection-command]')];
+      const selectionMergeCells = document.getElementById('selectionMergeCells');
       const tableButton = document.getElementById('tableButton');
       const tablePicker = document.getElementById('tablePicker');
       const tableGrid = document.getElementById('tableGrid');
@@ -2088,7 +2093,9 @@
       const tableAddColumn = document.getElementById('tableAddColumn');
       const tableInsertGuide = document.getElementById('tableInsertGuide');
       // menu: 모서리 버튼으로 연 표 메뉴('table'). 행·열 메뉴는 selection이 있으면 열립니다.
-      const emptyTableEditState = (table = null, cell = null) => ({ table, cell, selection: null, drag: null, insertion: null, menu: null });
+      // cellRange: 마우스로 끌어 고른 두 모서리 칸(병합 대상). 누른 칸과 뗀 칸입니다.
+      const emptyTableEditState = (table = null, cell = null) => ({ table, cell, selection: null, drag: null, insertion: null, menu: null, cellRange: null });
+      let pendingCellDrag = null;
       let tableEditState = emptyTableEditState();
       let tableControlsFrame = null;
 
@@ -2189,6 +2196,174 @@
         return nextModel.grid[targetRow]?.[targetCol]?.cell || table.querySelector('th,td');
       };
 
+      // ===== 셀 병합 =====
+      // 칸 목록(entries)을 표에 다시 씁니다. 병합 크기는 속성으로, 순서는 열 번호로 정합니다.
+      const writeTableEntries = (rows, entries) => {
+        entries.forEach(entry => {
+          for (const [attribute, value] of [['rowspan', entry.rowSpan], ['colspan', entry.colSpan]]) {
+            if (value > 1) entry.cell.setAttribute(attribute, value);
+            else entry.cell.removeAttribute(attribute);
+          }
+        });
+        rows.forEach((row, y) => row.replaceChildren(...entries
+          .filter(entry => entry.row === y)
+          .sort((a, b) => a.col - b.col)
+          .map(entry => entry.cell)));
+      };
+
+      // 병합 칸을 반만 걸치는 사각형은 만들 수 없으므로, 걸친 칸이 모두 들어올 때까지 넓힙니다.
+      const expandTableRect = (model, rect) => {
+        const next = { ...rect };
+        for (let changed = true; changed;) {
+          changed = false;
+          model.entries.forEach(entry => {
+            const bottom = entry.row + entry.rowSpan - 1, right = entry.col + entry.colSpan - 1;
+            if (entry.row > next.bottom || bottom < next.top || entry.col > next.right || right < next.left) return;
+            if (entry.row < next.top) { next.top = entry.row; changed = true; }
+            if (bottom > next.bottom) { next.bottom = bottom; changed = true; }
+            if (entry.col < next.left) { next.left = entry.col; changed = true; }
+            if (right > next.right) { next.right = right; changed = true; }
+          });
+        }
+        return next;
+      };
+
+      const entriesInTableRect = (model, rect) => model.entries.filter(entry => (
+        entry.row >= rect.top && entry.row <= rect.bottom && entry.col >= rect.left && entry.col <= rect.right
+      ));
+
+      const tableCellHasContent = (cell) => Boolean(
+        String(cell.textContent || '').replace(/[​﻿]/g, '').trim()
+        || cell.querySelector('img,hr,table,iframe,video,audio,canvas,svg')
+      );
+      const TABLE_CELL_BLOCK_TAGS = new Set(['P', 'DIV', 'UL', 'OL', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'PRE', 'TABLE', 'HR']);
+
+      // 사각형 안의 칸을 왼쪽 위 칸 하나로 합칩니다. 내용은 읽는 순서대로 줄을 바꿔 잇습니다.
+      const mergeTableCells = (table, requested) => {
+        const model = tableGridModel(table);
+        const rect = expandTableRect(model, requested);
+        const inside = entriesInTableRect(model, rect).sort((a, b) => a.row - b.row || a.col - b.col);
+        if (inside.length < 2) return null;
+        const anchor = inside[0];
+        const doc = table.ownerDocument;
+        inside.slice(1).forEach(entry => {
+          if (!tableCellHasContent(entry.cell)) return;
+          if (!tableCellHasContent(anchor.cell)) anchor.cell.replaceChildren();
+          else {
+            if (anchor.cell.lastChild?.nodeName === 'BR') anchor.cell.lastChild.remove();
+            const between = [anchor.cell.lastChild, entry.cell.firstChild];
+            // 문단끼리는 이미 줄이 나뉘므로 줄바꿈을 더 넣지 않습니다.
+            if (!between.some(node => node?.nodeType === Node.ELEMENT_NODE && TABLE_CELL_BLOCK_TAGS.has(node.tagName))) {
+              anchor.cell.appendChild(doc.createTextNode('\n'));
+            }
+          }
+          while (entry.cell.firstChild) anchor.cell.appendChild(entry.cell.firstChild);
+        });
+        anchor.cell.normalize();
+        const merged = { ...anchor, rowSpan: rect.bottom - rect.top + 1, colSpan: rect.right - rect.left + 1 };
+        let entries = model.entries.filter(entry => !inside.includes(entry)).map(entry => ({ ...entry }));
+        entries.push(merged);
+
+        // 어떤 칸도 시작하지 않는 행·열은 병합 뒤에 남은 빈 줄입니다. 그대로 두면
+        // 높이 0인 행이 남고 손잡이도 겹치므로, 그 줄을 없애고 병합 크기를 줄입니다.
+        let rows = [...model.rows];
+        let columns = model.columns;
+        for (let y = rows.length - 1; y > 0; y -= 1) {
+          if (entries.some(entry => entry.row === y)) continue;
+          entries.forEach(entry => {
+            if (entry.row > y) entry.row -= 1;
+            else if (entry.row + entry.rowSpan > y) entry.rowSpan -= 1;
+          });
+          rows.splice(y, 1)[0].remove();
+        }
+        for (let x = columns - 1; x > 0; x -= 1) {
+          if (entries.some(entry => entry.col === x)) continue;
+          entries.forEach(entry => {
+            if (entry.col > x) entry.col -= 1;
+            else if (entry.col + entry.colSpan > x) entry.colSpan -= 1;
+          });
+          columns -= 1;
+        }
+        if (columns !== model.columns) table.querySelectorAll(':scope > colgroup').forEach(group => group.remove());
+        writeTableEntries(rows, entries);
+        return { cell: merged.cell, count: inside.length };
+      };
+
+      // 사각형 안의 병합 칸을 원래 칸 수로 되돌립니다. 내용은 왼쪽 위 칸에 남습니다.
+      const splitTableCells = (table, requested) => {
+        const model = tableGridModel(table);
+        const rect = expandTableRect(model, requested);
+        const targets = entriesInTableRect(model, rect).filter(entry => entry.rowSpan > 1 || entry.colSpan > 1);
+        if (!targets.length) return null;
+        const entries = model.entries.map(entry => ({ ...entry }));
+        targets.forEach(target => {
+          const entry = entries.find(item => item.cell === target.cell);
+          for (let y = target.row; y < target.row + target.rowSpan; y += 1) {
+            for (let x = target.col; x < target.col + target.colSpan; x += 1) {
+              if (y === target.row && x === target.col) continue;
+              // 제목 행 안에서 풀린 칸은 제목 칸으로 둡니다.
+              const neighbor = model.rows[y].cells[0];
+              const tag = y === target.row || !neighbor ? target.cell.tagName : neighbor.tagName;
+              const cell = table.ownerDocument.createElement(tag.toLowerCase());
+              cell.innerHTML = '<br>';
+              entries.push({ cell, row: y, col: x, rowSpan: 1, colSpan: 1 });
+            }
+          }
+          entry.rowSpan = 1;
+          entry.colSpan = 1;
+        });
+        writeTableEntries(model.rows, entries);
+        return { cell: targets[0].cell, count: targets.length };
+      };
+
+      // 병합·해제의 대상입니다. 손잡이로 고른 행·열, 드래그로 걸친 칸, 커서가 있는 칸 순으로 봅니다.
+      const tableCellTarget = () => {
+        const { table, cell, selection } = tableEditState;
+        if (!table || !editor.contains(table)) return null;
+        const model = tableGridModel(table);
+        let picked = [];
+        const { cellRange } = tableEditState;
+        if (selection) picked = selectedTableEntries(model, selection);
+        // 마우스로 끈 칸은 누른 칸과 뗀 칸으로 압니다. 글자 선택 범위로는 빈 칸에서
+        // 끝난 드래그와, 세 번 클릭해 다음 칸의 맨 앞까지 잡힌 선택을 구분할 수 없습니다.
+        else if (cellRange?.every(item => table.contains(item))) {
+          picked = model.entries.filter(entry => cellRange.includes(entry.cell));
+        } else {
+          const native = window.getSelection();
+          const range = native?.rangeCount && !native.isCollapsed ? native.getRangeAt(0) : null;
+          if (range && table.contains(range.commonAncestorContainer)) {
+            const touched = model.entries.filter(entry => {
+              // 경계에 닿기만 한 칸(세 번 클릭하면 다음 칸의 맨 앞까지 선택됨)은 뺍니다.
+              const inner = document.createRange();
+              inner.selectNodeContents(entry.cell);
+              return range.compareBoundaryPoints(Range.START_TO_END, inner) > 0
+                && range.compareBoundaryPoints(Range.END_TO_START, inner) < 0;
+            });
+            // 글자 선택은 읽는 순서로 이어지므로 사이에 낀 칸이 모두 걸립니다. 드래그를
+            // 시작한 칸과 끝낸 칸을 두 모서리로 하는 사각형만 고른 것으로 봅니다.
+            picked = touched.length ? [touched[0], touched[touched.length - 1]] : [];
+          }
+          if (!picked.length) picked = model.entries.filter(entry => entry.cell === cell);
+        }
+        if (!picked.length) return null;
+        const rect = expandTableRect(model, {
+          top: Math.min(...picked.map(entry => entry.row)),
+          bottom: Math.max(...picked.map(entry => entry.row + entry.rowSpan - 1)),
+          left: Math.min(...picked.map(entry => entry.col)),
+          right: Math.max(...picked.map(entry => entry.col + entry.colSpan - 1))
+        });
+        const inside = entriesInTableRect(model, rect);
+        return {
+          rect,
+          entries: inside,
+          dragged: !selection && picked.length > 1,
+          cells: inside.length,
+          merged: inside.filter(entry => entry.rowSpan > 1 || entry.colSpan > 1).length,
+          // rowspan은 thead·tbody 경계를 넘을 수 없습니다.
+          crossesSection: new Set(model.rows.slice(rect.top, rect.bottom + 1).map(row => row.parentElement)).size > 1
+        };
+      };
+
       const hideTableControls = () => {
         tableEditState = emptyTableEditState();
         tableControls.hidden = true;
@@ -2277,8 +2452,13 @@
         };
         model.rows.forEach((row, i) => addHandle('row', i, Math.max(view.left, rect.left - 26), (rows[i] + rows[i+1]) / 2 - 12));
         for (let i = 0; i < model.columns; i += 1) addHandle('column', i, (columns[i] + columns[i+1]) / 2 - 12, rect.top - 26);
-        if (selection) {
-          selectedTableEntries(model, selection).forEach(entry => {
+        // 칸을 드래그하면 글자 선택은 사이에 낀 칸까지 칠해지므로, 실제로 병합될
+        // 사각형을 따로 표시합니다.
+        const draggedTarget = selection ? null : tableCellTarget();
+        const highlighted = selection ? selectedTableEntries(model, selection)
+          : draggedTarget?.dragged && draggedTarget.cells > 1 ? draggedTarget.entries : [];
+        if (highlighted.length) {
+          highlighted.forEach(entry => {
             const cellRect = entry.cell.getBoundingClientRect();
             const top = Math.max(cellRect.top, view.top), bottom = Math.min(cellRect.bottom, view.bottom);
             const left = Math.max(cellRect.left, view.left), right = Math.min(cellRect.right, view.right);
@@ -2325,6 +2505,14 @@
             const axis = action === 'delete-table' ? 'table' : action.includes('row') ? 'row' : 'column';
             button.hidden = mode !== 'table' && axis !== mode;
           });
+          // 병합은 둘 이상의 칸을 골랐을 때, 해제는 병합 칸이 들어 있을 때만 보입니다.
+          const target = tableCellTarget();
+          const mergeItem = tableMenu.querySelector('[data-table-edit="merge-cells"]');
+          const splitItem = tableMenu.querySelector('[data-table-edit="split-cells"]');
+          mergeItem.hidden = !(target && target.cells > 1);
+          splitItem.hidden = !(target && target.merged);
+          mergeItem.textContent = target && target.cells > 1 ? `셀 ${target.cells}개 병합` : '셀 병합';
+          document.getElementById('tableMergeSeparator').hidden = mergeItem.hidden && splitItem.hidden;
           const plural = selection && count > 1 ? ` ${count}개` : '';
           tableMenu.querySelector('[data-table-edit="delete-row"]').textContent = `행${plural} 삭제`;
           tableMenu.querySelector('[data-table-edit="delete-column"]').textContent = `열${plural} 삭제`;
@@ -2363,25 +2551,12 @@
         scheduleTableControls();
       };
 
-      const editTableFromControls = (action, explicitIndex = null) => {
-        const { table, cell, selection } = tableEditState;
-        if (!table || !editor.contains(table)) return;
-        const model = tableGridModel(table);
-        const entry = model.entries.find(entry => entry.cell === cell) || model.entries[0];
-        const deleteTable = action === 'delete-table';
-        const rowAxis = deleteTable || action.includes('row');
-        const axis = rowAxis ? 'row' : 'column';
-        const start = deleteTable ? 0 : selection?.axis === axis ? Math.min(selection.anchor, selection.end) : (rowAxis ? entry.row : entry.col);
-        const selectedAxis = selection?.axis === axis;
-        const end = selectedAxis ? Math.max(selection.anchor, selection.end) : start + (rowAxis ? entry.rowSpan : entry.colSpan) - 1;
-        const remove = action.startsWith('delete');
-        const index = deleteTable ? 0 : explicitIndex ?? (action.endsWith('after') ? end + 1 : start);
-        const count = deleteTable ? model.rows.length : explicitIndex === null && selectedAxis ? end - start + 1 : 1;
+      // 표의 복제본을 고치고 한 번에 반영합니다. mutate는 커서를 둘 칸을 돌려줍니다.
+      const commitTableEdit = (table, mutate) => {
         const descriptor = nodePathWithin(editor, table);
         let result = null;
-        runBulkEdit(root => {
-          const target = nodeAtPath(root, descriptor.path);
-          result = changeTableStructure(target, axis, index, count, remove);
+        return runBulkEdit(root => {
+          result = mutate(nodeAtPath(root, descriptor.path));
           return result ? 1 : 0;
         }, {
           preserveViewport: true,
@@ -2399,6 +2574,50 @@
             } else hideTableControls();
           }
         });
+      };
+
+      const editTableCellSpans = (merge) => {
+        const { table } = tableEditState;
+        const target = tableCellTarget();
+        if (!target || !table) return;
+        if (merge && target.cells < 2) {
+          showToast('병합할 칸을 둘 이상 고르세요. 칸을 드래그하거나 행·열 손잡이로 고를 수 있습니다.');
+          return;
+        }
+        if (merge && target.crossesSection) {
+          showToast('제목 행과 본문 행에 걸친 칸은 병합할 수 없습니다.');
+          return;
+        }
+        let count = 0;
+        const changed = commitTableEdit(table, clone => {
+          const outcome = (merge ? mergeTableCells : splitTableCells)(clone, target.rect);
+          count = outcome?.count || 0;
+          return outcome?.cell || null;
+        });
+        showToast(!changed ? (merge ? '병합할 칸이 없습니다.' : '병합된 칸이 없습니다.')
+          : merge ? `칸 ${count}개를 하나로 병합했습니다. Ctrl+Z로 되돌릴 수 있습니다.`
+            : `병합 칸 ${count}개를 해제했습니다. Ctrl+Z로 되돌릴 수 있습니다.`);
+      };
+
+      const editTableFromControls = (action, explicitIndex = null) => {
+        if (action === 'merge-cells' || action === 'split-cells') {
+          editTableCellSpans(action === 'merge-cells');
+          return;
+        }
+        const { table, cell, selection } = tableEditState;
+        if (!table || !editor.contains(table)) return;
+        const model = tableGridModel(table);
+        const entry = model.entries.find(entry => entry.cell === cell) || model.entries[0];
+        const deleteTable = action === 'delete-table';
+        const rowAxis = deleteTable || action.includes('row');
+        const axis = rowAxis ? 'row' : 'column';
+        const start = deleteTable ? 0 : selection?.axis === axis ? Math.min(selection.anchor, selection.end) : (rowAxis ? entry.row : entry.col);
+        const selectedAxis = selection?.axis === axis;
+        const end = selectedAxis ? Math.max(selection.anchor, selection.end) : start + (rowAxis ? entry.rowSpan : entry.colSpan) - 1;
+        const remove = action.startsWith('delete');
+        const index = deleteTable ? 0 : explicitIndex ?? (action.endsWith('after') ? end + 1 : start);
+        const count = deleteTable ? model.rows.length : explicitIndex === null && selectedAxis ? end - start + 1 : 1;
+        commitTableEdit(table, target => changeTableStructure(target, axis, index, count, remove));
         // "2행을 삭제"는 2번째 행으로 읽히므로 개수를 분명히 씁니다.
         showToast(deleteTable ? '표를 삭제했습니다. Ctrl+Z로 복원할 수 있습니다.'
           : `${rowAxis ? '행' : '열'} ${count}개를 ${remove ? '삭제' : '추가'}했습니다. Ctrl+Z로 되돌릴 수 있습니다.`);
@@ -2661,9 +2880,28 @@
         const cell = event.target.closest('td,th');
         if (cell) activateTableControls(cell.closest('table'), cell, true);
         else hideTableControls();
+        pendingCellDrag = cell && event.button === 0 ? cell : null;
+      });
+      // 한 칸에서 눌러 같은 표의 다른 칸에서 떼면 그 두 칸이 병합할 사각형의 모서리입니다.
+      document.addEventListener('pointerup', event => {
+        const from = pendingCellDrag;
+        pendingCellDrag = null;
+        const { table } = tableEditState;
+        if (!from || !table || from.closest('table') !== table) return;
+        const to = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('td,th');
+        if (!to || to === from || to.closest('table') !== table) return;
+        tableEditState.cellRange = [from, to];
+        renderTableControls();
+      });
+      // 글자를 치거나 커서를 옮기면 끌어 고른 칸은 풀립니다.
+      editor.addEventListener('keydown', () => {
+        if (!tableEditState.cellRange) return;
+        tableEditState.cellRange = null;
+        scheduleTableControls();
       });
       // 서식 버튼은 고른 행·열에 적용되어야 하므로 눌러도 선택을 풀지 않습니다.
-      const keepsTableSelection = (target) => Boolean(target.closest?.('.formatbar [data-command], [data-action="clear-format"]'));
+      // 드래그한 칸을 병합하는 버튼도 어느 표의 칸인지 알아야 하므로 마찬가지입니다.
+      const keepsTableSelection = (target) => Boolean(target.closest?.('.formatbar [data-command], [data-action="clear-format"], #selectionMergeCells'));
       document.addEventListener('pointerdown', event => {
         if (!editor.contains(event.target) && !event.composedPath().includes(tableControls)
           && !keepsTableSelection(event.target)) hideTableControls();
@@ -2747,6 +2985,13 @@
 
         savedRange = range.cloneRange();
         updateSelectionToolbarState();
+        // 표의 칸을 둘 이상 드래그했을 때만 병합 버튼을 보입니다.
+        const dragged = range.commonAncestorContainer;
+        const draggedTable = (dragged.nodeType === Node.ELEMENT_NODE ? dragged : dragged.parentElement)?.closest('table');
+        const mergeTarget = draggedTable && draggedTable === tableEditState.table && !tableEditState.selection
+          ? tableCellTarget()
+          : null;
+        selectionMergeCells.hidden = !(mergeTarget && mergeTarget.cells > 1);
         selectionToolbar.classList.add('visible');
         const toolbarRect = selectionToolbar.getBoundingClientRect();
         const left = Math.min(
@@ -5275,6 +5520,8 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
             if (startPosition === 0 && endPosition === 0) {
               if (item.character === markers.paragraph) query += '^p';
               else if (item.character === markers.line) query += '^l';
+              // 칸막이는 찾을 내용으로 쓸 수 없는 표식이라 옮기지 않습니다.
+              else if (item.character === markers.cell) continue;
               else if (item.character === '\t') query += '^t';
               else if (item.character === '^') query += '^^';
               else query += item.character;
@@ -5456,19 +5703,21 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       const pickSpecialSearchMarkers = (root = editor, sources = []) => {
         const occupied = new Set([...(root.textContent || ''), ...sources.join('')]);
         const available = [];
-        for (let code = 0xE000; code <= 0xF8FF && available.length < 2; code += 1) {
+        for (let code = 0xE000; code <= 0xF8FF && available.length < 3; code += 1) {
           const character = String.fromCharCode(code);
           if (!occupied.has(character)) available.push(character);
         }
         // 사용자 영역 전체가 들어 있는 극단적인 문서도 처리할 수 있도록 나머지
         // BMP에서 원고에 없는 글자를 찾습니다. 서로게이트와 줄 구조 문자는 뺍니다.
-        for (let code = 1; code <= 0xFFFF && available.length < 2; code += 1) {
+        for (let code = 1; code <= 0xFFFF && available.length < 3; code += 1) {
           if ([9, 10, 13].includes(code) || (code >= 0xD800 && code <= 0xDFFF)) continue;
           const character = String.fromCharCode(code);
           if (!occupied.has(character) && !available.includes(character)) available.push(character);
         }
-        if (available.length < 2) throw new Error('검색용 구조 표식을 만들 수 없습니다.');
-        return { paragraph: available[0], line: available[1] };
+        if (available.length < 3) throw new Error('검색용 구조 표식을 만들 수 없습니다.');
+        // cell은 표의 칸 사이에 넣는 칸막이입니다. 찾을 내용에 쓸 수 없는 글자이므로
+        // 어떤 검색도 칸 경계를 넘어 일치하지 않습니다.
+        return { paragraph: available[0], line: available[1], cell: available[2] };
       };
 
       const parseSpecialCodes = (source, markers) => {
@@ -5550,6 +5799,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       const buildSpecialSearchModel = (root = editor, markers = pickSpecialSearchMarkers(root)) => {
         const units = getParagraphUnits(root);
         const items = [];
+        let previousCell = null;
 
         const addTextNode = (node) => {
           for (let offset = 0; offset < node.nodeValue.length; offset += 1) {
@@ -5579,6 +5829,19 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
             });
             return;
           }
+          // 표의 칸 사이에는 칸막이를 둡니다. 없으면 앞 칸의 끝 글자와 다음 칸의
+          // 첫 글자가 이어진 낱말로 찾아지고, 그것을 바꾸면 두 칸이 하나로 합쳐져
+          // 표의 칸 수가 줄어듭니다.
+          if (['TD', 'TH'].includes(node.tagName)) {
+            if (previousCell) {
+              items.push({
+                character: markers.cell,
+                start: getNodePoint(previousCell, true),
+                end: getNodePoint(node, false)
+              });
+            }
+            previousCell = node;
+          }
           [...node.childNodes].forEach((child) => addElement(child, placeholderBreak));
         };
 
@@ -5589,6 +5852,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
             && unit.firstElementChild?.tagName === 'BR'
             ? unit.firstElementChild
             : null;
+          previousCell = null;
           addElement(unit, placeholderBreak);
 
           if (index < units.length - 1) {
@@ -5596,6 +5860,15 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
               character: markers.paragraph,
               start: getNodePoint(unit, true),
               end: getNodePoint(units[index + 1], false)
+            });
+          } else {
+            // 마지막 문단 뒤에도 문단 나눔이 하나 있습니다. 없으면 '나^p'처럼 문단
+            // 끝에 붙여 찾을 때 마지막 문단만 빠져, 문서 끝에서만 결과가 달라집니다.
+            // 이 나눔은 지울 수 없고(뒤에 합칠 문단이 없음) 바꿀 내용만 그 앞에 들어갑니다.
+            items.push({
+              character: markers.paragraph,
+              start: getNodePoint(unit, true),
+              end: { node: root, offset: root.childNodes.length }
             });
           }
         });
@@ -5781,6 +6054,11 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         'P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'PRE', 'LI', 'TD', 'TH', 'DIV'
       ]);
 
+      // 표의 칸은 나눌 수 있는 블록이 아닙니다. 문단처럼 쪼개면 같은 태그의
+      // 형제가 생겨 칸 수가 늘고 표 모양이 무너집니다. 칸 안에서 Enter를 직접
+      // 누를 때도 칸이 늘지 않고 줄만 바뀌므로 붙여넣기도 그 동작에 맞춥니다.
+      const UNSPLITTABLE_BLOCK_TAGS = new Set(['TD', 'TH']);
+
       const blockAncestor = (node, root) => {
         let element = node && node.nodeType === Node.ELEMENT_NODE ? node : node?.parentNode;
         for (; element && element !== root; element = element.parentNode) {
@@ -5800,36 +6078,121 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       const ensureBlockPlaceholders = (root) => {
         const selector = [...BULK_BLOCK_TAGS].join(',').toLowerCase();
         [...root.querySelectorAll(selector)].forEach((block) => {
-          if (!block.childNodes.length) block.appendChild(root.ownerDocument.createElement('br'));
+          // 문단을 글자 맨 앞·맨 끝에서 나누면 길이 0인 텍스트 노드만 남습니다.
+          // 자식 수만 세면 이런 블록을 채워진 것으로 보고 건너뛰어, 높이가 0인
+          // 보이지 않는 문단(<p></p>)이 됩니다. 글자도 요소도 없으면 빈 블록입니다.
+          if (block.firstElementChild || block.textContent) return;
+          block.replaceChildren(root.ownerDocument.createElement('br'));
         });
       };
 
       // 블록 경계를 넘는 범위를 지울 때는 두 블록을 하나로 합쳐야 합니다.
       // Range.deleteContents는 경계 사이에 아무것도 없으면 블록을 그대로 두기 때문에
       // (예: ^p 를 다른 글자로 바꾸기) 합치는 일을 직접 해 줍니다.
-      const deleteRangeMergingBlocks = (range, root) => {
+      //
+      // 표나 구분선처럼 문단과 합칠 수 없는 덩어리가 한쪽에 있으면 경계가 그대로
+      // 남습니다. 그때는 글자를 넣을 자리를 이웃 문단 안으로 옮기고, 경계가 어느
+      // 쪽에 남았는지 돌려줍니다. 옮기지 않으면 바꾼 글자가 문단 밖(편집기
+      // 최상위)에 떨어집니다.
+      //  - 'before': 남은 경계 바로 앞 문단의 끝에 넣습니다.
+      //  - 'after': 남은 경계 바로 뒤 문단의 처음에 넣습니다.
+      //  - 'between': 앞뒤가 모두 문단이 아니어서 그 사이 최상위에 넣습니다.
+      const topLevelNode = (node, root) => {
+        let current = node === root ? null : node;
+        while (current && current.parentNode !== root) current = current.parentNode;
+        return current;
+      };
+
+      // atDocumentEnd는 구간이 문서 끝의 문단 나눔까지 닿는 찾아 바꾸기입니다.
+      // 그 나눔도 표 옆의 경계처럼 지워지지 않고 남습니다.
+      const deleteRangeMergingBlocks = (range, root, atDocumentEnd = false) => {
         const startBlock = blockAncestor(range.startContainer, root);
         const endBlock = blockAncestor(range.endContainer, root);
+        const startTop = topLevelNode(range.startContainer, root);
+        const endTop = topLevelNode(range.endContainer, root);
         range.deleteContents();
-        if (!startBlock || !endBlock || startBlock === endBlock) return;
-        // 복제본은 문서에 붙어 있지 않으므로 isConnected로 판단하면 안 됩니다.
-        // 편집 대상 트리 안에 아직 남아 있는지만 확인합니다.
-        if (!root.contains(startBlock) || !root.contains(endBlock)) return;
+        if (atDocumentEnd) {
+          if (startBlock && root.contains(startBlock)) {
+            range.setStart(startBlock, startBlock.childNodes.length);
+            range.collapse(true);
+            return 'before';
+          }
+          range.selectNodeContents(root);
+          range.collapse(false);
+          return 'between';
+        }
+        if (startBlock === endBlock && (startBlock || startTop === endTop)) return null;
 
-        // 빈 문단 자리표시용 <br>은 합칠 때 방해가 되므로 지웁니다.
-        if (startBlock.lastChild?.nodeName === 'BR') startBlock.lastChild.remove();
-        const joinIndex = startBlock.childNodes.length;
-        while (endBlock.firstChild) startBlock.appendChild(endBlock.firstChild);
-        endBlock.remove();
-        range.setStart(startBlock, joinIndex);
-        range.collapse(true);
+        if (startBlock && endBlock) {
+          // 복제본은 문서에 붙어 있지 않으므로 isConnected로 판단하면 안 됩니다.
+          // 편집 대상 트리 안에 아직 남아 있는지만 확인합니다.
+          if (!root.contains(startBlock) || !root.contains(endBlock)) return null;
+          // 표의 칸을 지우면 그 줄의 칸 수가 줄어 표 모양이 무너집니다.
+          // 넣을 글자는 앞 문단의 끝에 둡니다.
+          if (UNSPLITTABLE_BLOCK_TAGS.has(endBlock.tagName)) {
+            range.setStart(startBlock, startBlock.childNodes.length);
+            range.collapse(true);
+            return null;
+          }
+
+          // 빈 문단 자리표시용 <br>은 합칠 때 방해가 되므로 지웁니다.
+          if (startBlock.lastChild?.nodeName === 'BR') startBlock.lastChild.remove();
+          const joinIndex = startBlock.childNodes.length;
+          while (endBlock.firstChild) startBlock.appendChild(endBlock.firstChild);
+          // 하나뿐이던 문단이 빠져나간 인용구는 빈 껍데기로 남기지 않습니다.
+          let emptied = endBlock.parentNode;
+          endBlock.remove();
+          while (emptied && emptied !== root && !emptied.firstChild && !emptied.contains(startBlock)) {
+            const parent = emptied.parentNode;
+            emptied.remove();
+            emptied = parent;
+          }
+          range.setStart(startBlock, joinIndex);
+          range.collapse(true);
+          return null;
+        }
+
+        // 한쪽 끝이 편집기 최상위를 직접 가리키면(문서 끝까지 선택 등) 남는 경계가
+        // 있는지 알 수 없으므로 자리를 옮기지 않습니다.
+        if (!startTop || !endTop) return null;
+        if (startBlock && root.contains(startBlock)) {
+          range.setStart(startBlock, startBlock.childNodes.length);
+          range.collapse(true);
+          return 'before';
+        }
+        if (endBlock && root.contains(endBlock)) {
+          range.setStart(endBlock, 0);
+          range.collapse(true);
+          return 'after';
+        }
+        if (endTop && endTop.parentNode === root) {
+          range.setStartBefore(endTop);
+          range.collapse(true);
+          return 'between';
+        }
+        return null;
+      };
+
+      // 합칠 수 없는 경계가 남았을 때 넣을 토큰을 고릅니다. 남은 경계가 문단 나눔
+      // 하나의 몫을 하므로, 그쪽 끝의 문단 나눔 토큰은 넣지 않습니다. 그대로 넣으면
+      // ^p를 ^p^p로 바꿀 때 빈 문단이 하나가 아니라 둘 생깁니다.
+      const tokensAroundKeptBoundary = (tokens, kept, range, root) => {
+        if (!kept) return tokens;
+        const pending = [...tokens];
+        if (kept === 'between') {
+          // 새 문단을 하나 만들면 그 앞뒤로 경계가 둘이 됩니다.
+          if (!pending.length || (pending.length === 1 && pending[0].type === 'paragraph')) return [];
+          const paragraph = root.ownerDocument.createElement('p');
+          range.insertNode(paragraph);
+          range.setStart(paragraph, 0);
+          range.collapse(true);
+        }
+        if (kept !== 'before' && pending[0]?.type === 'paragraph') pending.shift();
+        if (kept !== 'after' && pending[pending.length - 1]?.type === 'paragraph') pending.pop();
+        return pending;
       };
 
       // 커서 위치에서 문단을 둘로 나눕니다. ^p 치환에 필요합니다.
-      // 표의 칸은 나눌 수 있는 블록이 아닙니다. 문단처럼 쪼개면 같은 태그의
-      // 형제가 생겨 칸 수가 늘고 표 모양이 무너집니다. 칸 안에서 Enter를 직접
-      // 누를 때도 칸이 늘지 않고 줄만 바뀌므로 붙여넣기도 그 동작에 맞춥니다.
-      const UNSPLITTABLE_BLOCK_TAGS = new Set(['TD', 'TH']);
 
       const splitBlockAtRange = (range, root) => {
         const block = blockAncestor(range.startContainer, root);
@@ -5957,6 +6320,9 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       // 서식을 따릅니다. 서식 경계에 걸친 구간(<b>2024</b>년)을 지우면 그 서식
       // 요소도 함께 사라져서, 예전에는 바꾼 글자에서 굵게가 빠졌습니다.
       // 붙여넣기처럼 settings 없이 부르면 삽입 위치의 서식을 그대로 따릅니다.
+      const NOTHING_REPLACED = false;
+      const UNREMOVABLE_BREAK_NOTICE = '표 옆이나 문서 끝의 문단 나눔은 지울 수 없어';
+
       const replaceRangeWithTokens = (range, tokens, root, findSettings = null) => {
         const settings = findSettings || { apply: [], remove: [] };
         const inherited = findSettings && !range.collapsed ? formatStateAtRangeStart(range, root) : null;
@@ -5979,7 +6345,30 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           }
         }
 
-        deleteRangeMergingBlocks(range, root);
+        // 지울 것도 넣을 것도 없었는지 알아볼 표본입니다. 바꿀 내용이 비어 있고
+        // 구간이 블록을 넘을 때만 필요하며, 구간 둘레만 세므로 문서 크기와 무관합니다.
+        const probeTops = !tokens.length && range.startContainer !== range.endContainer
+          ? [topLevelNode(range.startContainer, root), topLevelNode(range.endContainer, root)]
+          : null;
+        const probe = () => [
+          root.childNodes.length,
+          ...probeTops.map((node) => (node?.nodeType === Node.ELEMENT_NODE && root.contains(node)
+            ? node.getElementsByTagName('*').length
+            : -1))
+        ].join(':');
+        const hadText = probeTops ? Boolean(range.toString()) : true;
+        const before = probeTops ? probe() : '';
+
+        // 문서 끝의 문단 나눔까지 닿는 구간은 찾아 바꾸기에서만 생깁니다.
+        const atDocumentEnd = Boolean(findSettings)
+          && !range.collapsed
+          && range.endContainer === root
+          && range.endOffset === root.childNodes.length;
+        const kept = deleteRangeMergingBlocks(range, root, atDocumentEnd);
+        tokens = tokensAroundKeptBoundary(tokens, kept, range, root);
+        // 표 옆이나 문서 끝의 문단 나눔만 지우려 한 경우입니다. 그 나눔은 지울 수
+        // 없어 문서가 그대로이므로, 바꾼 것으로 세지 않도록 알립니다.
+        if (kept && probeTops && !hadText && before === probe()) return NOTHING_REPLACED;
 
         // 빈 문단의 자리표시 <br>은 글자를 넣는 순간 필요 없어집니다.
         // 남겨 두면 붙여넣은 내용 뒤에 빈 줄이 하나 더 보입니다.
@@ -6117,6 +6506,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       const displaySearchContext = (value, markers) => String(value)
         .replaceAll(markers.paragraph, ' ¶ ')
         .replaceAll(markers.line, ' ↵ ')
+        .replaceAll(markers.cell, ' | ')
         .replace(/\s+/g, ' ');
 
       // 검색어가 들어 있는 문장을 우선 보여 주고, 문장부호가 없는 긴 문단은
@@ -6125,6 +6515,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         const isBoundary = (character) => (
           character === markers.paragraph
           || character === markers.line
+          || character === markers.cell
           || /[.!?。！？]/.test(character || '')
         );
         const startLimit = Math.max(0, index - 72);
@@ -7447,7 +7838,8 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         [...matches].sort((left, right) => right.start - left.start).forEach((match) => {
           const range = createRangeFromModel(model, match.start, match.length);
           if (!range) return;
-          apply(range, match);
+          // 지울 수 없는 문단 나눔만 가리켜 아무것도 바뀌지 않은 일치는 세지 않습니다.
+          if (apply(range, match) === NOTHING_REPLACED) return;
           count += 1;
         });
         return count;
@@ -7518,20 +7910,23 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         markers,
         anchor
       ) => {
-        if (!parsedQuery.text) return { count: 0, truncated: false };
+        if (!parsedQuery.text) return { count: 0, truncated: false, skipped: 0 };
         let truncated = false;
+        let skipped = 0;
         const count = runBulkEdit((root) => {
           const model = buildSpecialSearchModel(root, markers);
           const collected = collectMatches(model, parsedQuery.text);
           truncated = collected.truncated;
           const matches = matchesInReplacementScope(collected.matches, anchor);
-          return applyMatchesDescending(model, matches, (range) => {
-            if (formattingOnly) applyFormatSettingsToRange(range, root, settings);
-            else replaceRangeWithTokens(range, parsedReplacement.tokens, root, settings);
+          const applied = applyMatchesDescending(model, matches, (range) => {
+            if (formattingOnly) return applyFormatSettingsToRange(range, root, settings);
+            return replaceRangeWithTokens(range, parsedReplacement.tokens, root, settings);
           });
+          skipped = matches.length - applied;
+          return applied;
         }, { preserveViewport: true });
         specialSearchState = { query: '', nextIndex: 0, index: -1, range: null };
-        return { count, truncated };
+        return { count, truncated, skipped };
       };
 
       // 화면에서 선택된 구간이 모델의 몇 번째 일치 구간인지 찾습니다.
@@ -7732,7 +8127,6 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
 
         const length = parsedQuery.text.length;
         const tokens = parsedReplacement.tokens;
-        let insertedLength = parsedReplacement.text.length;
         let particle = null;
 
         // 조사 교정도 모델 텍스트를 기준으로 봅니다. 예전에는 같은 텍스트 노드
@@ -7750,7 +8144,6 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
               length: adjustment.prefix.length + adjustment.current.length,
               insertion: adjustment.prefix + adjustment.desired
             };
-            insertedLength += particle.insertion.length;
           }
         }
         const particleAdjusted = Boolean(particle);
@@ -7767,19 +8160,28 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           if (particleRange) {
             replaceRangeWithTokens(particleRange, [{ type: 'text', value: particle.insertion }], root, settings);
           }
-          replaceRangeWithTokens(range, tokens, root, settings);
-          return 1;
+          return replaceRangeWithTokens(range, tokens, root, settings) === NOTHING_REPLACED ? 0 : 1;
         });
 
+        // 다음 찾기는 바꾼 자리 바로 뒤에서 시작합니다. 넣은 글자 수로 셈하면 표
+        // 옆의 문단 경계처럼 지워지지 않고 남는 것을 놓쳐, 같은 경계를 다시 찾아
+        // 누를 때마다 글자가 늘어납니다. 문서 길이가 실제로 변한 만큼으로 셈합니다.
+        const consumed = length + (particle ? particle.length : 0);
+        const delta = changed
+          ? buildSpecialSearchModel(editor, markers).text.length - liveModel.text.length
+          : 0;
         specialSearchState = {
           query: stateKey,
-          nextIndex: index + Math.max(0, formattingOnly ? length : insertedLength),
+          nextIndex: Math.max(index, index + consumed + delta),
           index: -1,
           range: null
         };
         findNext();
 
-        if (!changed) return;
+        if (!changed) {
+          showToast(`${UNREMOVABLE_BREAK_NOTICE} 건너뛰었습니다.`);
+          return;
+        }
         if (formattingOnly) showToast('글자는 유지하고 선택한 서식만 변경했습니다.');
         else if (particleAdjusted) showToast('단어와 조사를 받침에 맞게 바꿨습니다.');
         else if (parsedQuery.usesCodes || parsedReplacement.usesCodes) showToast('특수기호를 포함해 바꿨습니다.');
@@ -7830,7 +8232,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         const anchor = replacementScopeAnchor(liveModel, stateKey);
 
         if (parsedQuery.usesCodes || parsedReplacement.usesCodes) {
-          const { count, truncated } = replaceAllSpecial(
+          const { count, truncated, skipped } = replaceAllSpecial(
             parsedQuery,
             parsedReplacement,
             settings,
@@ -7840,7 +8242,9 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           );
           showToast((formattingOnly
             ? `${count}개 항목의 서식을 변경했습니다.`
-            : `${count}개 항목을 특수기호 규칙으로 바꿨습니다.`) + truncationNotice(truncated));
+            : `${count}개 항목을 특수기호 규칙으로 바꿨습니다.`)
+            + (skipped ? ` ${UNREMOVABLE_BREAK_NOTICE} ${skipped}개는 그대로 두었습니다.` : '')
+            + truncationNotice(truncated));
           updateFindCount();
           return;
         }
@@ -7952,6 +8356,13 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           saveSelection();
           showSelectionToolbar();
         });
+      });
+
+      selectionMergeCells.addEventListener('mousedown', (event) => event.preventDefault());
+      selectionMergeCells.addEventListener('click', () => {
+        restoreSelection();
+        hideSelectionToolbar();
+        editTableCellSpans(true);
       });
 
       document.querySelectorAll('[data-action]').forEach((button) => {

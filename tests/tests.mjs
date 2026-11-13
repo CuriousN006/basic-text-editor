@@ -347,7 +347,8 @@ await withPage({}, async (page) => {
   await openReplace(page, { find: '^p', replace: '-' });
   await page.click('[data-find="replace-all"]');
   await page.waitForTimeout(120);
-  r.check('R12 ^p 검색 후 치환', await page.evaluate(() => T.text()), '가-나');
+  // 마지막 문단 뒤에도 문단 나눔이 있으므로 문서 끝에도 바꾼 글자가 붙는다.
+  r.check('R12 ^p 검색 후 치환', await page.evaluate(() => T.text()), '가-나-');
 });
 
 // 조사 자동 교정: 모두 바꾸기와 단일 바꾸기가 같은 결과여야 한다.
@@ -1046,14 +1047,14 @@ await withPage({}, async (page) => {
   await page.click('[data-find="replace-all"]');
   await page.waitForTimeout(120);
   r.check('R27 제목+문단 병합은 앞 블록을 따른다',
-    await page.evaluate(() => T.html()), '<h1>제목 — 본문</h1>');
+    await page.evaluate(() => T.html()), '<h1>제목 — 본문 — </h1>');
 });
 await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<ul><li>하나</li><li>둘</li></ul>'));
   await openReplace(page, { find: '^p', replace: '/' });
   await page.click('[data-find="replace-all"]');
   await page.waitForTimeout(120);
-  r.check('R28 목록 항목 병합', await page.evaluate(() => T.html()), '<ul><li>하나/둘</li></ul>');
+  r.check('R28 목록 항목 병합', await page.evaluate(() => T.html()), '<ul><li>하나/둘/</li></ul>');
 });
 await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<p>가</p><ul><li>항목</li></ul>'));
@@ -1742,7 +1743,7 @@ await withPage({}, async (page) => {
   await page.click('[data-find="replace-all"]');
   r.check('V3 ^p는 실제 문단 경계만 바꿈',
     await page.evaluate(() => T.html()),
-    '<p>앞\uE000뒤X다음</p>');
+    '<p>앞\uE000뒤X다음X</p>');
 });
 await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<p>앞\uE000뒤</p><p>다음</p>'));
@@ -2393,7 +2394,7 @@ await withPage({}, async (page) => {
   });
   await page.click('[data-find="replace-all"]');
   await page.waitForTimeout(250);
-  r.check('X14 특수기호 아래쪽 범위', await page.evaluate(() => T.text()), '하나\n\n둘\n셋');
+  r.check('X14 특수기호 아래쪽 범위', await page.evaluate(() => T.text()), '하나\n\n둘\n셋\n');
   r.check('X14 앞쪽 문단 경계는 유지', await page.evaluate(() => T.blocks()), 'P P');
 });
 
@@ -2424,14 +2425,15 @@ await withPage({}, async (page) => {
   await page.keyboard.press('Control+f');
   await page.fill('#findText', '^p');
   await page.waitForTimeout(260);
-  r.check('X18 ^p 개수 표시', await findCountText(page), '2개');
+  // 문단 사이 둘과 마지막 문단 뒤 하나.
+  r.check('X18 ^p 개수 표시', await findCountText(page), '3개');
   await page.keyboard.press('Enter');
   await page.keyboard.press('F3');
   await page.waitForTimeout(260);
-  r.check('X19 ^p 두 번째', await findCountText(page), '2 / 2');
+  r.check('X19 ^p 두 번째', await findCountText(page), '2 / 3');
   await page.keyboard.press('Shift+F3');
   await page.waitForTimeout(260);
-  r.check('X20 ^p 역방향', await findCountText(page), '1 / 2');
+  r.check('X20 ^p 역방향', await findCountText(page), '1 / 3');
 });
 
 // 찾을 내용을 지우면 표시도 사라지고, 닫으면 초기화된다.
@@ -2585,6 +2587,161 @@ for (const scenario of [
           : !T.ed().textContent.includes(find), scenario), true);
   });
 }
+
+/* =================== ^p 치환의 경계 =================== */
+
+console.log('\n--- ^p 치환의 경계 ---');
+
+const BOUNDARY_TABLE = '<table><tbody><tr><td>가</td><td>나</td></tr><tr><td>다</td><td>라</td></tr></tbody></table>';
+// 표는 [표]로 줄여 비교합니다. 표가 조금이라도 바뀌면 줄여지지 않아 그대로 드러납니다.
+const boundaryHtml = (page) => page.evaluate((table) => T.html().replaceAll(table, '[표]'), BOUNDARY_TABLE);
+const replaceAllIn = async (page, source, find, replace) => {
+  await page.evaluate((html) => T.set(html), source);
+  await openReplace(page, { find, replace, particles: false });
+  await page.click('[data-find="replace-all"]');
+  await page.waitForTimeout(80);
+  const html = await boundaryHtml(page);
+  await page.keyboard.press('Escape');
+  return html;
+};
+
+// Y1. 문단의 맨 앞·맨 끝에서 나눈 빈 문단도 높이가 있어야 한다.
+// 예전에는 길이 0인 텍스트 노드만 남은 문단을 채워진 것으로 보아 <p></p>가 되었고,
+// 높이가 0이라 같은 ^p인데 빈 줄이 생겼다 안 생겼다 했다.
+await withPage({}, async (page) => {
+  for (const [name, source, find, replace, expected] of [
+    ['문단 끝에서 나눔', '<p>가.</p><p>나.</p>', '.', '.^p',
+      '<p>가.</p><p><br></p><p>나.</p><p><br></p>'],
+    ['문단 처음에서 나눔', '<p>-가 -나</p>', '-', '^p-',
+      '<p><br></p><p>-가 </p><p>-나</p>'],
+    ['빈 줄이 있는 줄바꿈', '<p>가\n\n나</p>', '^l', '^p',
+      '<p>가</p><p><br></p><p>나</p>'],
+    ['끝에 남은 줄바꿈', '<p>가\n나\n</p>', '^l', '^p',
+      '<p>가</p><p>나</p><p><br></p>']
+  ]) {
+    r.check(`Y1 ${name}`, await replaceAllIn(page, source, find, replace), expected);
+    r.check(`Y1 ${name}: 보이지 않는 문단 없음`, await page.evaluate(() => (
+      [...T.ed().children].filter((block) => block.getBoundingClientRect().height < 1).length
+    )), 0);
+  }
+});
+
+// Y2. 표·구분선 옆의 문단 경계는 지울 수 없다. 바꾼 글자는 이웃 문단 안에 들어가야
+// 하고(예전에는 문단 밖 최상위에 떨어졌다), 남은 경계가 ^p 하나의 몫을 한다.
+await withPage({}, async (page) => {
+  const around = `<p>앞</p>${BOUNDARY_TABLE}<p>끝</p>`;
+  const twoTables = `${BOUNDARY_TABLE}${BOUNDARY_TABLE}`;
+  for (const [name, source, find, replace, expected] of [
+    ['표 앞뒤 ^p → 글자', around, '^p', 'X', '<p>앞X</p>[표]<p>X끝X</p>'],
+    ['표 앞뒤 ^p → ^p', around, '^p', '^p', '<p>앞</p>[표]<p>끝</p>'],
+    ['표 앞뒤 ^p → ^p^p', around, '^p', '^p^p', '<p>앞</p><p><br></p>[표]<p><br></p><p>끝</p><p><br></p>'],
+    ['표 앞 문단째 바꿈', around, '앞^p', 'X', '<p>X</p>[표]<p>끝</p>'],
+    ['표 뒤 문단째 바꿈', around, '^p끝', 'X', '<p>앞</p>[표]<p>X</p>'],
+    ['표와 표 사이 ^p → 글자', twoTables, '^p', 'X', '[표]<p>X</p>[표]<p>X</p>'],
+    ['표와 표 사이 ^p → ^p', twoTables, '^p', '^p', '[표][표]'],
+    ['표와 표 사이 ^p → ^p^p', twoTables, '^p', '^p^p', '[표]<p><br></p>[표]<p><br></p>'],
+    ['구분선 앞뒤 ^p → 글자', '<p>가</p><hr><p>나</p>', '^p', 'X', '<p>가X</p><hr><p>X나X</p>']
+  ]) {
+    r.check(`Y2 ${name}`, await replaceAllIn(page, source, find, replace), expected);
+  }
+});
+
+// Y3. 표 옆 경계를 하나씩 바꿀 때 같은 경계에 머물지 않고 다음으로 넘어간다.
+await withPage({}, async (page) => {
+  await page.evaluate((table) => T.set(`<p>앞</p>${table}<p>끝</p>`), BOUNDARY_TABLE);
+  await openReplace(page, { find: '^p', replace: 'X', particles: false });
+  for (let click = 0; click < 3; click += 1) {
+    await page.click('[data-find="replace"]');
+    await page.waitForTimeout(80);
+  }
+  r.check('Y3 표 옆 ^p 하나씩 바꾸기', await boundaryHtml(page), '<p>앞X</p>[표]<p>X끝</p>');
+  await page.click('[data-find="replace"]');
+  await page.waitForTimeout(80);
+  r.check('Y3 문서 끝 ^p도 한 번만 바꿈', await boundaryHtml(page), '<p>앞X</p>[표]<p>X끝X</p>');
+});
+
+// Y4. 검색은 표의 칸 경계를 넘지 않는다. 예전에는 앞 칸의 끝 글자와 다음 칸의 첫
+// 글자가 이어진 낱말로 찾아졌고, 바꾸면 두 칸이 합쳐져 표의 칸 수가 줄었다.
+await withPage({}, async (page) => {
+  r.check('Y4 옆 칸으로 이어지는 낱말은 찾지 않음',
+    await replaceAllIn(page, BOUNDARY_TABLE, '가나', 'X'), '[표]');
+  r.check('Y4 다음 줄로 이어지는 낱말은 찾지 않음',
+    await replaceAllIn(page, BOUNDARY_TABLE, '나다', 'X'), '[표]');
+  r.check('Y4 칸 안의 낱말은 그대로 바꿈',
+    await replaceAllIn(page, BOUNDARY_TABLE, '나', 'X'),
+    '<table><tbody><tr><td>가</td><td>X</td></tr><tr><td>다</td><td>라</td></tr></tbody></table>');
+  await page.evaluate((table) => T.set(table), BOUNDARY_TABLE);
+  await page.click('[data-action="replace"]');
+  await page.fill('#findText', '가나');
+  await page.waitForTimeout(250);
+  r.check('Y4 개수 표시도 없음', await page.textContent('#findCount'), '없음');
+});
+
+// Y5. 하나뿐이던 문단이 앞 문단에 합쳐져 빠져나간 인용구는 빈 껍데기로 남지 않는다.
+await withPage({}, async (page) => {
+  r.check('Y5 빈 인용구 정리',
+    await replaceAllIn(page, '<p>다</p><blockquote><p>가</p></blockquote><p>끝</p>', '^p', 'X'),
+    '<p>다X가X끝X</p>');
+  r.check('Y5 문단이 남은 인용구는 유지',
+    await replaceAllIn(page, '<p>다</p><blockquote><p>가</p><p>나</p></blockquote>', '다^p', 'X'),
+    '<p>X가</p><blockquote><p>나</p></blockquote>');
+});
+
+// Y7. 마지막 문단 뒤에도 문단 나눔이 있어, 문단 끝에 붙여 찾는 검색이 문서 끝에서도 같다.
+await withPage({}, async (page) => {
+  r.check('Y7 마지막 문단도 나^p로 찾음',
+    await replaceAllIn(page, '<p>가나</p><p>다나</p>', '나^p', 'X^p'), '<p>가X</p><p>다X</p>');
+  r.check('Y7 문서 끝 ^p → ^p^p',
+    await replaceAllIn(page, '<p>가</p><p>나</p>', '^p', '^p^p'),
+    '<p>가</p><p><br></p><p>나</p><p><br></p>');
+  r.check('Y7 끝의 빈 문단 줄이기',
+    await replaceAllIn(page, '<p>가</p><p><br></p>', '^p^p', '^p'), '<p>가</p>');
+  r.check('Y7 표로 끝나는 문서',
+    await replaceAllIn(page, BOUNDARY_TABLE, '^p', 'X'), '[표]<p>X</p>');
+});
+
+// Y8. 지울 수 없는 문단 나눔(표 옆·문서 끝)은 바꾼 개수에 넣지 않고 따로 알린다.
+await withPage({}, async (page) => {
+  r.check('Y8 문서 끝은 그대로',
+    await replaceAllIn(page, '<p>가</p><p>나</p><p>다</p>', '^p', ''), '<p>가나다</p>');
+  r.check('Y8 바꾼 개수와 건너뛴 개수', await page.evaluate(() => T.toast()),
+    '2개 항목을 특수기호 규칙으로 바꿨습니다. 표 옆이나 문서 끝의 문단 나눔은 지울 수 없어 1개는 그대로 두었습니다.');
+  r.check('Y8 표 옆은 그대로',
+    await replaceAllIn(page, `<p>앞</p>${BOUNDARY_TABLE}`, '^p', ''), '<p>앞</p>[표]');
+  r.check('Y8 바꾼 것이 없으면 0개', await page.evaluate(() => T.toast()),
+    '0개 항목을 특수기호 규칙으로 바꿨습니다. 표 옆이나 문서 끝의 문단 나눔은 지울 수 없어 2개는 그대로 두었습니다.');
+  await page.evaluate(() => T.ed().focus());
+  await page.keyboard.press('Control+z');
+  await page.waitForTimeout(80);
+  r.check('Y8 바뀐 것이 없으면 실행 취소 기록도 없음', await boundaryHtml(page), '<p>앞</p>[표]');
+
+  await page.evaluate(() => T.set('<p>가</p>'));
+  await openReplace(page, { find: '^p', replace: '', particles: false });
+  await page.click('[data-find="replace"]');
+  await page.click('[data-find="replace"]');
+  await page.waitForTimeout(80);
+  r.check('Y8 하나씩 바꿀 때도 알림', await page.evaluate(() => T.toast()),
+    '표 옆이나 문서 끝의 문단 나눔은 지울 수 없어 건너뛰었습니다.');
+});
+
+// Y6. 문단에서 표의 칸까지 걸쳐 선택하고 붙여넣어도 칸이 사라지지 않고,
+// 붙여넣은 글자는 문단 안에 들어간다.
+await withPage({}, async (page) => {
+  await page.evaluate((table) => {
+    T.set(`<p>앞글</p>${table}`);
+    const range = document.createRange();
+    range.setStart(T.ed().querySelector('p').firstChild, 1);
+    range.setEnd(T.ed().querySelector('td').firstChild, 1);
+    const selection = getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }, BOUNDARY_TABLE);
+  await page.evaluate(() => T.writeClipboard('', 'Z'));
+  await page.keyboard.press('Control+v');
+  await page.waitForTimeout(200);
+  r.check('Y6 표 칸까지 선택하고 붙여넣기', await page.evaluate(() => T.html()),
+    '<p>앞Z</p><table><tbody><tr><td><br></td><td>나</td></tr><tr><td>다</td><td>라</td></tr></tbody></table>');
+});
 
 const failed = r.summary();
 await browser.close();

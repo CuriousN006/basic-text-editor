@@ -258,7 +258,8 @@ try {
   await withPage(async page => {
     await active(page, merged);
     await handle(page, 'column', 1).click();
-    r.check('열 메뉴에는 열 항목만 표시', await page.locator('#tableMenu [data-table-edit]:visible').evaluateAll(items => items.map(item => item.dataset.tableEdit)), ['column-before', 'column-after', 'delete-column']);
+    // 고른 열에 병합 칸이 걸쳐 있으므로 병합과 해제가 함께 보입니다.
+    r.check('열 메뉴에는 열 항목과 셀 병합만 표시', await page.locator('#tableMenu [data-table-edit]:visible').evaluateAll(items => items.map(item => item.dataset.tableEdit)), ['column-before', 'column-after', 'merge-cells', 'split-cells', 'delete-column']);
     await act(page, 'delete-table');
     r.check('병합 표도 한 번에 삭제', await page.locator('#editor table').count(), 0);
     await page.keyboard.press('Control+z');
@@ -298,7 +299,7 @@ try {
     await active(page);
     await drag(page, 'row', 1, 2);
     r.check('여러 행 선택 시 삭제 항목에 개수 표시', await page.locator('[data-table-edit="delete-row"]').textContent(), '행 2개 삭제');
-    r.check('행 메뉴에는 행 항목만 표시', await page.locator('#tableMenu [data-table-edit]:visible').evaluateAll(items => items.map(item => item.dataset.tableEdit)), ['row-before', 'row-after', 'delete-row']);
+    r.check('행 메뉴에는 행 항목과 셀 병합만 표시', await page.locator('#tableMenu [data-table-edit]:visible').evaluateAll(items => items.map(item => item.dataset.tableEdit)), ['row-before', 'row-after', 'merge-cells', 'delete-row']);
     await page.keyboard.press('Escape');
     r.check('Esc로 행 메뉴 닫기', await page.locator('#tableMenu').isVisible(), false);
     r.check('Esc 뒤 표는 그대로', await page.locator('#editor tr').count(), 4);

@@ -72,6 +72,7 @@ EDITOR_DIR=/tmp/baseline npm test
 - `similar-shape.mjs` — 비슷한 모양 찾아 바꾸기: 숫자 자리·0 채우기·두 자리 연도, 첨자·LaTeX 기호, 이름·경로·이모티콘 제외, 조사 교정 검증
 - `save-file-name.mjs` — 이름 없는 문서를 저장할 때 첫 줄로 고르는 파일 이름(다운로드·저장 창·복구한 초안)과 HTML·DOCX 제목 검증
 - `table-format.mjs` — 손잡이·`Shift+Alt` 단축키로 고른 행·열에 서식 버튼과 `Ctrl+B`·`I`·`U`를 한 번에 적용, 병합 칸·제목 칸·빈 칸, 메뉴 위치
+- `table-merge.mjs` — 실제 마우스 드래그와 손잡이로 고른 칸의 셀 병합·병합 해제, 내용 잇기, 이미 병합된 칸, 실행 취소
 - `ui-buttons.mjs` — 서식 제거·실행 취소 버튼, 링크 미리보기(주소 복사·닫힘·위치), 인용 버튼, 파일 선택 창 열기·저장, DOCX 서식
 - `coverage.mjs` — 테스트가 실행하는 코드 범위 측정(`node coverage.mjs`)
 - `mutation.mjs` — 코드에 작은 버그를 심어 테스트가 잡는지 확인(`node mutation.mjs`)

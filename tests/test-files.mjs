@@ -13,6 +13,7 @@ export const TEST_FILES = [
   { file: 'drafts.mjs' },
   { file: 'save-file-name.mjs' },
   { file: 'table-format.mjs' },
+  { file: 'table-merge.mjs' },
   { file: 'link-paste-half-window.mjs' },
   { file: 'clipboard-spaces.mjs' },
   { file: 'quote-paste.mjs' },
