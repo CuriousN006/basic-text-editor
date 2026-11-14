@@ -180,7 +180,8 @@ try {
   });
   await withPage(async page => {
     await set(page, merged);
-    await mouseClick(page, cellAt(page, 0, 0));
+    // 병합 셀의 중앙에는 내부 열 경계의 열 추가 버튼이 나타날 수 있습니다.
+    await cellAt(page, 0, 0).click({ position: { x: 24, y: 18 } });
     await act(page, 'split-cells');
     r.check('가로 병합 해제 시 제목 행의 새 칸은 제목 칸', await page.evaluate(() => (
       [...T.ed().querySelector('tr').cells].map(cell => `${cell.tagName}:${cell.textContent}`)
