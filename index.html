@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <title>오프라인 리치 라이터</title>
   <style>
     :root {
@@ -58,6 +58,30 @@
     .filebar {
       border-bottom: 1px solid #edf0f3;
     }
+
+    .file-actions { display: contents; }
+    .mobile-only { display: none; }
+
+    .plain-paste-dialog {
+      width: min(420px, calc(100% - 24px));
+      max-height: calc(var(--mobile-height, 100dvh) - 24px);
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+      color: var(--text);
+      box-shadow: var(--shadow);
+    }
+
+    .plain-paste-dialog::backdrop { background: rgb(15 23 42 / .35); }
+    .plain-paste-dialog label { display: block; margin-bottom: 8px; font-weight: 700; }
+    .plain-paste-dialog textarea {
+      width: 100%;
+      min-height: 80px;
+      font: inherit;
+      resize: vertical;
+    }
+    .plain-paste-dialog .find-actions { margin-top: 8px; }
 
     .brand {
       margin-right: 8px;
@@ -1032,25 +1056,100 @@
       border: 0;
     }
 
-    @media (max-width: 720px) {
-      .brand { width: 100%; }
+    @media screen and (max-width: 720px), screen and (pointer: coarse) and (max-height: 540px) {
+      body {
+        position: relative;
+        height: var(--mobile-height, 100dvh);
+        padding: env(safe-area-inset-top) env(safe-area-inset-right)
+          env(safe-area-inset-bottom) env(safe-area-inset-left);
+      }
+
+      .mobile-only { display: inline-block; }
+      .filebar, .formatbar { padding: 3px 8px; gap: 3px; }
+      .brand { flex: 1; min-width: 0; font-size: 14px; }
+      .toolbar-button, .toolbar-select { min-height: 44px; min-width: 44px; }
+      .file-actions { display: none; }
+      .file-actions.is-expanded {
+        display: grid;
+        flex-basis: 100%;
+        grid-template-columns: repeat(auto-fit, minmax(126px, 1fr));
+        gap: 3px;
+        max-height: calc(var(--mobile-height, 100dvh) * .33);
+        overflow: auto;
+        overscroll-behavior: contain;
+      }
+      .formatbar { flex-wrap: nowrap; overflow-x: auto; }
+      .formatbar > * { flex: none; }
+      .formatbar.is-expanded {
+        flex-wrap: wrap;
+        max-height: calc(var(--mobile-height, 100dvh) * .4);
+        overflow-y: auto;
+        overscroll-behavior: contain;
+      }
+      .formatbar:not(.is-expanded) [data-mobile-extra], .topbar .separator { display: none; }
+
       .editor-shell { flex-direction: column; }
       .find-results-panel {
         order: 2;
-        flex: 0 0 min(34vh, 260px);
+        min-height: 0;
+        flex: 0 0 min(25%, 190px);
         width: 100%;
         border-top: 1px solid var(--line);
         border-right: 0;
         box-shadow: 0 -4px 16px rgba(32, 33, 36, .06);
         z-index: 19;
       }
-      .workspace { order: 1; padding: 0 0 70px; }
+      .find-results-header { min-height: 0; padding: 5px 10px; }
+      .workspace { order: 1; min-height: 0; padding: 0; scroll-padding-block: 12px; }
       .page {
         min-height: 100%;
-        padding: 40px 24px 90px;
+        display: flex;
+        flex-direction: column;
+        padding: 16px 28px 40px;
         box-shadow: none;
       }
-      .findbar { top: 150px; }
+      #editor { flex: 1; min-height: 0; }
+      #editor table { table-layout: auto; }
+      .findbar {
+        position: static;
+        flex: 0 1 auto;
+        max-height: 55%;
+        width: auto;
+        margin: 4px 6px 0;
+        padding: 6px;
+        overflow: auto;
+        overscroll-behavior: contain;
+      }
+      .find-input, .table-direct input { font-size: 16px; }
+      .find-row, .find-options { margin-bottom: 4px; }
+      .find-actions .toolbar-button, .find-icon-button { min-height: 44px; }
+      .find-icon-button, .table-picker-close { min-width: 44px; min-height: 44px; }
+      .table-grid, .table-size-label { display: none; }
+      .table-picker {
+        max-width: calc(100vw - 16px);
+        max-height: calc(var(--mobile-height, 100dvh) - 16px);
+        overflow: auto;
+      }
+      .table-menu {
+        max-height: calc(var(--mobile-height, 100dvh) - 16px);
+        overflow: auto;
+      }
+      .table-menu button, .symbol-button, .link-preview-copy { min-height: 44px; }
+      .symbol-picker, .symbol-picker.resized {
+        min-height: 0;
+        max-height: min(520px, calc(var(--mobile-height, 100dvh) - 16px));
+      }
+      .statusbar {
+        position: static;
+        flex: none;
+        justify-content: space-between;
+        border-radius: 0;
+        box-shadow: none;
+        padding: 4px 8px;
+      }
+      #fileName { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+      #count { white-space: nowrap; }
+      .toast { position: absolute; bottom: 28px; width: max-content; max-width: calc(100% - 24px); }
     }
 
     @media print {
@@ -1067,21 +1166,25 @@
   <header class="topbar">
     <div class="filebar">
       <span class="brand">오프라인 리치 라이터</span>
-      <button class="toolbar-button" type="button" data-action="new" title="새 문서">새 문서</button>
-      <button class="toolbar-button" type="button" data-action="open" title="마크다운·HTML·텍스트 열기">파일 열기</button>
-      <button class="toolbar-button" type="button" data-action="save-html" title="HTML로 저장 (Ctrl+S)">HTML 저장</button>
-      <button class="toolbar-button" type="button" data-action="save-md" title="마크다운으로 저장">MD 저장</button>
-      <button class="toolbar-button" type="button" data-action="save-docx" title="Microsoft Word 문서로 저장">DOCX 저장</button>
-      <span class="separator" aria-hidden="true"></span>
-      <button class="toolbar-button primary" type="button" data-action="copy-all" title="문서 전체를 서식 있게 복사">전체 서식 복사</button>
-      <button class="toolbar-button" type="button" data-action="print" title="인쇄 또는 PDF 저장">인쇄</button>
+      <button id="mobileFilesButton" class="toolbar-button mobile-only" type="button" aria-controls="fileActions" aria-expanded="false">파일</button>
+      <button id="mobileToolsButton" class="toolbar-button mobile-only" type="button" aria-controls="formatbar" aria-expanded="false">도구</button>
+      <div id="fileActions" class="file-actions">
+        <button class="toolbar-button" type="button" data-action="new" title="새 문서">새 문서</button>
+        <button class="toolbar-button" type="button" data-action="open" title="마크다운·HTML·텍스트 열기">파일 열기</button>
+        <button class="toolbar-button" type="button" data-action="save-html" title="HTML로 저장 (Ctrl+S)">HTML 저장</button>
+        <button class="toolbar-button" type="button" data-action="save-md" title="마크다운으로 저장">MD 저장</button>
+        <button class="toolbar-button" type="button" data-action="save-docx" title="Microsoft Word 문서로 저장">DOCX 저장</button>
+        <span class="separator" aria-hidden="true"></span>
+        <button class="toolbar-button primary" type="button" data-action="copy-all" title="문서 전체를 서식 있게 복사">전체 서식 복사</button>
+        <button class="toolbar-button" type="button" data-action="print" title="인쇄 또는 PDF 저장">인쇄</button>
+      </div>
       <input id="fileInput" class="sr-only" type="file" accept=".md,.markdown,.txt,.html,.htm,text/markdown,text/plain,text/html">
     </div>
-    <div class="formatbar" aria-label="서식 도구">
+    <div id="formatbar" class="formatbar" aria-label="서식 도구">
       <button class="toolbar-button" type="button" data-command="undo" title="실행 취소 (Ctrl+Z)">↶</button>
       <button class="toolbar-button" type="button" data-command="redo" title="다시 실행 (Ctrl+Y)">↷</button>
       <span class="separator" aria-hidden="true"></span>
-      <select id="blockFormat" class="toolbar-select" title="문단 종류">
+      <select id="blockFormat" class="toolbar-select" title="문단 종류" data-mobile-extra>
         <option value="P">본문</option>
         <option value="H1">제목 1</option>
         <option value="H2">제목 2</option>
@@ -1094,22 +1197,23 @@
       <button class="toolbar-button" type="button" data-command="underline" aria-pressed="false" title="밑줄 (Ctrl+U)"><u>U</u></button>
       <button class="toolbar-button" type="button" data-command="strikeThrough" aria-pressed="false" title="취소선"><s>S</s></button>
       <span class="separator" aria-hidden="true"></span>
-      <button class="toolbar-button" type="button" data-command="justifyLeft" aria-pressed="false" title="왼쪽 정렬">왼쪽</button>
-      <button class="toolbar-button" type="button" data-command="justifyCenter" aria-pressed="false" title="가운데 정렬">가운데</button>
-      <button class="toolbar-button" type="button" data-command="justifyRight" aria-pressed="false" title="오른쪽 정렬">오른쪽</button>
+      <button class="toolbar-button" type="button" data-command="justifyLeft" aria-pressed="false" title="왼쪽 정렬" data-mobile-extra>왼쪽</button>
+      <button class="toolbar-button" type="button" data-command="justifyCenter" aria-pressed="false" title="가운데 정렬" data-mobile-extra>가운데</button>
+      <button class="toolbar-button" type="button" data-command="justifyRight" aria-pressed="false" title="오른쪽 정렬" data-mobile-extra>오른쪽</button>
       <span class="separator" aria-hidden="true"></span>
-      <button id="quoteButton" class="toolbar-button" type="button" data-action="quote" aria-pressed="false" title="인용구 블록">❝ 인용</button>
-      <button class="toolbar-button" type="button" data-command="insertUnorderedList" aria-pressed="false" title="글머리 기호 목록">• 목록</button>
-      <button class="toolbar-button" type="button" data-command="insertOrderedList" aria-pressed="false" title="번호 목록">1. 목록</button>
-      <button id="symbolButton" class="toolbar-button" type="button" data-action="symbol" title="문자 기호 삽입">Ω 기호</button>
-      <button class="toolbar-button" type="button" data-action="link" title="하이퍼링크 (Ctrl+K)">🔗</button>
-      <button class="toolbar-button" type="button" data-command="unlink" title="링크 제거">링크 해제</button>
-      <button class="toolbar-button" type="button" data-action="clear-format" title="글자 및 문단 서식 제거">서식 제거</button>
-      <button class="toolbar-button" type="button" data-command="insertHorizontalRule" title="구분선">―</button>
-      <button id="tableButton" class="toolbar-button" type="button" data-action="table" title="표 삽입">▦ 표</button>
+      <button id="quoteButton" class="toolbar-button" type="button" data-action="quote" aria-pressed="false" title="인용구 블록" data-mobile-extra>❝ 인용</button>
+      <button class="toolbar-button" type="button" data-command="insertUnorderedList" aria-pressed="false" title="글머리 기호 목록" data-mobile-extra>• 목록</button>
+      <button class="toolbar-button" type="button" data-command="insertOrderedList" aria-pressed="false" title="번호 목록" data-mobile-extra>1. 목록</button>
+      <button id="symbolButton" class="toolbar-button" type="button" data-action="symbol" title="문자 기호 삽입" data-mobile-extra>Ω 기호</button>
+      <button class="toolbar-button" type="button" data-action="link" title="하이퍼링크 (Ctrl+K)" data-mobile-extra>🔗</button>
+      <button class="toolbar-button" type="button" data-command="unlink" title="링크 제거" data-mobile-extra>링크 해제</button>
+      <button class="toolbar-button" type="button" data-action="clear-format" title="글자 및 문단 서식 제거" data-mobile-extra>서식 제거</button>
+      <button class="toolbar-button" type="button" data-command="insertHorizontalRule" title="구분선" data-mobile-extra>―</button>
+      <button id="tableButton" class="toolbar-button" type="button" data-action="table" title="표 삽입" data-mobile-extra>▦ 표</button>
+      <button id="plainPasteButton" class="toolbar-button mobile-only" type="button" data-mobile-extra>텍스트만 붙여넣기</button>
       <span class="separator" aria-hidden="true"></span>
       <button class="toolbar-button" type="button" data-action="find" title="찾기 (Ctrl+F)">찾기</button>
-      <button class="toolbar-button" type="button" data-action="replace" title="찾아 바꾸기 (Ctrl+H)">바꾸기</button>
+      <button class="toolbar-button" type="button" data-action="replace" title="찾아 바꾸기 (Ctrl+H)" data-mobile-extra>바꾸기</button>
     </div>
   </header>
 
@@ -1127,67 +1231,77 @@
         <div id="editor" contenteditable="true" spellcheck="true" aria-label="문서 편집 영역"><p><br></p></div>
       </article>
     </main>
+    <section id="findbar" class="findbar" aria-label="찾기 및 바꾸기">
+      <div class="find-row has-count">
+        <input id="findText" class="find-input" type="text" placeholder="찾을 내용" autocomplete="off" title="바꾸기에서는 찾은 글자의 현재 서식이 이 칸에 그대로 표시됩니다.">
+        <span id="findCount" class="find-count" aria-live="polite" aria-atomic="true"></span>
+        <button id="findHelpButton" class="find-icon-button" type="button" tabindex="-1" title="특수기호와 단축키" aria-label="특수기호와 단축키" aria-expanded="false" aria-controls="findHelp">?</button>
+        <button class="find-icon-button" type="button" data-find="close" tabindex="-1" title="닫기" aria-label="닫기">✕</button>
+      </div>
+      <div id="replaceRow" class="find-row">
+        <input id="replaceText" class="find-input" type="text" placeholder="바꿀 내용" autocomplete="off" title="바꿀 서식을 적용한 결과가 이 칸에 그대로 표시됩니다.">
+        <div id="shapeWarning" class="shape-warning" role="status" hidden>예시의 앞뒤 글자는 그대로 두고 바뀌는 부분만 고쳐 주세요.</div>
+      </div>
+      <!-- 설명은 ? 도움말에 모으고 여기에는 실제로 고르는 항목만 둡니다. -->
+      <div class="find-options">
+        <label id="particleOption" class="particle-option" title="바꾼 단어의 받침에 맞춰 바로 뒤 또는 닫는 따옴표·괄호 뒤의 조사를 교정합니다.">
+          <input id="adjustParticles" type="checkbox" checked>
+          조사 자동 교정
+        </label>
+        <label class="particle-option" title="끄면 영문 대문자와 소문자를 같은 글자로 봅니다.">
+          <input id="matchCase" type="checkbox" checked>
+          대소문자 구분
+        </label>
+        <label class="particle-option" title="찾을 내용을 예시로 보고, 숫자만 다른 같은 모양이나 x^2·H_2O·\alpha 같은 기호를 모두 찾습니다.">
+          <input id="similarShape" type="checkbox">
+          비슷한 모양
+        </label>
+        <label id="replaceScopeOption" class="replace-scope" title="전체는 문서 전체, 아래쪽과 위쪽은 현재 커서 또는 찾은 위치를 기준으로 바꿉니다.">
+          <span>범위</span>
+          <select id="replaceScope">
+            <option value="all" selected>전체</option>
+            <option value="down">아래쪽</option>
+            <option value="up">위쪽</option>
+          </select>
+        </label>
+        <div id="replaceFormats" class="replace-formats" aria-label="바꿀 내용 서식">
+          <span class="replace-formats-label">서식</span>
+          <button class="mini-format-button" type="button" data-replace-format="bold" data-format-state="none"><b>B</b></button>
+          <button class="mini-format-button" type="button" data-replace-format="italic" data-format-state="none"><i>I</i></button>
+          <button class="mini-format-button" type="button" data-replace-format="underline" data-format-state="none"><u>U</u></button>
+          <button class="mini-format-button" type="button" data-replace-format="strikeThrough" data-format-state="none"><s>S</s></button>
+          <button id="replaceFormatReset" class="replace-formats-reset" type="button" data-format-reset title="바꿀 서식 초기화" aria-label="바꿀 서식 초기화">↺</button>
+        </div>
+      </div>
+      <div id="findHelp" class="find-help" role="note" hidden>
+        <span class="find-help-term">특수기호</span>
+        <span><code>^p</code> 문단 · <code>^l</code> 줄바꿈 · <code>^t</code> 탭 · <code>^^</code> ^ 문자</span>
+        <span class="find-help-term">이동</span>
+        <span><code>Enter</code> 다음 · <code>Shift+Enter</code> 이전 · 본문에서는 <code>F3</code></span>
+        <span class="find-help-term">비슷한 모양</span>
+        <span>숫자는 아무 숫자로, <code>x^2</code> · <code>H_2O</code> · <code>\alpha</code>는 같은 기호를 쓴 곳 전부로 찾습니다<span data-replace-help><br>바꿀 내용의 예시를 원하는 모양으로 고치면 나머지도 똑같이 바뀝니다</span></span>
+        <span class="find-help-term" data-replace-help>서식</span>
+        <span data-replace-help><code>Ctrl+B</code> 굵게 · <code>Ctrl+I</code> 기울임 · <code>Ctrl+U</code> 밑줄<br><code>Ctrl+Shift+X</code> 취소선 · 누를 때마다 적용 → 제거 → 해제</span>
+      </div>
+      <div id="findActions" class="find-actions">
+        <button class="toolbar-button" type="button" data-find="previous" title="이전 일치로 이동 (Shift+Enter)">이전 찾기</button>
+        <button class="toolbar-button" type="button" data-find="next">다음 찾기</button>
+        <button class="toolbar-button" type="button" data-find="replace">바꾸기</button>
+        <button class="toolbar-button" type="button" data-find="replace-all">모두 바꾸기</button>
+      </div>
+    </section>
   </div>
 
-  <section id="findbar" class="findbar" aria-label="찾기 및 바꾸기">
-    <div class="find-row has-count">
-      <input id="findText" class="find-input" type="text" placeholder="찾을 내용" autocomplete="off" title="바꾸기에서는 찾은 글자의 현재 서식이 이 칸에 그대로 표시됩니다.">
-      <span id="findCount" class="find-count" aria-live="polite" aria-atomic="true"></span>
-      <button id="findHelpButton" class="find-icon-button" type="button" tabindex="-1" title="특수기호와 단축키" aria-label="특수기호와 단축키" aria-expanded="false" aria-controls="findHelp">?</button>
-      <button class="find-icon-button" type="button" data-find="close" tabindex="-1" title="닫기" aria-label="닫기">✕</button>
-    </div>
-    <div id="replaceRow" class="find-row">
-      <input id="replaceText" class="find-input" type="text" placeholder="바꿀 내용" autocomplete="off" title="바꿀 서식을 적용한 결과가 이 칸에 그대로 표시됩니다.">
-      <div id="shapeWarning" class="shape-warning" role="status" hidden>예시의 앞뒤 글자는 그대로 두고 바뀌는 부분만 고쳐 주세요.</div>
-    </div>
-    <!-- 설명은 ? 도움말에 모으고 여기에는 실제로 고르는 항목만 둡니다. -->
-    <div class="find-options">
-      <label id="particleOption" class="particle-option" title="바꾼 단어의 받침에 맞춰 바로 뒤 또는 닫는 따옴표·괄호 뒤의 조사를 교정합니다.">
-        <input id="adjustParticles" type="checkbox" checked>
-        조사 자동 교정
-      </label>
-      <label class="particle-option" title="끄면 영문 대문자와 소문자를 같은 글자로 봅니다.">
-        <input id="matchCase" type="checkbox" checked>
-        대소문자 구분
-      </label>
-      <label class="particle-option" title="찾을 내용을 예시로 보고, 숫자만 다른 같은 모양이나 x^2·H_2O·\alpha 같은 기호를 모두 찾습니다.">
-        <input id="similarShape" type="checkbox">
-        비슷한 모양
-      </label>
-      <label id="replaceScopeOption" class="replace-scope" title="전체는 문서 전체, 아래쪽과 위쪽은 현재 커서 또는 찾은 위치를 기준으로 바꿉니다.">
-        <span>범위</span>
-        <select id="replaceScope">
-          <option value="all" selected>전체</option>
-          <option value="down">아래쪽</option>
-          <option value="up">위쪽</option>
-        </select>
-      </label>
-      <div id="replaceFormats" class="replace-formats" aria-label="바꿀 내용 서식">
-        <span class="replace-formats-label">서식</span>
-        <button class="mini-format-button" type="button" data-replace-format="bold" data-format-state="none"><b>B</b></button>
-        <button class="mini-format-button" type="button" data-replace-format="italic" data-format-state="none"><i>I</i></button>
-        <button class="mini-format-button" type="button" data-replace-format="underline" data-format-state="none"><u>U</u></button>
-        <button class="mini-format-button" type="button" data-replace-format="strikeThrough" data-format-state="none"><s>S</s></button>
-        <button id="replaceFormatReset" class="replace-formats-reset" type="button" data-format-reset title="바꿀 서식 초기화" aria-label="바꿀 서식 초기화">↺</button>
+  <dialog id="plainPasteDialog" class="plain-paste-dialog" aria-labelledby="plainPasteLabel">
+    <form method="dialog">
+      <label id="plainPasteLabel" for="plainPasteText">텍스트만 붙여넣기</label>
+      <textarea id="plainPasteText" rows="3" placeholder="여기를 길게 눌러 붙여넣으세요." autofocus></textarea>
+      <div class="find-actions">
+        <button class="toolbar-button" type="submit" value="cancel">취소</button>
+        <button class="toolbar-button primary" type="submit" value="insert">삽입</button>
       </div>
-    </div>
-    <div id="findHelp" class="find-help" role="note" hidden>
-      <span class="find-help-term">특수기호</span>
-      <span><code>^p</code> 문단 · <code>^l</code> 줄바꿈 · <code>^t</code> 탭 · <code>^^</code> ^ 문자</span>
-      <span class="find-help-term">이동</span>
-      <span><code>Enter</code> 다음 · <code>Shift+Enter</code> 이전 · 본문에서는 <code>F3</code></span>
-      <span class="find-help-term">비슷한 모양</span>
-      <span>숫자는 아무 숫자로, <code>x^2</code> · <code>H_2O</code> · <code>\alpha</code>는 같은 기호를 쓴 곳 전부로 찾습니다<span data-replace-help><br>바꿀 내용의 예시를 원하는 모양으로 고치면 나머지도 똑같이 바뀝니다</span></span>
-      <span class="find-help-term" data-replace-help>서식</span>
-      <span data-replace-help><code>Ctrl+B</code> 굵게 · <code>Ctrl+I</code> 기울임 · <code>Ctrl+U</code> 밑줄<br><code>Ctrl+Shift+X</code> 취소선 · 누를 때마다 적용 → 제거 → 해제</span>
-    </div>
-    <div id="findActions" class="find-actions">
-      <button class="toolbar-button" type="button" data-find="previous" title="이전 일치로 이동 (Shift+Enter)">이전 찾기</button>
-      <button class="toolbar-button" type="button" data-find="next">다음 찾기</button>
-      <button class="toolbar-button" type="button" data-find="replace">바꾸기</button>
-      <button class="toolbar-button" type="button" data-find="replace-all">모두 바꾸기</button>
-    </div>
-  </section>
+    </form>
+  </dialog>
 
   <div id="tableControls" class="table-controls" hidden>
     <div id="tableSelectionOverlay" aria-hidden="true"></div>
@@ -1290,6 +1404,13 @@
 
       const editor = document.getElementById('editor');
       const workspace = document.querySelector('.workspace');
+      const mobileLayout = matchMedia('(max-width: 720px), (pointer: coarse) and (max-height: 540px)');
+      const mobileFilesButton = document.getElementById('mobileFilesButton');
+      const mobileToolsButton = document.getElementById('mobileToolsButton');
+      const fileActions = document.getElementById('fileActions');
+      const formatbar = document.getElementById('formatbar');
+      const plainPasteDialog = document.getElementById('plainPasteDialog');
+      const plainPasteText = document.getElementById('plainPasteText');
       const fileInput = document.getElementById('fileInput');
       const fileNameLabel = document.getElementById('fileName');
       const countLabel = document.getElementById('count');
@@ -1369,6 +1490,8 @@
       const focusEditor = () => {
         editor.focus({ preventScroll: true });
       };
+
+      const viewportHeight = () => mobileLayout.matches ? document.body.clientHeight : window.innerHeight;
 
       const runCommand = (command, value = null) => {
         focusEditor();
@@ -1478,12 +1601,12 @@
       const positionTablePicker = () => {
         const buttonRect = tableButton.getBoundingClientRect();
         const pickerRect = tablePicker.getBoundingClientRect();
-        const left = Math.min(
+        const left = Math.max(8, Math.min(
           Math.max(8, buttonRect.left),
           window.innerWidth - pickerRect.width - 8
-        );
+        ));
         const below = buttonRect.bottom + 7;
-        const top = below + pickerRect.height <= window.innerHeight - 8
+        const top = below + pickerRect.height <= viewportHeight() - 8
           ? below
           : Math.max(8, buttonRect.top - pickerRect.height - 7);
         tablePicker.style.left = `${left}px`;
@@ -1492,7 +1615,7 @@
 
       const openTablePicker = () => {
         hideSelectionToolbar();
-        findbar.classList.remove('open');
+        closeFindbar();
         tablePicker.classList.add('open');
         tablePicker.setAttribute('aria-hidden', 'false');
         updateTableGridHighlight(tableRows.value, tableColumns.value);
@@ -1541,7 +1664,7 @@
         const pickerRect = symbolPicker.getBoundingClientRect();
         // 창 밖으로 완전히 나가면 되찾을 수 없으므로 화면 안에 붙잡아 둡니다.
         const safeLeft = Math.min(Math.max(8, left), Math.max(8, window.innerWidth - pickerRect.width - 8));
-        const safeTop = Math.min(Math.max(8, top), Math.max(8, window.innerHeight - pickerRect.height - 8));
+        const safeTop = Math.min(Math.max(8, top), Math.max(8, viewportHeight() - pickerRect.height - 8));
         symbolPicker.style.left = `${safeLeft}px`;
         symbolPicker.style.top = `${safeTop}px`;
         return { left: safeLeft, top: safeTop };
@@ -1555,7 +1678,7 @@
         const buttonRect = symbolButton.getBoundingClientRect();
         const pickerRect = symbolPicker.getBoundingClientRect();
         const below = buttonRect.bottom + 7;
-        const top = below + pickerRect.height <= window.innerHeight - 8
+        const top = below + pickerRect.height <= viewportHeight() - 8
           ? below
           : buttonRect.top - pickerRect.height - 7;
         placeSymbolPicker(buttonRect.left, top);
@@ -2520,6 +2643,7 @@
             ? tableMenuButton
             : tableAxisHandles.querySelector(`[data-table-select="${selection.axis}"][data-index="${selection.end}"]`) || tableMenuButton;
           const anchorRect = anchor.getBoundingClientRect();
+          tableMenu.style.maxHeight = mobileLayout.matches ? `${Math.max(44, view.height - 16)}px` : '';
           const menuRect = tableMenu.getBoundingClientRect();
           let left = anchorRect.left;
           let below = anchorRect.bottom + 4;
@@ -2882,6 +3006,7 @@
         else hideTableControls();
         pendingCellDrag = cell && event.button === 0 ? cell : null;
       });
+      document.addEventListener('pointercancel', () => { pendingCellDrag = null; });
       // 한 칸에서 눌러 같은 표의 다른 칸에서 떼면 그 두 칸이 병합할 사각형의 모서리입니다.
       document.addEventListener('pointerup', event => {
         const from = pendingCellDrag;
@@ -2999,7 +3124,7 @@
           window.innerWidth - toolbarRect.width - 8
         );
         const preferredTop = rect.top - toolbarRect.height - 8;
-        const top = preferredTop >= 8 ? preferredTop : Math.min(window.innerHeight - toolbarRect.height - 8, rect.bottom + 8);
+        const top = Math.max(8, Math.min(preferredTop >= 8 ? preferredTop : rect.bottom + 8, viewportHeight() - toolbarRect.height - 8));
         selectionToolbar.style.left = `${left}px`;
         selectionToolbar.style.top = `${top}px`;
       };
@@ -3078,7 +3203,7 @@
         let left = Math.min(anchorRect.left, window.innerWidth - tooltipRect.width - 12);
         left = Math.max(12, left);
         let top = anchorRect.bottom + margin;
-        if (top + tooltipRect.height > window.innerHeight - 12) {
+        if (top + tooltipRect.height > viewportHeight() - 12) {
           top = Math.max(12, anchorRect.top - tooltipRect.height - margin);
           linkPreview.classList.add('above');
         }
@@ -8365,10 +8490,40 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         editTableCellSpans(true);
       });
 
+      const setMobilePanel = (button, panel, expanded) => {
+        button.setAttribute('aria-expanded', String(expanded));
+        panel.classList.toggle('is-expanded', expanded);
+      };
+      mobileFilesButton.addEventListener('click', () => {
+        setMobilePanel(mobileFilesButton, fileActions, !fileActions.classList.contains('is-expanded'));
+        setMobilePanel(mobileToolsButton, formatbar, false);
+      });
+      mobileToolsButton.addEventListener('click', () => {
+        setMobilePanel(mobileToolsButton, formatbar, !formatbar.classList.contains('is-expanded'));
+        setMobilePanel(mobileFilesButton, fileActions, false);
+      });
+
+      document.querySelector('.topbar').addEventListener('pointerdown', () => {
+        if (mobileLayout.matches) saveSelection();
+      });
+      document.getElementById('plainPasteButton').addEventListener('click', () => {
+        plainPasteDialog.returnValue = '';
+        plainPasteText.value = '';
+        plainPasteDialog.showModal();
+      });
+      plainPasteDialog.addEventListener('close', () => {
+        if (plainPasteDialog.returnValue !== 'insert' || !plainPasteText.value) return;
+        restoreSelection();
+        insertPlainTextPreservingBreaks(plainPasteText.value);
+      });
+
       document.querySelectorAll('[data-action]').forEach((button) => {
         button.addEventListener('mousedown', () => saveSelection());
         button.addEventListener('click', async () => {
           const action = button.dataset.action;
+          if (mobileLayout.matches && button.closest('.file-actions')) {
+            setMobilePanel(mobileFilesButton, fileActions, false);
+          }
           if (action === 'new') {
             // 내용을 전부 지운 뒤라도 미저장 변경이면 확인을 받습니다.
             if ((editor.innerText.trim() || draftDirty)
@@ -8415,6 +8570,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       });
 
       blockFormat.addEventListener('change', () => {
+        if (mobileLayout.matches) restoreSelection();
         runCommand('formatBlock', blockFormat.value);
       });
 
@@ -8639,11 +8795,13 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       });
 
       editor.addEventListener('mouseover', (event) => {
+        if (event.sourceCapabilities?.firesTouchEvents || !matchMedia('(any-hover: hover)').matches) return;
         const anchor = event.target.closest?.('a');
         if (anchor && editor.contains(anchor) && anchor !== hoveredLink) showLinkPreview(anchor);
       });
 
       editor.addEventListener('mouseout', (event) => {
+        if (event.sourceCapabilities?.firesTouchEvents || !matchMedia('(any-hover: hover)').matches) return;
         const anchor = event.target.closest?.('a');
         if (!anchor) return;
         const next = event.relatedTarget;
@@ -8656,6 +8814,11 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         hideLinkPreview();
       });
       linkPreviewCopy.addEventListener('click', copyPreviewUrl);
+      document.addEventListener('pointerdown', (event) => {
+        if (hoveredLink && !hoveredLink.contains(event.target) && !linkPreview.contains(event.target)) {
+          hideLinkPreview();
+        }
+      });
 
       editor.addEventListener('scroll', () => {
         hideLinkPreview();
@@ -8668,9 +8831,28 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       window.addEventListener('resize', () => {
         hideLinkPreview();
         hideSelectionToolbar();
-        closeTablePicker();
+        if (!mobileLayout.matches) closeTablePicker();
+        else if (tablePicker.classList.contains('open')) positionTablePicker();
         if (symbolPicker.classList.contains('open')) positionSymbolPicker();
       });
+
+      // iOS는 키보드가 떠도 레이아웃 뷰포트 높이를 줄이지 않습니다.
+      // 확대/축소 중에는 기존 편집 영역의 크기를 유지합니다.
+      const visualViewport = window.visualViewport;
+      const updateMobileHeight = () => {
+        if (!mobileLayout.matches || !visualViewport) {
+          document.documentElement.style.removeProperty('--mobile-height');
+          return;
+        }
+        if (visualViewport.scale !== 1) return;
+        document.documentElement.style.setProperty('--mobile-height', `${Math.round(visualViewport.height)}px`);
+        if (tablePicker.classList.contains('open')) positionTablePicker();
+        if (symbolPicker.classList.contains('open')) positionSymbolPicker();
+        scheduleTableControls();
+      };
+      visualViewport?.addEventListener('resize', updateMobileHeight);
+      mobileLayout.addEventListener('change', updateMobileHeight);
+      updateMobileHeight();
       document.addEventListener('copy', handleEditorCopy);
       document.addEventListener('cut', handleEditorCut);
 
@@ -8681,6 +8863,10 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           event.preventDefault();
           window.open(anchor.href, '_blank', 'noopener,noreferrer');
           hideLinkPreview();
+        } else if (event.pointerType === 'touch' || event.sourceCapabilities?.firesTouchEvents
+          || (mobileLayout.matches && matchMedia('(hover: none)').matches)) {
+          event.preventDefault();
+          showLinkPreview(anchor);
         }
       });
 

@@ -17,7 +17,8 @@ export const TEST_FILES = [
   { file: 'link-paste-half-window.mjs' },
   { file: 'clipboard-spaces.mjs' },
   { file: 'quote-paste.mjs' },
-  { file: 'ui-buttons.mjs' }
+  { file: 'ui-buttons.mjs' },
+  { file: 'mobile.mjs' }
 ];
 
 // 실제로 띄울 작업 목록입니다. 조각은 TEST_SHARD="i/n" 환경 변수로 구분합니다.
