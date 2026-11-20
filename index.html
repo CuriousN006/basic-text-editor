@@ -3660,7 +3660,8 @@
           protectedHtml.push(html);
           return token;
         };
-        let value = String(source).replace(/`([^`]+)`/g, (_, code) => protect(`<code>${escapeHtml(code)}</code>`));
+        let value = String(source).replace(/(?<!\\)((?:\\\\)*)`([^`]+)`/g,
+          (_, prefix, code) => prefix + protect(`<code>${escapeHtml(code)}</code>`));
         value = escapeHtml(value);
         value = value
           .replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, (_, alt, url) => protect(`<img src="${url}" alt="${alt}">`))
@@ -3727,7 +3728,7 @@
         let paragraph = [];
         let quoteLines = [];
         let listType = null;
-        let inCode = false;
+        let codeFence = null;
         let codeLines = [];
         let pendingBlankLines = 0;
         let tableEnd = 0;
@@ -3766,23 +3767,24 @@
 
         lines.forEach((line, lineIndex) => {
           if (lineIndex < tableEnd) return;
-          if (/^```/.test(line)) {
-            flushParagraph();
-            closeList();
-            flushQuote();
-            if (inCode) {
+          const fence = line.match(/^( {0,3})(`{3,}|~{3,})(.*)$/);
+          if (codeFence) {
+            if (fence && fence[2][0] === codeFence.marker && fence[2].length >= codeFence.length && !fence[3].trim()) {
               output.push(`<pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`);
               codeLines = [];
-              inCode = false;
+              codeFence = null;
             } else {
-              emitBlanks();
-              inCode = true;
+              const indent = line.match(/^ */)[0].length;
+              codeLines.push(line.slice(Math.min(indent, codeFence.indent)));
             }
             return;
           }
-
-          if (inCode) {
-            codeLines.push(line);
+          if (fence && (fence[2][0] === '~' || !fence[3].includes('`'))) {
+            flushParagraph();
+            closeList();
+            flushQuote();
+            emitBlanks();
+            codeFence = { marker: fence[2][0], length: fence[2].length, indent: fence[1].length };
             return;
           }
 
@@ -3854,7 +3856,7 @@
           }
         });
 
-        if (inCode) output.push(`<pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`);
+        if (codeFence) output.push(`<pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`);
         flushParagraph();
         closeList();
         flushQuote();
@@ -3876,6 +3878,12 @@
         if (tag === 'img') return `![${node.getAttribute('alt') || ''}](${node.getAttribute('src') || ''})`;
         if (tag === 'br') return '\n';
         return children;
+      };
+
+      const preformattedText = (block) => {
+        const copy = block.cloneNode(true);
+        copy.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
+        return copy.textContent;
       };
 
       const htmlToMarkdown = () => {
@@ -3910,7 +3918,13 @@
             }
             return inline().split('\n').map((line) => `> ${line}`).join('\n') + '\n\n';
           }
-          if (tag === 'pre') return `\`\`\`\n${node.innerText.replace(/\n$/, '')}\n\`\`\`\n\n`;
+          if (tag === 'pre') {
+            const code = preformattedText(node);
+            const length = [...code.matchAll(/^ {0,3}(`{3,})/gm)]
+              .reduce((size, match) => Math.max(size, match[1].length + 1), 3);
+            const fence = '`'.repeat(length);
+            return `${fence}\n${code}\n${fence}\n\n`;
+          }
           if (tag === 'hr') return '---\n\n';
           if (tag === 'table') {
             return `${sanitizeHtml(node.outerHTML).replace(/\r?\n/g, '')}\n\n`;
@@ -3940,7 +3954,19 @@
           }
           return [...node.childNodes].map((child) => convertBlock(child, depth)).join('');
         };
-        return [...exportRoot.childNodes].map((node) => convertBlock(node)).join('').replace(/\n{4,}/g, '\n\n\n').trimEnd() + '\n';
+        // 본문의 문단 간격만 정리하고 코드 블록 내부의 빈 줄은 그대로 둡니다.
+        const parts = [];
+        let prose = '';
+        const compactBlankLines = (text) => text.replace(/\n{4,}/g, '\n\n\n');
+        for (const block of exportRoot.childNodes) {
+          const markdown = convertBlock(block);
+          if (block.nodeName === 'PRE') {
+            parts.push(compactBlankLines(prose), markdown.trimEnd());
+            prose = '\n\n';
+          } else prose += markdown;
+        }
+        parts.push(compactBlankLines(prose));
+        return parts.join('').trimEnd() + '\n';
       };
 
       const buildStandaloneHtml = () => `<!doctype html>
@@ -5464,10 +5490,10 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         };
       };
 
-      const clipboardTableTokens = (doc, { quotes = false, plain = '' } = {}) => {
-        const tables = [...doc.body.querySelectorAll('table')]
-          .filter(table => !table.parentElement.closest('table'));
-        if (!tables.length) return null;
+      const clipboardBlockTokens = (doc, { quotes = false, plain = '' } = {}) => {
+        const blocks = [...doc.body.querySelectorAll('table,pre')]
+          .filter(block => !block.parentElement.closest('table,pre'));
+        if (!blocks.length) return null;
         literalizeClipboardOrderedLists(doc.body);
         const withoutSpaces = value => value.replace(/\s/g, '');
         const linesCompact = (lines, keep = () => true) => withoutSpaces(lines
@@ -5485,18 +5511,27 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           container.appendChild(fragment);
           const htmlLines = clipboardLinesFromHtml(container.innerHTML);
           const compact = linesCompact(htmlLines);
-          if (!compact) return;
+          if (!compact) {
+            // 블록 사이에 빈 문단만 있으면 별도의 블록으로 넣어야 다음 표나 코드에 먹히지 않습니다.
+            if (hasExplicitBlankParagraphs(container)) {
+              htmlLines.forEach(() => tokens.push({ type: 'block', html: '<p class="blank-line"><br></p>' }));
+            }
+            return;
+          }
           // 브라우저 평문에는 목록 번호가 빠질 수 있으므로 번호를 뺀 글자도 맞춰 봅니다.
           const slice = cursor.take([compact, linesCompact(htmlLines, run => !run.orderedMarker)]);
           const lines = (slice && alignClipboardLinesToPlainText(slice, htmlLines)) || htmlLines;
           tokens.push(...clipboardTokensFromLines(lines, true, { quotes }));
         };
-        tables.forEach((table) => {
-          remaining.setEndBefore(table);
+        blocks.forEach((block) => {
+          remaining.setEndBefore(block);
           appendText(remaining.cloneContents());
-          cursor.take([withoutSpaces(clipboardPlainTextFromHtml(table.outerHTML))]);
-          tokens.push({ type: 'block', html: clipboardTableHtml(table) });
-          remaining.setStartAfter(table);
+          const isTable = block.tagName === 'TABLE';
+          const contents = isTable ? clipboardPlainTextFromHtml(block.outerHTML) : preformattedText(block);
+          cursor.take([withoutSpaces(contents)]);
+          const html = isTable ? clipboardTableHtml(block) : `<pre><code>${escapeHtml(contents)}</code></pre>`;
+          tokens.push({ type: 'block', html });
+          remaining.setStartAfter(block);
           remaining.setEnd(doc.body, doc.body.childNodes.length);
         });
         appendText(remaining.cloneContents());
@@ -7030,6 +7065,22 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       ];
 
       const normalizeClipboardText = (value) => String(value).replace(/\r\n?/g, '\n');
+
+      const unwrapClipboardMarkdown = (text) => {
+        // 마크다운 원문을 한 문단으로 내보낸 경우, 줄바꿈·코드 울타리·들여쓰기에
+        // 이스케이프가 한 겹 더 붙습니다. 이 형태가 문서 전체에 있을 때만 한 겹을 벗깁니다.
+        const lines = normalizeClipboardText(text).split('\n');
+        const content = lines.filter(Boolean);
+        const hardBreak = /(^|[^\\])((?:\\\\)*)\\$/;
+        const escapedFence = /^\\`\\`\\`(?:[\w+-]+)?[ \t]*$/;
+        if (!content.includes('\\')
+          || !content.slice(0, -1).every(line => hardBreak.test(line))
+          || content.filter(line => escapedFence.test(line.replace(hardBreak, '$1$2'))).length < 2) return text;
+
+        return lines.map((line, index) => (index < lines.length - 1 ? line.replace(hardBreak, '$1$2') : line)
+          .replace(/\\([\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e])/g, '$1')
+          .replace(/&#(?:x20|32);/gi, ' ')).join('\n');
+      };
 
       // style을 주면 만들어지는 글자 토큰이 그 인라인 서식을 함께 지닙니다.
       const plainTextToSpecialTokens = (source, style = null) => {
@@ -8745,23 +8796,24 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           return;
         }
 
-        // 3) 표는 행·열을 유지합니다. 기존 표 셀 안에서는 글자로 붙여넣습니다.
+        // 3) 표는 행·열, 코드 블록은 들여쓰기와 줄바꿈을 유지합니다.
+        //    기존 표 셀 안에서는 글자로 붙여넣습니다.
         const richDocument = keepFormatting && rich
           ? new DOMParser().parseFromString(sanitizeHtml(rich), 'text/html')
           : null;
         // 인용구는 표 칸이나 기존 인용구 안에 겹쳐 넣지 않고 글자만 넣습니다.
         const quotes = keepFormatting && !selectedTableCell() && !quoteAncestorForSelection();
         if (keepFormatting && !selectedTableCell()) {
-          const tableTokens = richDocument && clipboardTableTokens(richDocument, { quotes, plain });
-          if (tableTokens) {
-            insertClipboardTokens(tableTokens);
+          const blockTokens = richDocument && clipboardBlockTokens(richDocument, { quotes, plain });
+          if (blockTokens) {
+            insertClipboardTokens(blockTokens);
             updateFormattingControlsState();
             return;
           }
           // 마크다운 평문은 일반 Ctrl+V로 제목·표·글자 서식을 변환합니다.
           if (plain) {
             // 복사한 내용 끝의 공백은 마크다운의 강제 줄바꿈 문법으로 해석하지 않습니다.
-            const markdownSource = plain.replace(/ +$/, spaces => '\u00a0'.repeat(spaces.length));
+            const markdownSource = unwrapClipboardMarkdown(plain).replace(/ +$/, spaces => '\u00a0'.repeat(spaces.length));
             const html = markdownToHtml(markdownSource, { literalOrderedLists: true }).replace(/\u00a0/g, ' ');
             const parsed = new DOMParser().parseFromString(html, 'text/html');
             const plainMarkdown = !richDocument || !richDocument.body.querySelector('b,strong,i,em,u,s,a,pre,table,ul,ol,blockquote,h1,h2,h3');

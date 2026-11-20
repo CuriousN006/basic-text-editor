@@ -18,8 +18,8 @@ const paste = async (page, html, text, plain = false) => {
 const waitForOpened = (page, name) => page.waitForFunction(
   (fileName) => document.getElementById('toast').textContent.includes(fileName), name, { timeout: 5000 }
 ).catch(() => {});
-const withPage = async (fn) => {
-  const { context, page } = await openEditor(browser, base);
+const withPage = async (fn, options) => {
+  const { context, page } = await openEditor(browser, base, options);
   try { await fn(page); }
   finally { await context.close(); }
 };
@@ -223,11 +223,140 @@ try {
     r.check('코드 블록 보존', await page.evaluate(() => T.ed().querySelector('pre')?.textContent.includes('| --- | --- |')), true);
   });
 
+  const schemaCode = [
+    'class Task(BaseModel):',
+    '    outcome: str',
+    '',
+    '    def is_success(self):',
+    '        return self.outcome == "success" and self.interventions < 1'
+  ].join('\n');
+
+  // 브라우저에 렌더링된 보고서를 선택해 실제 Ctrl+C와 Ctrl+V로 옮깁니다.
+  for (const withTable of [true, false]) {
+    await withPage(async page => {
+      const viewer = await page.context().newPage();
+      await viewer.goto(`${base}/tests/README.md`);
+      await viewer.setContent('<meta charset="utf-8"><article><h2>11월 업무 평가 보고서</h2>'
+        + '<p>연구 조직의 <strong>업무 성공률</strong>을 사용자-월 단위로 집계했습니다. '
+        + '전체 표본의 선정 기준과 결과를 아래에 정리했습니다.</p>'
+        + '<ol start="3"><li>자동화 실행은 제외했습니다.</li><li>수정 요청은 개입으로 기록했습니다.</li></ol>'
+        + '<blockquote><p>결과를 관측할 수 없으면 불확실로 표시합니다.</p></blockquote>'
+        + `<p>아래 파이썬 코드는 결과를 판정하는 데 사용했습니다.</p><pre><code>${schemaCode.replace('<', '&lt;')}</code></pre>`
+        + (withTable ? '<p><br></p><p><br></p><table><tr><th>상태</th><th>건수</th></tr><tr><td>성공</td><td>12</td></tr></table>' : '')
+        + '<p>세부 사항은 <a href="https://example.com/report">평가 기록</a>을 참고하세요.</p></article>');
+      await viewer.keyboard.press('Control+a');
+      await viewer.keyboard.press('Control+c');
+      await viewer.close();
+      await page.evaluate(() => {
+        T.set('<p>기존 머리말</p><p>교체할 본문</p><p>기존 꼬리말</p>');
+        T.caretIn(1, false);
+      });
+      await page.keyboard.press('Shift+End');
+      await page.keyboard.press('Control+v');
+      const label = withTable ? '표 있음' : '표 없음';
+      r.check(`웹 보고서 코드의 들여쓰기·빈 줄·부등호 유지 (${label})`, await page.evaluate(() =>
+        T.ed().querySelector('pre code')?.textContent), schemaCode);
+      if (withTable) {
+        r.check('웹 보고서 코드와 표 사이의 빈 문단 두 개 유지', await page.evaluate(() => {
+          const blocks = [...T.ed().children];
+          const start = blocks.findIndex(block => block.tagName === 'PRE');
+          const end = blocks.findIndex(block => block.tagName === 'TABLE');
+          return blocks.slice(start + 1, end).map(block => [block.tagName, block.textContent]);
+        }), [['P', ''], ['P', '']]);
+      }
+      r.check(`웹 보고서 목록·인용·링크·주변 문서 유지 (${label})`, await page.evaluate(() => {
+        const editor = T.ed();
+        return [editor.firstElementChild.textContent, editor.querySelector('strong,b')?.textContent,
+          editor.textContent.includes('3. 자동화 실행은 제외했습니다.'), editor.querySelector('blockquote')?.textContent,
+          editor.querySelector('a')?.textContent, editor.lastElementChild.textContent, editor.querySelectorAll('table').length];
+      }), ['기존 머리말', '업무 성공률', true, '결과를 관측할 수 없으면 불확실로 표시합니다.', '평가 기록', '기존 꼬리말', withTable ? 1 : 0]);
+      await page.keyboard.press('Control+z');
+      r.check(`웹 보고서 붙여넣기 한 번에 취소 (${label})`, await page.evaluate(() => T.html()),
+        '<p>기존 머리말</p><p>교체할 본문</p><p>기존 꼬리말</p>');
+    });
+  }
+
+  await withPage(async page => {
+    await page.evaluate(() => { T.set('<p><br></p>'); T.caretIn(0, true); });
+    const nestedCode = ['### 업무 판정 코드', '', '', '', '', '```python', schemaCode, '```', ''].join('\n');
+    const example = ['## 구성 예제', '', '아래 Markdown은 스키마를 설명하는 데 사용합니다.', '',
+      '````markdown', nestedCode, '````', '',
+      '~~~python', schemaCode, '~~~', '', '| 상태 | 건수 |', '| --- | --- |', '| 성공 | 12 |', '',
+      '평가자 검토를 마쳤습니다.'].join('\n');
+    await paste(page, '', example);
+    const readCode = () => page.evaluate(() => [...T.ed().querySelectorAll('pre code')].map(code => code.textContent));
+    r.check('긴 백틱과 물결표로 둘러싼 코드가 보고서의 나머지 부분을 삼키지 않음', await page.evaluate(() =>
+      T.ed().querySelectorAll('pre code').length), 2);
+    r.check('코드 예제 안쪽의 백틱·연속 빈 줄 유지', await readCode(), [nestedCode, schemaCode]);
+    r.check('코드 블록 아래 표와 마지막 문단 유지', await page.evaluate(() =>
+      [T.ed().querySelector('table')?.textContent, T.ed().lastElementChild.textContent]), ['상태건수성공12', '평가자 검토를 마쳤습니다.']);
+    const downloadPromise = page.waitForEvent('download');
+    await page.click('[data-action="save-md"]');
+    const download = await downloadPromise;
+    const chunks = [];
+    for await (const chunk of await download.createReadStream()) chunks.push(chunk);
+    await page.setInputFiles('#fileInput', { name: 'report.md', mimeType: 'text/markdown', buffer: Buffer.concat(chunks) });
+    await waitForOpened(page, 'report.md');
+    r.check('MD 저장 후 다시 열어도 코드와 내부 빈 줄 유지', await readCode(), [nestedCode, schemaCode]);
+  }, { noFilePicker: true });
+
   await withPage(async page => {
     await page.evaluate(() => { T.set('<p><br></p>'); T.caretIn(0, true); });
     const text = 'A | B\n이것은 | 일반 문장';
     await paste(page, '', text);
     r.check('구분선 없는 일반 파이프 문장은 변환하지 않음', await page.evaluate(() => [...T.ed().children].map(p => p.textContent).join('\n')), text);
+  });
+
+  const escapedDocument = [
+    '모델에 위임된 업무와 성공률',
+    '',
+    '분석 기간은 3월\\~6월입니다.',
+    '• 시간 추정 방식을 개선했습니다.',
+    '',
+    '\\`\\`\\`',
+    'start_message_index: int = Field(',
+    '&#x20;   ge=0,',
+    '',
+    '\\# [ ... 일부 속성 삭제됨 ... ]',
+    ')',
+    '\\`\\`\\`',
+    '',
+    '\\* 결과를 확인합니다.',
+    '\\* 개입 횟수를 셉니다.',
+    '',
+    '2026년 10월 18일 기준 데이터입니다.'
+  ].join('\\\n');
+
+  for (const plainOnly of [false, true]) {
+    await withPage(async page => {
+      await page.evaluate(() => { T.set('<p><br></p>'); T.caretIn(0, true); });
+      await paste(page, '', escapedDocument, plainOnly);
+      if (plainOnly) {
+        r.check('이스케이프된 원문을 서식 없이 그대로 붙여넣기', await page.evaluate(() =>
+          [...T.ed().children].map(block => block.textContent).join('\n')), escapedDocument);
+        return;
+      }
+      r.check('이스케이프된 마크다운의 문단·빈 줄·목록 유지', await page.evaluate(() =>
+        [...T.ed().children].map(block => [block.tagName, block.tagName === 'PRE' ? '' : block.textContent])), [
+        ['P', '모델에 위임된 업무와 성공률'], ['P', ''],
+        ['P', '분석 기간은 3월~6월입니다.'], ['P', '• 시간 추정 방식을 개선했습니다.'],
+        ['P', ''], ['PRE', ''], ['P', ''], ['UL', '결과를 확인합니다.개입 횟수를 셉니다.'],
+        ['P', ''], ['P', '2026년 10월 18일 기준 데이터입니다.']
+      ]);
+      r.check('이스케이프된 코드 블록의 줄바꿈과 들여쓰기 유지', await page.evaluate(() =>
+        T.ed().querySelector('pre code')?.textContent),
+      'start_message_index: int = Field(\n    ge=0,\n\n# [ ... 일부 속성 삭제됨 ... ]\n)');
+      await page.keyboard.press('Control+z');
+      r.check('이스케이프된 문서 붙여넣기를 한 번에 취소', await page.evaluate(() => T.html()), '<p><br></p>');
+    });
+  }
+
+  await withPage(async page => {
+    await page.evaluate(() => { T.set('<p><br></p>'); T.caretIn(0, true); });
+    const text = '문서 경로 C:\\자료\\\n코드 울타리 표기 \\`\\`\\`\n&#x20;';
+    await paste(page, '', text);
+    r.check('일반 텍스트의 역슬래시와 엔티티 표기 유지', await page.evaluate(() =>
+      [...T.ed().children].map(block => block.textContent).join('\n')), text);
   });
 
   await withPage(async page => {
