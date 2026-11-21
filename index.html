@@ -432,7 +432,8 @@
       color: var(--muted);
     }
 
-    .selection-toolbar {
+    .selection-toolbar,
+    .mobile-edit-menu {
       display: none;
       position: fixed;
       align-items: center;
@@ -446,6 +447,12 @@
     }
 
     .selection-toolbar.visible { display: flex; }
+    .mobile-edit-menu:not([hidden]) {
+      display: flex;
+      flex-wrap: wrap;
+      max-width: calc(100vw - 16px);
+    }
+    .mobile-edit-menu .toolbar-button { min-height: 44px; white-space: nowrap; }
 
     .table-controls {
       position: fixed;
@@ -1108,7 +1115,11 @@
         padding: 16px 28px 40px;
         box-shadow: none;
       }
-      #editor { flex: 1; min-height: 0; }
+      #editor { flex: 1; min-height: 0; -webkit-touch-callout: none; }
+      #editor.touch-pressing, #editor.touch-pressing * {
+        -webkit-user-select: none;
+        user-select: none;
+      }
       #editor table { table-layout: auto; }
       .findbar {
         position: static;
@@ -1150,11 +1161,49 @@
       #fileName { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
       #count { white-space: nowrap; }
       .toast { position: absolute; bottom: 28px; width: max-content; max-width: calc(100% - 24px); }
+
+      /* 키보드 위 공간이 짧을 때는 열린 검색창과 본문에 높이를 양보합니다. */
+      .short-mobile-viewport.findbar-open .topbar,
+      .short-mobile-viewport.findbar-open .statusbar { display: none; }
+      .short-mobile-viewport.findbar-open .page { padding: 8px 16px 24px; }
+      .short-mobile-viewport.findbar-open #editor > :first-child { margin-top: 0; }
+      .short-mobile-viewport.findbar-open .find-results-panel { flex-basis: min(25%, 72px); }
+      .short-mobile-viewport.findbar-open .find-results-list { padding: 3px 6px; }
+      .short-mobile-viewport.findbar-open .find-result-item { margin-bottom: 4px; padding: 3px 8px; }
+      .short-mobile-viewport.findbar-open .find-result-location { margin-bottom: 1px; }
+      .short-mobile-viewport.findbar-open .find-result-sentence { white-space: nowrap; }
+    }
+
+    @media screen and (min-width: 640px) {
+      .short-mobile-viewport.findbar-open .editor-shell {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(320px, 43%);
+        grid-template-rows: minmax(0, 1fr) min(40%, 72px);
+      }
+      .short-mobile-viewport.findbar-open .workspace { grid-area: 1 / 1; }
+      .short-mobile-viewport.findbar-open .find-results-panel { grid-area: 2 / 1; }
+      .short-mobile-viewport .findbar.open {
+        display: grid;
+        grid-area: 1 / 2 / 3;
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+        min-height: 0;
+        max-height: none;
+        margin: 4px;
+        padding: 4px 6px;
+      }
+      .short-mobile-viewport .findbar .find-row { margin-bottom: 2px; }
+      .short-mobile-viewport .find-row.has-count { grid-row: 1; }
+      .short-mobile-viewport #replaceRow { grid-row: 2; }
+      .short-mobile-viewport .find-options { grid-row: 3; margin-bottom: 0; overflow: auto; }
+      .short-mobile-viewport .find-help { grid-row: 4; max-height: 44px; overflow: auto; }
+      .short-mobile-viewport #findActions { grid-row: 5; gap: 2px; }
+      .short-mobile-viewport #findActions .toolbar-button { padding-inline: 5px; }
     }
 
     @media print {
       body { display: block; overflow: visible; background: white; }
-      .topbar, .findbar, .find-results-panel, .selection-toolbar, .table-picker, .symbol-picker, .statusbar, .toast { display: none !important; }
+      .topbar, .findbar, .find-results-panel, .selection-toolbar, .mobile-edit-menu, .table-picker, .symbol-picker, .statusbar, .toast { display: none !important; }
       .editor-shell { display: block; }
       .workspace { overflow: visible; padding: 0; }
       .page { width: auto; min-height: auto; padding: 0; box-shadow: none; }
@@ -1396,6 +1445,12 @@
     <button class="mini-format-button" type="button" data-selection-command="strikeThrough" aria-pressed="false" title="취소선"><s>S</s></button>
     <button id="selectionMergeCells" class="mini-format-button" type="button" title="드래그한 칸을 하나로 병합" hidden>셀 병합</button>
   </div>
+  <div id="mobileEditMenu" class="mobile-edit-menu" role="toolbar" aria-label="터치 편집 메뉴" hidden>
+    <button class="toolbar-button" type="button" data-touch-edit="copy">복사</button>
+    <button class="toolbar-button" type="button" data-touch-edit="paste">붙여넣기</button>
+    <button class="toolbar-button" type="button" data-touch-edit="link">링크</button>
+    <button class="toolbar-button" type="button" data-touch-edit="unlink" hidden>링크 해제</button>
+  </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script>
@@ -1407,6 +1462,10 @@
       const mobileLayout = matchMedia('(max-width: 720px), (pointer: coarse) and (max-height: 540px)');
       const mobileFilesButton = document.getElementById('mobileFilesButton');
       const mobileToolsButton = document.getElementById('mobileToolsButton');
+      const mobileEditMenu = document.getElementById('mobileEditMenu');
+      const mobileCopyButton = mobileEditMenu.querySelector('[data-touch-edit="copy"]');
+      const mobileLinkButton = mobileEditMenu.querySelector('[data-touch-edit="link"]');
+      const mobileUnlinkButton = mobileEditMenu.querySelector('[data-touch-edit="unlink"]');
       const fileActions = document.getElementById('fileActions');
       const formatbar = document.getElementById('formatbar');
       const plainPasteDialog = document.getElementById('plainPasteDialog');
@@ -5738,6 +5797,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         autoShapeKind = null;
         shapeWarning.hidden = true;
         findbar.classList.add('open');
+        document.body.classList.add('findbar-open');
         findResultsPanel.classList.add('open');
         findResultsPanel.setAttribute('aria-hidden', 'false');
         replaceRow.style.display = withReplace ? 'grid' : 'none';
@@ -5809,6 +5869,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           workspace.scrollLeft = scrollLeft;
         };
         findbar.classList.remove('open');
+        document.body.classList.remove('findbar-open');
         findResultsPanel.classList.remove('open');
         findResultsPanel.setAttribute('aria-hidden', 'true');
         cancelScheduledFindCount();
@@ -8506,11 +8567,12 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       document.querySelector('.topbar').addEventListener('pointerdown', () => {
         if (mobileLayout.matches) saveSelection();
       });
-      document.getElementById('plainPasteButton').addEventListener('click', () => {
+      const openPlainPasteDialog = () => {
         plainPasteDialog.returnValue = '';
         plainPasteText.value = '';
         plainPasteDialog.showModal();
-      });
+      };
+      document.getElementById('plainPasteButton').addEventListener('click', openPlainPasteDialog);
       plainPasteDialog.addEventListener('close', () => {
         if (plainPasteDialog.returnValue !== 'insert' || !plainPasteText.value) return;
         restoreSelection();
@@ -8842,10 +8904,13 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       const updateMobileHeight = () => {
         if (!mobileLayout.matches || !visualViewport) {
           document.documentElement.style.removeProperty('--mobile-height');
+          document.body.classList.remove('short-mobile-viewport');
           return;
         }
         if (visualViewport.scale !== 1) return;
-        document.documentElement.style.setProperty('--mobile-height', `${Math.round(visualViewport.height)}px`);
+        const height = Math.round(visualViewport.height);
+        document.documentElement.style.setProperty('--mobile-height', `${height}px`);
+        document.body.classList.toggle('short-mobile-viewport', height <= 260);
         if (tablePicker.classList.contains('open')) positionTablePicker();
         if (symbolPicker.classList.contains('open')) positionSymbolPicker();
         scheduleTableControls();
@@ -8892,14 +8957,8 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       // 취소선·하이퍼링크만 구간별로 되살립니다. 글꼴·글자 크기·색처럼 문서 모양을
       // 흔드는 외부 서식은 가져오지 않습니다.
       // Ctrl+Shift+V는 서식 없이 글자만 붙여넣습니다.
-      editor.addEventListener('paste', (event) => {
-        event.preventDefault();
-        const linkCheckpoint = linkPasteCheckpoint;
-        linkPasteCheckpoint = null;
-        const keepFormatting = !consumePlainPasteRequest();
+      const pasteEditorContent = (plain, rich, keepFormatting = true, linkCheckpoint = null) => {
         const selection = window.getSelection();
-        const plain = event.clipboardData?.getData('text/plain') || '';
-        const rich = event.clipboardData?.getData('text/html') || '';
         const linkCandidate = plain.trim();
 
         // 1) 텍스트를 선택한 상태에서 URL을 붙여넣으면 선택 영역을 링크로 감쌉니다.
@@ -8988,6 +9047,197 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           return;
         }
         insertPlainTextPreservingBreaks(plain);
+      };
+
+      editor.addEventListener('paste', (event) => {
+        event.preventDefault();
+        const linkCheckpoint = linkPasteCheckpoint;
+        linkPasteCheckpoint = null;
+        const plain = event.clipboardData?.getData('text/plain') || '';
+        const rich = event.clipboardData?.getData('text/html') || '';
+        pasteEditorContent(plain, rich, !consumePlainPasteRequest(), linkCheckpoint);
+      });
+
+      let touchPress = null;
+      let mobileEditTarget = null;
+
+      const hideMobileEditMenu = () => {
+        mobileEditMenu.hidden = true;
+        mobileEditTarget = null;
+      };
+
+      const caretAtTouch = (x, y) => {
+        if (!editor.contains(document.elementFromPoint(x, y))) return null;
+        const position = document.caretPositionFromPoint?.(x, y);
+        if (position && editor.contains(position.offsetNode)) {
+          const range = document.createRange();
+          range.setStart(position.offsetNode, position.offset);
+          return range;
+        }
+        const range = document.caretRangeFromPoint?.(x, y);
+        return range && editor.contains(range.startContainer) ? range : null;
+      };
+
+      const rangeAtTouch = (x, y, link) => {
+        const range = caretAtTouch(x, y);
+        if (!range) return null;
+        if (link) {
+          range.selectNodeContents(link);
+          return range;
+        }
+        const node = range.startContainer;
+        if (node.nodeType !== Node.TEXT_NODE) return range;
+        const offset = range.startOffset;
+        for (const match of node.data.matchAll(/[\p{L}\p{N}\p{M}_]+|[^\s]/gu)) {
+          const end = match.index + match[0].length;
+          if (offset < match.index || offset > end) continue;
+          const word = document.createRange();
+          word.setStart(node, match.index);
+          word.setEnd(node, end);
+          if ([...word.getClientRects()].some(rect => x >= rect.left && x <= rect.right
+            && y >= rect.top && y <= rect.bottom)) return word;
+        }
+        return range;
+      };
+
+      const showMobileEditMenu = (range, x, y, link) => {
+        hideSelectionToolbar();
+        hideLinkPreview();
+        mobileEditTarget = { range, link };
+        mobileCopyButton.hidden = range.collapsed;
+        mobileLinkButton.textContent = link ? '링크 수정' : '링크';
+        mobileUnlinkButton.hidden = !link;
+        mobileEditMenu.hidden = false;
+        const menu = mobileEditMenu.getBoundingClientRect();
+        const rect = range.getClientRects()[0];
+        const center = rect ? rect.left + rect.width / 2 : x;
+        const bottom = viewportHeight() - menu.height - 8;
+        const below = (rect?.bottom ?? y) + 8;
+        const top = below <= bottom ? below : (rect?.top ?? y) - menu.height - 8;
+        mobileEditMenu.style.left = Math.max(8, Math.min(center - menu.width / 2, innerWidth - menu.width - 8)) + 'px';
+        mobileEditMenu.style.top = Math.max(8, Math.min(top, bottom)) + 'px';
+      };
+
+      const finishTouchPress = () => {
+        const press = touchPress;
+        if (!press) return null;
+        clearTimeout(press.timer);
+        touchPress = null;
+        editor.classList.remove('touch-pressing');
+        return press;
+      };
+
+      editor.addEventListener('contextmenu', (event) => {
+        if (!mobileLayout.matches) return;
+        if (touchPress || event.pointerType === 'touch' || event.sourceCapabilities?.firesTouchEvents
+          || (!event.pointerType && matchMedia('(hover: none)').matches)) {
+          event.preventDefault();
+        }
+      });
+
+      editor.addEventListener('touchstart', (event) => {
+        finishTouchPress();
+        hideMobileEditMenu();
+        if (!mobileLayout.matches || composing || event.touches.length !== 1) return;
+        const { clientX: x, clientY: y } = event.touches[0];
+        const link = event.target.closest?.('a');
+        editor.classList.add('touch-pressing');
+        const press = { x, y, anchor: null, range: null, link, timer: 0 };
+        press.timer = setTimeout(() => {
+          press.anchor = press.range = rangeAtTouch(x, y, link);
+          if (press.range) showMobileEditMenu(press.range, x, y, link);
+        }, 450);
+        touchPress = press;
+      }, { passive: true });
+
+      editor.addEventListener('touchmove', (event) => {
+        const press = touchPress;
+        if (!press) return;
+        const { clientX: x, clientY: y } = event.touches[0];
+        if (!press.anchor) {
+          if (Math.hypot(x - press.x, y - press.y) > 10) finishTouchPress();
+          return;
+        }
+        if (event.cancelable) event.preventDefault();
+        const caret = caretAtTouch(x, y);
+        if (!caret) return;
+        const range = press.anchor.cloneRange();
+        const order = range.comparePoint(caret.startContainer, caret.startOffset);
+        if (order < 0) range.setStart(caret.startContainer, caret.startOffset);
+        if (order > 0) range.setEnd(caret.startContainer, caret.startOffset);
+        press.range = order ? range : press.anchor;
+      }, { passive: false });
+
+      editor.addEventListener('touchend', (event) => {
+        const press = finishTouchPress();
+        if (!press?.range) return;
+        if (event.cancelable) event.preventDefault();
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(press.range);
+        saveSelection();
+        showMobileEditMenu(press.range, press.x, press.y, press.range === press.anchor ? press.link : null);
+      }, { passive: false });
+
+      editor.addEventListener('touchcancel', () => {
+        if (finishTouchPress()) hideMobileEditMenu();
+      });
+      editor.addEventListener('input', hideMobileEditMenu);
+      document.addEventListener('pointerdown', (event) => {
+        if (!mobileEditMenu.contains(event.target)) hideMobileEditMenu();
+      });
+      window.addEventListener('scroll', hideMobileEditMenu, true);
+      window.addEventListener('resize', hideMobileEditMenu);
+      mobileEditMenu.addEventListener('mousedown', (event) => event.preventDefault());
+
+      const selectMobileEditTarget = (target) => {
+        hideMobileEditMenu();
+        selectEditorRange(target.range);
+        saveSelection();
+      };
+
+      const pasteFromMobileMenu = async (target) => {
+        let plain = '', rich = '';
+        try {
+          const clipboard = navigator.clipboard;
+          if (clipboard?.read) {
+            const items = await clipboard.read();
+            const item = items.find(entry => entry.types.some(type => type === 'text/plain' || type === 'text/html'));
+            const read = async (type) => item?.types.includes(type) ? (await item.getType(type)).text() : '';
+            [plain, rich] = await Promise.all([read('text/plain'), read('text/html')]);
+          } else {
+            plain = await clipboard.readText();
+          }
+        } catch {
+          if (mobileEditTarget !== target) return;
+          selectMobileEditTarget(target);
+          openPlainPasteDialog();
+          return;
+        }
+        if (mobileEditTarget !== target) return;
+        selectMobileEditTarget(target);
+        pasteEditorContent(plain, rich);
+      };
+
+      mobileEditMenu.addEventListener('click', async (event) => {
+        const action = event.target.closest('button')?.dataset.touchEdit;
+        const target = mobileEditTarget;
+        if (!action || !target || !editor.contains(target.range.commonAncestorContainer)) return;
+        if (action === 'paste') {
+          await pasteFromMobileMenu(target);
+          return;
+        }
+        selectMobileEditTarget(target);
+        if (action === 'link') insertLink(target.link?.getAttribute('href') || '');
+        if (action === 'unlink') runCommand('unlink');
+        if (action === 'copy') {
+          try {
+            if (!document.execCommand('copy')) await navigator.clipboard.writeText(target.range.toString());
+            showToast('복사했습니다.');
+          } catch {
+            showToast('복사하지 못했습니다.');
+          }
+        }
       });
 
       document.querySelectorAll('[data-find]').forEach((button) => {
