@@ -194,6 +194,32 @@ try {
   await page.evaluate(() => { delete navigator.clipboard.read; });
 
   await page.evaluate(() => {
+    T.set('<p><br></p>');
+    return T.writeClipboard(
+      '<p>판정 보고서</p><pre><code>def review():\n    return total &lt; 1\n\n# 재검토</code></pre>'
+      + '<p><br></p><table><tr><th>판정</th><th>건수</th></tr><tr><td>성공</td><td>12</td></tr></table>',
+      '판정 보고서\ndef review():\n    return total < 1\n\n# 재검토\n\n판정\t건수\n성공\t12'
+    );
+  });
+  await hold('#editor p');
+  await tap('[data-touch-edit="paste"]');
+  await page.locator('#editor table').waitFor();
+  r.check('M12 모바일 메뉴로 복합 보고서를 붙여넣어 코드·빈 문단·표 보존', await page.evaluate(() => {
+    const blocks = [...T.ed().children];
+    return [blocks.map(block => block.tagName).slice(0, 4), blocks[1].textContent, blocks[2].textContent,
+      [...blocks[3].rows].map(row => [...row.cells].map(cell => cell.textContent))];
+  }), [['P', 'PRE', 'P', 'TABLE'], 'def review():\n    return total < 1\n\n# 재검토', '', [['판정', '건수'], ['성공', '12']]]);
+  await page.keyboard.press('Control+z');
+  r.check('M12 모바일 메뉴로 붙여넣은 보고서를 한 번에 실행 취소', await page.evaluate(() => T.html()), '<p><br></p>');
+
+  await page.evaluate(() => T.writeClipboard('', ['판정 보고서', '', '\\`\\`\\`', '&#x20;   outcome = "성공"', '\\`\\`\\`', '', '평가 완료'].join('\\\n')));
+  await hold('#editor p');
+  await tap('[data-touch-edit="paste"]');
+  await page.locator('#editor pre code').waitFor();
+  r.check('M12 모바일 메뉴에서 이스케이프된 Markdown 줄바꿈과 들여쓰기 복원', await page.evaluate(() =>
+    [...T.ed().children].map(block => block.textContent)), ['판정 보고서', '', '    outcome = "성공"', '', '평가 완료']);
+
+  await page.evaluate(() => {
     T.set('<p id="tapTarget">입력할 문장</p>' + '<p>스크롤할 보고서 내용</p>'.repeat(40));
     document.querySelector('.workspace').scrollTop = 0;
   });
