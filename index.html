@@ -452,8 +452,37 @@
       display: flex;
       flex-wrap: wrap;
       max-width: calc(100vw - 16px);
+      touch-action: manipulation;
     }
     .mobile-edit-menu .toolbar-button { min-height: 44px; white-space: nowrap; }
+    .mobile-edit-menu.is-adjusting { visibility: hidden; }
+
+    .mobile-selection-handle {
+      position: fixed;
+      width: 42px;
+      height: 44px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--accent);
+      touch-action: none;
+      user-select: none;
+      z-index: 36;
+    }
+    .mobile-selection-handle::before,
+    .mobile-selection-handle::after {
+      position: absolute;
+      background: currentColor;
+      content: "";
+    }
+    .mobile-selection-handle::before { top: 4px; width: 2px; height: 13px; }
+    .mobile-selection-handle::after { top: 13px; width: 15px; height: 15px; border-radius: 50%; }
+    [data-selection-edge="start"] { transform: translate(-35px, -4px); }
+    [data-selection-edge="end"] { transform: translate(-7px, -4px); }
+    [data-selection-edge="start"]::before { left: 34px; }
+    [data-selection-edge="end"]::before { left: 6px; }
+    [data-selection-edge="start"]::after { left: 23px; }
+    [data-selection-edge="end"]::after { left: 5px; }
 
     .table-controls {
       position: fixed;
@@ -1208,7 +1237,7 @@
 
     @media print {
       body { display: block; overflow: visible; background: white; }
-      .topbar, .findbar, .find-results-panel, .selection-toolbar, .mobile-edit-menu, .table-picker, .symbol-picker, .statusbar, .toast { display: none !important; }
+      .topbar, .findbar, .find-results-panel, .selection-toolbar, .mobile-edit-menu, .mobile-selection-handle, .table-picker, .symbol-picker, .statusbar, .toast { display: none !important; }
       .editor-shell { display: block; }
       .workspace { overflow: visible; padding: 0; }
       .page { width: auto; min-height: auto; padding: 0; box-shadow: none; }
@@ -1469,6 +1498,8 @@
     <button class="toolbar-button" type="button" data-touch-edit="link">링크</button>
     <button class="toolbar-button" type="button" data-touch-edit="unlink" hidden>링크 해제</button>
   </div>
+  <button class="mobile-selection-handle" type="button" data-selection-edge="start" aria-label="선택 시작 손잡이" tabindex="-1" hidden></button>
+  <button class="mobile-selection-handle" type="button" data-selection-edge="end" aria-label="선택 끝 손잡이" tabindex="-1" hidden></button>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script>
@@ -1481,6 +1512,7 @@
       const mobileFilesButton = document.getElementById('mobileFilesButton');
       const mobileToolsButton = document.getElementById('mobileToolsButton');
       const mobileEditMenu = document.getElementById('mobileEditMenu');
+      const mobileSelectionHandles = [...document.querySelectorAll('.mobile-selection-handle')];
       const mobileCopyButton = mobileEditMenu.querySelector('[data-touch-edit="copy"]');
       const mobileLinkButton = mobileEditMenu.querySelector('[data-touch-edit="link"]');
       const mobileUnlinkButton = mobileEditMenu.querySelector('[data-touch-edit="unlink"]');
@@ -9156,10 +9188,14 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
 
       let touchPress = null;
       let mobileEditTarget = null;
+      let mobileHandleDrag = null;
 
       const hideMobileEditMenu = () => {
         mobileEditMenu.hidden = true;
+        mobileEditMenu.classList.remove('is-adjusting');
+        mobileSelectionHandles.forEach(handle => { handle.hidden = true; });
         mobileEditTarget = null;
+        mobileHandleDrag = null;
       };
 
       const caretAtTouch = (x, y) => {
@@ -9196,10 +9232,28 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         return range;
       };
 
-      const showMobileEditMenu = (range, x, y, link) => {
-        hideSelectionToolbar();
-        hideLinkPreview();
-        mobileEditTarget = { range, link };
+      const mobileSelectionEdge = (range, edge) => {
+        const caret = range.cloneRange();
+        caret.collapse(edge === 'start');
+        const rect = caret.getBoundingClientRect();
+        if (rect.height) return { x: rect.left, top: rect.top, bottom: rect.bottom };
+        const rects = range.getClientRects();
+        const fallback = edge === 'start' ? rects[0] : rects[rects.length - 1];
+        return fallback && { x: edge === 'start' ? fallback.left : fallback.right, top: fallback.top, bottom: fallback.bottom };
+      };
+
+      const positionMobileEditMenu = () => {
+        const { range, x, y, link } = mobileEditTarget;
+        const view = workspace.getBoundingClientRect();
+        mobileSelectionHandles.forEach(handle => {
+          const edge = !touchPress && !range.collapsed && mobileSelectionEdge(range, handle.dataset.selectionEdge);
+          handle.hidden = !edge || edge.x < view.left || edge.x > view.right
+            || edge.bottom < view.top || edge.bottom > view.bottom;
+          if (edge) {
+            handle.style.left = `${edge.x}px`;
+            handle.style.top = `${edge.bottom}px`;
+          }
+        });
         mobileCopyButton.hidden = range.collapsed;
         mobileLinkButton.textContent = link ? '링크 수정' : '링크';
         mobileUnlinkButton.hidden = !link;
@@ -9208,11 +9262,69 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         const rect = range.getClientRects()[0];
         const center = rect ? rect.left + rect.width / 2 : x;
         const bottom = viewportHeight() - menu.height - 8;
-        const below = (rect?.bottom ?? y) + 8;
-        const top = below <= bottom ? below : (rect?.top ?? y) - menu.height - 8;
+        const above = (rect?.top ?? y) - menu.height - 8;
+        const end = mobileSelectionEdge(range, 'end');
+        const below = range.collapsed ? (rect?.bottom ?? y) + 8 : (end?.bottom ?? y) + 34;
+        const top = above >= 8 ? above : below;
         mobileEditMenu.style.left = Math.max(8, Math.min(center - menu.width / 2, innerWidth - menu.width - 8)) + 'px';
         mobileEditMenu.style.top = Math.max(8, Math.min(top, bottom)) + 'px';
       };
+
+      const showMobileEditMenu = (range, x, y, link) => {
+        hideSelectionToolbar();
+        hideLinkPreview();
+        mobileEditTarget = { range, x, y, link };
+        positionMobileEditMenu();
+      };
+
+      mobileSelectionHandles.forEach(handle => {
+        handle.addEventListener('pointerdown', event => {
+          if (!mobileEditTarget || mobileHandleDrag || event.button !== 0) return;
+          const edge = handle.dataset.selectionEdge;
+          const position = mobileSelectionEdge(mobileEditTarget.range, edge);
+          if (!position) return;
+          event.preventDefault();
+          handle.setPointerCapture(event.pointerId);
+          mobileHandleDrag = {
+            id: event.pointerId,
+            edge,
+            offsetX: event.clientX - position.x,
+            offsetY: event.clientY - (position.top + position.bottom) / 2
+          };
+          mobileEditMenu.classList.add('is-adjusting');
+        });
+        handle.addEventListener('pointermove', event => {
+          const drag = mobileHandleDrag;
+          if (!drag || drag.id !== event.pointerId || !mobileEditTarget) return;
+          const caret = caretAtTouch(event.clientX - drag.offsetX, event.clientY - drag.offsetY);
+          if (!caret) return;
+          const target = mobileEditTarget;
+          const range = target.range.cloneRange();
+          const opposite = range.cloneRange();
+          const fromStart = drag.edge === 'start';
+          opposite.collapse(!fromStart);
+          const order = opposite.comparePoint(caret.startContainer, caret.startOffset);
+          if (fromStart ? order >= 0 : order <= 0) return;
+          if (fromStart) range.setStart(caret.startContainer, caret.startOffset);
+          else range.setEnd(caret.startContainer, caret.startOffset);
+          if (range.collapsed) return;
+          const anchor = target.link;
+          target.link = anchor?.contains(range.startContainer) && anchor.contains(range.endContainer) ? anchor : null;
+          target.range = range;
+          selectEditorRange(range);
+          saveSelection();
+          positionMobileEditMenu();
+        });
+        const stopDragging = (event) => {
+          if (mobileHandleDrag?.id !== event.pointerId) return;
+          mobileHandleDrag = null;
+          mobileEditMenu.classList.remove('is-adjusting');
+        };
+        handle.addEventListener('pointerup', stopDragging);
+        handle.addEventListener('pointercancel', stopDragging);
+        handle.addEventListener('lostpointercapture', stopDragging);
+        handle.addEventListener('contextmenu', event => event.preventDefault());
+      });
 
       const finishTouchPress = () => {
         const press = touchPress;
@@ -9285,16 +9397,26 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       });
       editor.addEventListener('input', hideMobileEditMenu);
       document.addEventListener('pointerdown', (event) => {
-        if (!mobileEditMenu.contains(event.target)) hideMobileEditMenu();
+        if (!mobileEditMenu.contains(event.target) && !mobileSelectionHandles.includes(event.target)) hideMobileEditMenu();
       });
       const dismissMobileEditMenuAfterViewportChange = () => {
         // 누른 상태에서 키보드나 브라우저 도구 모음이 움직여도 손을 뗄 때
         // 새 좌표로 메뉴를 다시 배치할 수 있습니다.
-        if (!touchPress?.range) hideMobileEditMenu();
+        if (mobileHandleDrag && mobileEditTarget) positionMobileEditMenu();
+        else if (!touchPress?.range) hideMobileEditMenu();
       };
       window.addEventListener('scroll', dismissMobileEditMenuAfterViewportChange, true);
       window.addEventListener('resize', dismissMobileEditMenuAfterViewportChange);
       mobileEditMenu.addEventListener('mousedown', (event) => event.preventDefault());
+      mobileEditMenu.addEventListener('touchend', (event) => {
+        const button = event.target.closest('[data-touch-edit]');
+        if (!button || !event.cancelable || event.touches.length || event.changedTouches.length !== 1) return;
+        const { clientX, clientY } = event.changedTouches[0];
+        if (document.elementFromPoint(clientX, clientY)?.closest('[data-touch-edit]') !== button) return;
+        // 손잡이 드래그 직후에는 브라우저가 후속 탭의 click을 생략할 수 있습니다.
+        event.preventDefault();
+        button.click();
+      }, { passive: false });
 
       const selectMobileEditTarget = (target) => {
         hideMobileEditMenu();

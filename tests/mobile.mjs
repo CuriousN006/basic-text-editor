@@ -128,7 +128,7 @@ try {
     visualViewport.dispatchEvent(new Event('resize'));
   });
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.evaluate(() => T.set('<p>첫 <strong id="touchWord">평가기록</strong> <span id="touchEnd">검토</span> 중입니다.</p><p id="touchBlank"><br></p>'));
+  await page.evaluate(() => T.set('<p>첫 <strong id="touchWord">평가기록</strong> <span id="touchEnd">검토</span> 중입니다.</p><p id="touchBlank"><br></p><p id="touchNextLine">다음 줄</p>'));
   const touch = await context.newCDPSession(page);
   const touchAt = async (selector, horizontalFraction = 0.5) => {
     const target = page.locator(selector);
@@ -165,6 +165,43 @@ try {
   await tap('[data-touch-edit="copy"]');
   r.check('M11 메뉴에서 실제 클립보드로 선택한 글자를 복사',
     await page.evaluate(() => navigator.clipboard.readText()), '평가기록');
+
+  const visibleHandles = () => page.locator('.mobile-selection-handle:visible').count();
+  const dragSelectionHandle = async (edge, selector, offset) => {
+    const handle = '[data-selection-edge="' + edge + '"]';
+    const start = await touchAt(handle);
+    const end = await page.locator(selector).evaluate((node, { edge, offset, start }) => {
+      const selection = getSelection().getRangeAt(0).cloneRange();
+      selection.collapse(edge === 'start');
+      const from = selection.getBoundingClientRect();
+      const caret = new Range();
+      caret.setStart(node.firstChild, offset);
+      caret.collapse(true);
+      const to = caret.getBoundingClientRect();
+      return { x: Math.round(start.x + to.left - from.left),
+        y: Math.round(start.y + (to.top + to.bottom - from.top - from.bottom) / 2) };
+    }, { edge, offset, start });
+    await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [start] });
+    await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [end] });
+    await release();
+  };
+
+  await hold('#touchWord');
+  r.check('M13 손을 뗀 뒤에도 선택 시작·끝 손잡이가 표시됨', await visibleHandles(), 2);
+  await dragSelectionHandle('end', '#touchEnd', 2);
+  r.check('M13 끝 손잡이로 선택을 다음 낱말까지 넓힘', await page.evaluate(() => T.selection()), '평가기록 검토');
+  await dragSelectionHandle('end', '#touchNextLine', 2);
+  r.check('M13 끝 손잡이로 다음 문단까지 선택', await page.evaluate(() => T.selection().trim().endsWith('다음')), true);
+  await dragSelectionHandle('end', '#touchEnd', 2);
+  await dragSelectionHandle('start', '#editor p:first-child', 0);
+  r.check('M13 시작 손잡이로 반대쪽 범위를 넓힘', await page.evaluate(() => T.selection()), '첫 평가기록 검토');
+  await dragSelectionHandle('start', '#touchWord', 1);
+  r.check('M13 시작 손잡이로 범위를 한 글자 단위로 좁힘', await page.evaluate(() => T.selection()), '가기록 검토');
+  await tap('[data-touch-edit="copy"]');
+  await page.locator('#mobileEditMenu').waitFor({ state: 'hidden' });
+  r.check('M13 조절한 범위만 복사하고 손잡이를 닫음', [
+    await page.evaluate(() => navigator.clipboard.readText()), await visibleHandles()
+  ], ['가기록 검토', 0]);
 
   await press('#touchWord');
   await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [await touchAt('#touchEnd', 0.96)] });
@@ -212,6 +249,7 @@ try {
   await hold('#touchBlank');
   r.check('M11 빈 문단을 길게 누르면 붙여넣기와 링크만 표시',
     await page.locator('#mobileEditMenu button:visible').allTextContents(), ['붙여넣기', '링크']);
+  r.check('M13 글자를 선택하지 않으면 손잡이가 표시되지 않음', await visibleHandles(), 0);
   await tap('[data-touch-edit="paste"]');
   await page.locator('#plainPasteText').fill('직접 붙여넣은 문장');
   await tap('#plainPasteDialog [value="insert"]');
