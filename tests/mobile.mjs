@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { startServer, launch, openEditor, makeReporter } from './harness.mjs';
 
 const { server, base } = await startServer();
@@ -71,12 +72,24 @@ try {
     visualViewport.dispatchEvent(new Event('resize'));
   });
 
-  await tap('#mobileFilesButton');
-  const download = await Promise.all([
-    page.waitForEvent('download'),
-    tap('[data-action="save-html"]')
-  ]).then(([item]) => item);
-  r.check('M7 파일 메뉴에서 HTML 다운로드', download.suggestedFilename().endsWith('.html'), true);
+  await page.evaluate(() => {
+    window.pickerCalls = 0;
+    window.showSaveFilePicker = async () => {
+      window.pickerCalls++;
+      throw new DOMException('로컬 문서 접근 제한', 'SecurityError');
+    };
+  });
+  for (const extension of ['html', 'md', 'docx']) {
+    await tap('#mobileFilesButton');
+    const [download] = await Promise.all([page.waitForEvent('download'), tap(`[data-action="save-${extension}"]`)]);
+    const body = await readFile(await download.path());
+    const content = extension === 'docx' ? body.subarray(0, 2).toString() : body.toString();
+    r.check(`M7 모바일에서 파일 선택기를 거치지 않고 ${extension} 다운로드`, [
+      download.suggestedFilename().endsWith('.' + extension),
+      extension === 'docx' ? content === 'PK' : content.includes('교체'),
+      await page.evaluate(() => window.pickerCalls)
+    ], [true, true, 0]);
+  }
 
   await page.setViewportSize({ width: 844, height: 390 });
   r.check('M8 가로로 돌린 터치 화면에 모바일 도구가 유지됨', await page.locator('#mobileToolsButton').isVisible(), true);
@@ -336,10 +349,42 @@ try {
   r.check('M15 휴대폰에서 파일 메뉴를 열기 전 전체 서식 복사는 숨김', await copyAll.isVisible(), false);
   await tap('#mobileFilesButton');
   await copyAll.tap();
+  await page.waitForFunction(async () => (await navigator.clipboard.readText()).includes('선택한단어 다음'));
   r.check('M15 파일 메뉴에서 문서 전체를 복사', await page.evaluate(async () =>
     (await navigator.clipboard.readText()).includes('선택한단어 다음')), true);
   await page.setViewportSize({ width: 1280, height: 900 });
   r.check('M15 데스크톱 상단에서 전체 서식 복사를 바로 사용 가능', await copyAll.isVisible(), true);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => T.set('<p><b>첫 줄</b><br><a href="https://example.com/">주소</a></p><p><br></p><p>마지막 줄</p>'));
+  const checkRichClipboard = async (label, denyWrite = false) => {
+    await page.evaluate(() => T.writeClipboard('', '이전 클립보드'));
+    if (denyWrite) {
+      await page.evaluate(() => {
+        Object.defineProperty(navigator.clipboard, 'write', {
+          configurable: true, value: async () => { throw new DOMException('로컬 문서 제한', 'NotAllowedError'); }
+        });
+      });
+    }
+    await tap('#mobileFilesButton');
+    await copyAll.tap();
+    await page.waitForFunction(async () => (await navigator.clipboard.readText()) !== '이전 클립보드');
+    const types = await page.evaluate(async () => {
+      const [item] = await navigator.clipboard.read();
+      return [...item.types].sort();
+    });
+    r.check(label + '에 HTML과 일반 텍스트 모두 기록', types, ['text/html', 'text/plain']);
+    const result = await page.evaluate(async () => {
+      const [item] = await navigator.clipboard.read();
+      const html = await (await item.getType('text/html')).text();
+      const plain = (await (await item.getType('text/plain')).text()).replace(/^[ \t\u00a0]+$/gm, '');
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      return [doc.querySelector('b,strong')?.textContent, doc.querySelector('a')?.href, plain];
+    });
+    r.check(label + '에 굵게·링크·줄바꿈 보존', result, ['첫 줄', 'https://example.com/', '첫 줄\n주소\n\n마지막 줄']);
+  };
+  await checkRichClipboard('M16 전체 서식 복사');
+  await checkRichClipboard('M16 Clipboard API 거절 후 대체 복사', true);
 } finally {
   await context.close();
   await browser.close();

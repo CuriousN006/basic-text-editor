@@ -144,6 +144,44 @@ await withPage({}, async (page) => {
   r.check('N21 복구한 초안도 첫 줄 이름', await page.evaluate(() => window.__pickerNames), ['복구한 글의 제목.html']);
 });
 
+await withPage({}, async (page) => {
+  await page.evaluate(() => {
+    T.set('<p>다운로드 대체</p>');
+    window.showSaveFilePicker = async () => { throw new DOMException('선택기 접근 제한', 'SecurityError'); };
+  });
+  for (const extension of ['html', 'md', 'docx']) {
+    const file = await download(page, 'save-' + extension);
+    r.check(`N22 파일 선택기가 거절하면 ${extension} 다운로드로 전환`, file.name, '다운로드 대체.' + extension);
+  }
+});
+
+await withPage({}, async (page) => {
+  await page.evaluate(() => {
+    T.set('<p>쓰기 대체</p>');
+    window.showSaveFilePicker = async () => ({
+      name: '원본.html',
+      createWritable: async () => { throw new DOMException('쓰기 접근 제한', 'NotAllowedError'); }
+    });
+  });
+  const file = await download(page, 'save-html');
+  r.check('N23 파일 쓰기가 거절되어도 내용을 내려받음',
+    [file.name, file.body.toString().includes('<p>쓰기 대체</p>')], ['쓰기 대체.html', true]);
+});
+
+await withPage({}, async (page) => {
+  let downloads = 0;
+  page.on('download', () => { downloads++; });
+  await page.evaluate(() => {
+    T.set('<p>저장 취소</p>');
+    window.showSaveFilePicker = async () => { throw new DOMException('취소', 'AbortError'); };
+  });
+  await page.click('[data-action="save-html"]');
+  await page.waitForTimeout(100);
+  r.check('N24 저장 창을 취소하면 다운로드나 오류 알림이 없음', [
+    downloads, await page.evaluate(() => T.toast())
+  ], [0, '']);
+});
+
 await browser.close();
 server.close();
 process.exit(r.summary() ? 1 : 0);

@@ -1509,6 +1509,7 @@
       const editor = document.getElementById('editor');
       const workspace = document.querySelector('.workspace');
       const mobileLayout = matchMedia('(max-width: 720px), (pointer: coarse) and (max-height: 540px)');
+      const touchPrimary = matchMedia('(pointer: coarse)');
       const mobileFilesButton = document.getElementById('mobileFilesButton');
       const mobileToolsButton = document.getElementById('mobileToolsButton');
       const mobileEditMenu = document.getElementById('mobileEditMenu');
@@ -1573,9 +1574,7 @@
       const linkPreviewCopy = document.getElementById('linkPreviewCopy');
       const UNTITLED_FILE_NAME = '새 문서';
       let currentFileName = UNTITLED_FILE_NAME;
-      let currentHtmlFileHandle = null;
-      let currentMarkdownFileHandle = null;
-      let currentDocxFileHandle = null;
+      const currentFileHandles = { html: null, md: null, docx: null };
       let toastTimer = null;
       let savedRange = null;
       let hoveredLink = null;
@@ -4245,18 +4244,6 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
 </body>
 </html>`;
 
-      const downloadText = (content, fileName, mime) => {
-        const blob = new Blob([content], { type: `${mime};charset=utf-8` });
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement('a');
-        anchor.href = url;
-        anchor.download = fileName;
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-      };
-
       // 아직 파일 이름이 없는 문서는 Word처럼 첫 줄을 제목으로 씁니다.
       // 첫 문장만 쓰고, 파일 이름에 쓸 수 없는 글자는 공백으로 바꾸며, 너무 길면 자릅니다.
       const TITLE_MAX_LENGTH = 50;
@@ -4605,9 +4592,12 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         anchor.href = url;
         anchor.download = fileName;
         document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        try {
+          anchor.click();
+        } finally {
+          anchor.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 30000);
+        }
       };
 
       const writeToFileHandle = async (handle, content) => {
@@ -4616,98 +4606,62 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         await writable.close();
       };
 
-      const saveHtmlDocument = async () => {
-        if (typeof window.showSaveFilePicker !== 'function') {
-          downloadText(buildStandaloneHtml(), suggestedName('html'), 'text/html');
-          markDocumentSavedUnverified();
-          showToast('HTML 파일을 내려받았습니다.');
-          return;
-        }
-
-        const hadHandle = Boolean(currentHtmlFileHandle);
-        try {
-          if (!currentHtmlFileHandle) {
-            currentHtmlFileHandle = await window.showSaveFilePicker({
-              suggestedName: suggestedName('html'),
-              types: [{ description: 'HTML 문서', accept: { 'text/html': ['.html', '.htm'] } }]
-            });
-          }
-          await writeToFileHandle(currentHtmlFileHandle, buildStandaloneHtml());
-          currentFileName = currentHtmlFileHandle.name;
-          markDocumentClean();
-          updateCount();
-          showToast(hadHandle
-            ? `${currentFileName} 파일을 업데이트했습니다.`
-            : `${currentFileName} 파일로 저장했습니다.`);
-        } catch (error) {
-          if (error?.name === 'AbortError') return;
-          currentHtmlFileHandle = null;
-          showToast('HTML 파일을 저장하지 못했습니다.');
+      const saveFormats = {
+        html: { label: 'HTML', description: 'HTML 문서', mime: 'text/html', extensions: ['.html', '.htm'], build: buildStandaloneHtml },
+        md: { label: '마크다운', description: '마크다운 문서', mime: 'text/markdown', extensions: ['.md', '.markdown'], build: htmlToMarkdown },
+        docx: {
+          label: 'DOCX', description: 'Microsoft Word 문서', extensions: ['.docx'],
+          mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', build: buildDocxBlob
         }
       };
 
-      const saveMarkdownDocument = async () => {
-        if (typeof window.showSaveFilePicker !== 'function') {
-          downloadText(htmlToMarkdown(), suggestedName('md'), 'text/markdown');
+      const saveDocument = async (extension) => {
+        const { label, description, mime, extensions, build } = saveFormats[extension];
+        const fileName = suggestedName(extension);
+        let content;
+        const getContent = () => content ??= build();
+        const download = () => {
+          const data = getContent();
+          const blob = data instanceof Blob ? data : new Blob([data], { type: `${mime};charset=utf-8` });
+          downloadBlob(blob, fileName);
           markDocumentSavedUnverified();
-          showToast('마크다운 파일을 내려받았습니다.');
-          return;
-        }
-
-        const hadHandle = Boolean(currentMarkdownFileHandle);
+          showToast(`${label} 파일 다운로드를 요청했습니다.`);
+        };
         try {
-          if (!currentMarkdownFileHandle) {
-            currentMarkdownFileHandle = await window.showSaveFilePicker({
-              suggestedName: suggestedName('md'),
-              types: [{ description: '마크다운 문서', accept: { 'text/markdown': ['.md', '.markdown'] } }]
-            });
+          // 모바일의 로컬 문서는 선택 API가 있어도 접근을 거절할 수 있습니다.
+          // 터치에서 바로 다운로드를 요청하면 사용자 활성화도 유지됩니다.
+          if (touchPrimary.matches || location.protocol === 'content:' || typeof window.showSaveFilePicker !== 'function') {
+            download();
+            return;
           }
-          await writeToFileHandle(currentMarkdownFileHandle, htmlToMarkdown());
-          currentFileName = currentMarkdownFileHandle.name;
-          markDocumentClean();
-          updateCount();
-          showToast(hadHandle
-            ? `${currentFileName} 파일을 업데이트했습니다.`
-            : `${currentFileName} 파일로 저장했습니다.`);
-        } catch (error) {
-          if (error?.name === 'AbortError') return;
-          currentMarkdownFileHandle = null;
-          showToast('마크다운 파일을 저장하지 못했습니다.');
-        }
-      };
-
-      const saveDocxDocument = async () => {
-        const mime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-        if (typeof window.showSaveFilePicker !== 'function') {
+          let handle = currentFileHandles[extension];
+          const hadHandle = Boolean(handle);
+          if (!handle) {
+            try {
+              handle = await window.showSaveFilePicker({ suggestedName: fileName, types: [{ description, accept: { [mime]: extensions } }] });
+            } catch (error) {
+              if (error?.name === 'AbortError') return;
+              download();
+              return;
+            }
+          }
+          const data = getContent();
           try {
-            downloadBlob(buildDocxBlob(), suggestedName('docx'));
-            markDocumentSavedUnverified();
-            showToast('DOCX 파일을 내려받았습니다.');
+            await writeToFileHandle(handle, data);
           } catch (error) {
-            showToast('DOCX 파일을 만들지 못했습니다.');
+            currentFileHandles[extension] = null;
+            download();
+            return;
           }
-          return;
-        }
-
-        const hadHandle = Boolean(currentDocxFileHandle);
-        try {
-          if (!currentDocxFileHandle) {
-            currentDocxFileHandle = await window.showSaveFilePicker({
-              suggestedName: suggestedName('docx'),
-              types: [{ description: 'Microsoft Word 문서', accept: { [mime]: ['.docx'] } }]
-            });
-          }
-          await writeToFileHandle(currentDocxFileHandle, buildDocxBlob());
-          currentFileName = currentDocxFileHandle.name;
+          currentFileHandles[extension] = handle;
+          currentFileName = handle.name;
           markDocumentClean();
           updateCount();
           showToast(hadHandle
-            ? currentFileName + ' 파일을 업데이트했습니다.'
-            : currentFileName + ' 파일로 저장했습니다.');
+            ? `${currentFileName} 파일을 업데이트했습니다.`
+            : `${currentFileName} 파일로 저장했습니다.`);
         } catch (error) {
-          if (error?.name === 'AbortError') return;
-          currentDocxFileHandle = null;
-          showToast('DOCX 파일을 저장하지 못했습니다.');
+          showToast(`${label} 파일을 저장하지 못했습니다.`);
         }
       };
 
@@ -4722,19 +4676,13 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           [...editor.childNodes].forEach((node) => {
             if (node.nodeType === Node.TEXT_NODE && !node.nodeValue.trim()) node.remove();
           });
-          currentHtmlFileHandle = handle;
-          currentMarkdownFileHandle = null;
-          currentDocxFileHandle = null;
+          Object.assign(currentFileHandles, { html: handle, md: null, docx: null });
         } else if (/\.(md|markdown)$/i.test(file.name)) {
           editor.innerHTML = markdownToHtml(text, { blankLineSeparates: true });
-          currentHtmlFileHandle = null;
-          currentMarkdownFileHandle = handle;
-          currentDocxFileHandle = null;
+          Object.assign(currentFileHandles, { html: null, md: handle, docx: null });
         } else {
           editor.innerHTML = text.split(/\r?\n/).map((line) => line ? `<p>${escapeHtml(line)}</p>` : '<p class="blank-line"><br></p>').join('');
-          currentHtmlFileHandle = null;
-          currentMarkdownFileHandle = null;
-          currentDocxFileHandle = null;
+          Object.assign(currentFileHandles, { html: null, md: null, docx: null });
         }
         normalizeEmptyDocument();
         currentFileName = file.name;
@@ -5832,10 +5780,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         }
       };
 
-      const writeEditorClipboardData = (event) => {
-        const selection = window.getSelection();
-        if (!event.clipboardData || !selection || selection.isCollapsed || !selectionIsInsideEditor()) return false;
-        const range = selection.getRangeAt(0);
+      const editorClipboardPayload = (range) => {
         const standardHtml = clipboardHtmlWithExplicitBreaks(range);
         // text/html은 이미 "블록 하나 = 한 줄"로 정규화돼 있으므로
         // text/plain도 같은 구조에서 뽑아 두 형식의 줄 수를 일치시킵니다.
@@ -5843,8 +5788,13 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         const selectedText = range.toString();
         // 공백만 선택한 경우도 복사합니다. HTML의 빈 문단 자리표시와 구별합니다.
         const plain = !measured && /^[ \t]+$/.test(selectedText) ? selectedText : measured;
-        const html = naverQuoteClipboardHtml(standardHtml);
+        return { plain, html: naverQuoteClipboardHtml(standardHtml) };
+      };
 
+      const writeEditorClipboardData = (event) => {
+        const selection = window.getSelection();
+        if (!event.clipboardData || !selection || selection.isCollapsed || !selectionIsInsideEditor()) return false;
+        const { plain, html } = editorClipboardPayload(selection.getRangeAt(0));
         event.preventDefault();
         event.clipboardData.setData('text/plain', plain);
         event.clipboardData.setData('text/html', html);
@@ -5870,16 +5820,61 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         updateFormattingControlsState();
       };
 
-      const copyAllRich = () => {
-        focusEditor();
+      const copyRenderedClipboardHtml = (html) => {
+        const host = document.createElement('div');
+        // 클립보드 접근이 막힌 로컬 페이지에서도 브라우저가 렌더링한 HTML을 복사하게 합니다.
+        host.style.cssText = 'position:fixed;top:0;left:-10000px;width:800px;pointer-events:none';
+        host.setAttribute('aria-hidden', 'true');
+        host.innerHTML = html;
+        document.body.appendChild(host);
         const selection = window.getSelection();
+        const previous = selection.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
+        const range = document.createRange();
+        range.selectNodeContents(host);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        try {
+          return document.execCommand('copy');
+        } finally {
+          selection.removeAllRanges();
+          host.remove();
+          if (previous) selection.addRange(previous);
+        }
+      };
+
+      const copyAllRich = async () => {
         const range = document.createRange();
         range.selectNodeContents(editor);
+        try {
+          if (touchPrimary.matches || location.protocol === 'content:') {
+            const { plain, html } = editorClipboardPayload(range);
+            if (typeof ClipboardItem === 'function' && navigator.clipboard?.write) {
+              try {
+                await navigator.clipboard.write([new ClipboardItem({
+                  'text/html': new Blob([html], { type: 'text/html' }),
+                  'text/plain': new Blob([plain], { type: 'text/plain' })
+                })]);
+                showToast('문서 전체를 복사했습니다.');
+                return;
+              } catch (error) {
+                // 로컬 페이지가 API 호출을 거절해도 기본 복사를 시도합니다.
+              }
+            }
+            if (copyRenderedClipboardHtml(html)) {
+              showToast('문서 전체를 복사했습니다.');
+              return;
+            }
+          }
+        } catch (error) {
+          // 모바일용 복사를 사용할 수 없으면 기존 편집기의 copy 이벤트로 처리합니다.
+        }
+        focusEditor();
+        const selection = window.getSelection();
         selection.removeAllRanges();
         selection.addRange(range);
         const success = document.execCommand('copy');
         selection.removeAllRanges();
-        showToast(success ? '문서 전체를 서식 있게 복사했습니다.' : '복사하지 못했습니다. 편집 영역에서 Ctrl+A, Ctrl+C를 사용하세요.');
+        showToast(success ? '문서 전체를 복사했습니다.' : '복사하지 못했습니다. 본문을 선택한 뒤 복사해 주세요.');
       };
 
       const openFindbar = (withReplace) => {
@@ -8719,9 +8714,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
               && !window.confirm('현재 문서를 지우고 새 문서를 만들까요?')) return;
             normalizeEmptyDocument(true);
             currentFileName = UNTITLED_FILE_NAME;
-            currentHtmlFileHandle = null;
-            currentMarkdownFileHandle = null;
-            currentDocxFileHandle = null;
+            Object.assign(currentFileHandles, { html: null, md: null, docx: null });
             // innerHTML을 직접 바꾸므로 input 이벤트가 없습니다. 초안을 명시적으로
             // 비우지 않으면 비정상 종료 후 지운 문서가 되살아납니다.
             markDocumentClean();
@@ -8730,14 +8723,10 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
             focusEditor();
           } else if (action === 'open') {
             await openDocument();
-          } else if (action === 'save-html') {
-            await saveHtmlDocument();
-          } else if (action === 'save-md') {
-            await saveMarkdownDocument();
-          } else if (action === 'save-docx') {
-            await saveDocxDocument();
+          } else if (action.startsWith('save-')) {
+            await saveDocument(action.slice(5));
           } else if (action === 'copy-all') {
-            copyAllRich();
+            await copyAllRich();
           } else if (action === 'print') {
             window.print();
           } else if (action === 'link') {
@@ -9620,7 +9609,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           openFindbar(false);
         } else if (key === 's' && !event.shiftKey) {
           event.preventDefault();
-          await saveHtmlDocument();
+          await saveDocument('html');
         }
       });
 
