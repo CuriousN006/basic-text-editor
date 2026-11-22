@@ -174,7 +174,7 @@ try {
     await page.evaluate(() => getSelection().toString()),
     await page.locator('#mobileEditMenu button:visible').allTextContents(),
     await page.locator('#selectionToolbar').isVisible()
-  ], ['평가기록', ['복사', '붙여넣기', '링크'], false]);
+  ], ['평가기록', ['복사', '잘라내기', '붙여넣기', '전체 선택', '링크'], false]);
   await tap('[data-touch-edit="copy"]');
   r.check('M11 메뉴에서 실제 클립보드로 선택한 글자를 복사',
     await page.evaluate(() => navigator.clipboard.readText()), '평가기록');
@@ -215,6 +215,13 @@ try {
   r.check('M13 조절한 범위만 복사하고 손잡이를 닫음', [
     await page.evaluate(() => navigator.clipboard.readText()), await visibleHandles()
   ], ['가기록 검토', 0]);
+
+  await hold('#touchWord');
+  await dragSelectionHandle('start', '#touchEnd', 2);
+  r.check('M18 손잡이가 반대쪽 끝을 지나면 선택 방향을 바꿈', await page.evaluate(() => T.selection()), ' 검토');
+  await dragSelectionHandle('end', '#touchWord', 1);
+  r.check('M18 방향을 바꾼 뒤 같은 손잡이를 다시 되돌릴 수 있음', await page.evaluate(() => T.selection()), '가기록');
+  await tap('.brand');
 
   await press('#touchWord');
   await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [await touchAt('#touchEnd', 0.96)] });
@@ -260,8 +267,8 @@ try {
     Object.defineProperty(navigator.clipboard, 'read', { configurable: true, value: async () => { throw new Error('Denied'); } });
   });
   await hold('#touchBlank');
-  r.check('M11 빈 문단을 길게 누르면 붙여넣기와 링크만 표시',
-    await page.locator('#mobileEditMenu button:visible').allTextContents(), ['붙여넣기', '링크']);
+  r.check('M11 빈 문단에서는 잘라내기와 복사를 숨기고 전체 선택은 표시',
+    await page.locator('#mobileEditMenu button:visible').allTextContents(), ['붙여넣기', '전체 선택', '링크']);
   r.check('M13 글자를 선택하지 않으면 손잡이가 표시되지 않음', await visibleHandles(), 0);
   await tap('[data-touch-edit="paste"]');
   await page.locator('#plainPasteText').fill('직접 붙여넣은 문장');
@@ -391,6 +398,38 @@ try {
     });
     r.check(`M17 ${scenario.finish === 'touchEnd' ? '손을 떼면' : '터치가 취소되면'} 자동 스크롤이 멈춤`, scrollStopped, true);
   }
+  await tap('.brand');
+  await page.evaluate(() => {
+    document.querySelector('[data-line="32"]').scrollIntoView({ block: 'center' });
+  });
+  await press('[data-line="32"] span');
+  const initialDrag = await page.evaluate(() => {
+    const area = document.querySelector('.workspace');
+    return { scroll: area.scrollTop, y: Math.round(area.getBoundingClientRect().bottom - 4) };
+  });
+  await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 150, y: initialDrag.y }] });
+  await page.waitForFunction(scroll => document.querySelector('.workspace').scrollTop - scroll > 120, initialDrag.scroll);
+  await release();
+  r.check('M18 처음 길게 누른 손을 떼기 전에도 스크롤하면서 선택이 이어짐', await page.evaluate(() => {
+    const range = getSelection().getRangeAt(0);
+    return range.toString().includes('선택범위32') && range.toString().includes('선택범위42');
+  }), true);
+
+  await page.evaluate(() => {
+    T.set('<p><strong id="cutWord">잘라낼글자</strong></p><p>다음 문단</p>');
+    document.querySelector('.workspace').scrollTop = 0;
+  });
+  await hold('#cutWord');
+  await tap('[data-touch-edit="cut"]');
+  r.check('M18 모바일 잘라내기는 클립보드에 복사한 뒤 본문에서 삭제', [
+    await page.evaluate(() => navigator.clipboard.readText()), await page.locator('#cutWord').count()
+  ], ['잘라낼글자', 0]);
+  await tap('[data-command="undo"]');
+  r.check('M18 모바일 잘라내기를 한 번에 되돌림', await page.locator('#cutWord').textContent(), '잘라낼글자');
+  await hold('#cutWord');
+  await tap('[data-touch-edit="select-all"]');
+  r.check('M18 모바일 전체 선택은 다음 문단도 선택', await page.evaluate(() => T.selection().includes('다음 문단')), true);
+  await tap('.brand');
   await page.evaluate(() => T.set('<p>선택한단어 다음</p>'));
 
   const copyAll = page.locator('[data-action="copy-all"]');
@@ -433,6 +472,27 @@ try {
   };
   await checkRichClipboard('M16 전체 서식 복사');
   await checkRichClipboard('M16 Clipboard API 거절 후 대체 복사', true);
+
+  await tap('#mobileFilesButton');
+  await tap('[data-action="check-paste"]');
+  await page.keyboard.press('Control+V');
+  r.check('M19 실제 붙여넣기에서 HTML·굵게·링크·줄 구조를 감지',
+    await page.locator('#pasteCheckResult').textContent(), '서식 HTML이 들어왔습니다. 감지된 항목은 굵게 · 링크 · 줄 구조입니다.');
+  await page.evaluate(async () => {
+    delete navigator.clipboard.write;
+    await T.writeClipboard('', '일반 텍스트만');
+  });
+  await page.keyboard.press('Control+V');
+  r.check('M19 일반 텍스트만 받은 경우와 HTML을 구분',
+    await page.locator('#pasteCheckResult').textContent(), '일반 텍스트만 들어왔습니다. 이번 붙여넣기에는 서식 정보가 없습니다.');
+  r.check('M19 확인 동작이 원고를 변경하지 않음', await page.locator('#editor b').textContent(), '첫 줄');
+  await tap('#pasteCheckDialog button');
+  await tap('#mobileFilesButton');
+  await tap('[data-action="copy-all-text"]');
+  const readablePlainText = '첫 줄\n주소 (https://example.com/)\n\n마지막 줄';
+  await page.waitForFunction(async expected => await navigator.clipboard.readText() === expected, readablePlainText);
+  r.check('M19 일반 텍스트만 받아도 링크 주소와 빈 줄을 전달하는 별도 복사',
+    await page.evaluate(() => navigator.clipboard.readText()), readablePlainText);
 } finally {
   await context.close();
   await browser.close();

@@ -80,6 +80,17 @@
       font: inherit;
     }
     .editor-dialog textarea { min-height: 80px; resize: vertical; }
+    .paste-check-field {
+      min-height: 70px;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      font-size: 16px;
+    }
+    .paste-check-field:empty::before {
+      color: var(--muted);
+      content: "여기를 길게 눌러 붙여넣으세요.";
+    }
     .editor-dialog input { min-height: 44px; padding: 6px 8px; }
     .editor-dialog .find-actions { margin-top: 8px; }
     .link-address-error { margin: 6px 0 0; color: var(--danger); font-size: 13px; }
@@ -456,6 +467,7 @@
     }
     .mobile-edit-menu .toolbar-button { min-height: 44px; white-space: nowrap; }
     .mobile-edit-menu.is-adjusting { visibility: hidden; }
+    ::highlight(mobile-touch-selection) { background-color: var(--accent-soft); }
 
     .mobile-selection-handle {
       position: fixed;
@@ -1259,6 +1271,8 @@
         <button class="toolbar-button" type="button" data-action="save-docx" title="Microsoft Word 문서로 저장">DOCX 저장</button>
         <span class="separator" aria-hidden="true"></span>
         <button class="toolbar-button primary" type="button" data-action="copy-all" title="문서 전체를 서식 있게 복사">전체 서식 복사</button>
+        <button class="toolbar-button mobile-only" type="button" data-action="check-paste">서식 붙여넣기 확인</button>
+        <button class="toolbar-button mobile-only" type="button" data-action="copy-all-text">줄바꿈·주소 복사</button>
         <button class="toolbar-button" type="button" data-action="print" title="인쇄 또는 PDF 저장">인쇄</button>
       </div>
       <input id="fileInput" class="sr-only" type="file" accept=".md,.markdown,.txt,.html,.htm,text/markdown,text/plain,text/html">
@@ -1386,6 +1400,17 @@
     </form>
   </dialog>
 
+  <dialog id="pasteCheckDialog" class="editor-dialog" aria-labelledby="pasteCheckLabel">
+    <form method="dialog">
+      <p id="pasteCheckLabel">서식 붙여넣기 확인</p>
+      <div id="pasteCheckField" class="paste-check-field" role="textbox" aria-label="붙여넣기 확인 입력칸" contenteditable="true" autofocus></div>
+      <p id="pasteCheckResult" role="status" aria-live="polite" hidden></p>
+      <div class="find-actions">
+        <button class="toolbar-button" type="submit">닫기</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="linkDialog" class="editor-dialog" aria-labelledby="linkAddressLabel">
     <form>
       <label id="linkAddressLabel" for="linkAddress">링크 주소</label>
@@ -1494,7 +1519,9 @@
   </div>
   <div id="mobileEditMenu" class="mobile-edit-menu" role="toolbar" aria-label="터치 편집 메뉴" hidden>
     <button class="toolbar-button" type="button" data-touch-edit="copy">복사</button>
+    <button class="toolbar-button" type="button" data-touch-edit="cut">잘라내기</button>
     <button class="toolbar-button" type="button" data-touch-edit="paste">붙여넣기</button>
+    <button class="toolbar-button" type="button" data-touch-edit="select-all">전체 선택</button>
     <button class="toolbar-button" type="button" data-touch-edit="link">링크</button>
     <button class="toolbar-button" type="button" data-touch-edit="unlink" hidden>링크 해제</button>
   </div>
@@ -1515,12 +1542,17 @@
       const mobileEditMenu = document.getElementById('mobileEditMenu');
       const mobileSelectionHandles = [...document.querySelectorAll('.mobile-selection-handle')];
       const mobileCopyButton = mobileEditMenu.querySelector('[data-touch-edit="copy"]');
+      const mobileCutButton = mobileEditMenu.querySelector('[data-touch-edit="cut"]');
+      const mobileSelectAllButton = mobileEditMenu.querySelector('[data-touch-edit="select-all"]');
       const mobileLinkButton = mobileEditMenu.querySelector('[data-touch-edit="link"]');
       const mobileUnlinkButton = mobileEditMenu.querySelector('[data-touch-edit="unlink"]');
       const fileActions = document.getElementById('fileActions');
       const formatbar = document.getElementById('formatbar');
       const plainPasteDialog = document.getElementById('plainPasteDialog');
       const plainPasteText = document.getElementById('plainPasteText');
+      const pasteCheckDialog = document.getElementById('pasteCheckDialog');
+      const pasteCheckField = document.getElementById('pasteCheckField');
+      const pasteCheckResult = document.getElementById('pasteCheckResult');
       const linkDialog = document.getElementById('linkDialog');
       const linkAddress = document.getElementById('linkAddress');
       const linkAddressError = document.getElementById('linkAddressError');
@@ -3327,30 +3359,34 @@
         linkPreview.classList.remove('visible');
       };
 
+      const copyPlainText = async (text) => {
+        if (navigator.clipboard?.writeText) {
+          try {
+            await navigator.clipboard.writeText(text);
+            return true;
+          } catch (error) {
+            // 클립보드 API가 거절되면 입력칸의 기본 복사를 사용합니다.
+          }
+        }
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.setAttribute('readonly', '');
+        textarea.style.cssText = 'position:fixed;opacity:0';
+        document.body.appendChild(textarea);
+        try {
+          textarea.select();
+          return document.execCommand('copy');
+        } catch {
+          return false;
+        } finally {
+          textarea.remove();
+        }
+      };
+
       const copyPreviewUrl = async () => {
         const url = linkPreviewUrl.getAttribute('href') || linkPreviewUrl.textContent || '';
         if (!url) return;
-        let copied = false;
-        if (navigator.clipboard?.writeText) {
-          try {
-            await navigator.clipboard.writeText(url);
-            copied = true;
-          } catch (error) {
-            copied = false;
-          }
-        }
-        if (!copied) {
-          const textarea = document.createElement('textarea');
-          textarea.value = url;
-          textarea.setAttribute('readonly', '');
-          textarea.style.position = 'fixed';
-          textarea.style.opacity = '0';
-          document.body.appendChild(textarea);
-          textarea.select();
-          copied = document.execCommand('copy');
-          textarea.remove();
-        }
-        linkPreviewCopy.textContent = copied ? '복사됨' : '복사 실패';
+        linkPreviewCopy.textContent = await copyPlainText(url) ? '복사됨' : '복사 실패';
       };
 
       const captureLinkScroll = () => {
@@ -5808,16 +5844,30 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       // 잘라내기를 브라우저 기본 동작에 맡기면 정규화를 전부 건너뛰기 때문에
       // 다른 프로그램에 붙여넣을 때 문단 사이에 빈 줄이 하나씩 더 생깁니다.
       // 그래서 복사와 똑같은 형식으로 기록한 뒤 선택 영역을 직접 지웁니다.
-      const handleEditorCut = (event) => {
-        if (!writeEditorClipboardData(event)) return;
-        // 되돌리기(Ctrl+Z) 기록에 남도록 execCommand로 지웁니다.
-        if (!document.execCommand('delete', false, null)) {
-          const selection = window.getSelection();
-          if (selection && selection.rangeCount) selection.getRangeAt(0).deleteContents();
+      const deleteEditorSelection = () => {
+        const beforeHtml = editor.innerHTML;
+        breakEditorHistoryGroup();
+        pendingInputBeforeHtml = null;
+        suppressingInputHistory = true;
+        try {
+          // 일부 브라우저는 명령에서 beforeinput을 건너뛰므로 전후 HTML을 직접 기록합니다.
+          if (!document.execCommand('delete', false, null)) {
+            const selection = window.getSelection();
+            if (selection?.rangeCount) {
+              selection.getRangeAt(0).deleteContents();
+              editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteByCut' }));
+            }
+          }
+          normalizeEmptyDocument();
+        } finally {
+          suppressingInputHistory = false;
         }
-        normalizeEmptyDocument();
+        pushEditorHistory(beforeHtml, editor.innerHTML);
         updateCount();
         updateFormattingControlsState();
+      };
+      const handleEditorCut = (event) => {
+        if (writeEditorClipboardData(event)) deleteEditorSelection();
       };
 
       const copyRenderedClipboardHtml = (html) => {
@@ -5875,6 +5925,19 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         const success = document.execCommand('copy');
         selection.removeAllRanges();
         showToast(success ? '문서 전체를 복사했습니다.' : '복사하지 못했습니다. 본문을 선택한 뒤 복사해 주세요.');
+      };
+
+      const copyAllTextWithLinks = async () => {
+        const range = document.createRange();
+        range.selectNodeContents(editor);
+        const doc = new DOMParser().parseFromString(clipboardHtmlWithExplicitBreaks(range), 'text/html');
+        doc.body.querySelectorAll('a[href]').forEach(link => {
+          const address = link.getAttribute('href');
+          const label = link.textContent.trim();
+          if (address && address !== label) link.append(label ? ` (${address})` : address);
+        });
+        const plain = clipboardPlainTextFromHtml(doc.body.innerHTML);
+        showToast(await copyPlainText(plain) ? '줄바꿈과 링크 주소를 텍스트로 복사했습니다.' : '복사하지 못했습니다.');
       };
 
       const openFindbar = (withReplace) => {
@@ -8701,6 +8764,29 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         insertPlainTextPreservingBreaks(plainPasteText.value);
       });
 
+      pasteCheckField.addEventListener('paste', (event) => {
+        event.preventDefault();
+        const plain = event.clipboardData?.getData('text/plain') || '';
+        const html = event.clipboardData?.getData('text/html') || '';
+        pasteCheckResult.hidden = false;
+        if (!html) {
+          pasteCheckResult.textContent = plain
+            ? '일반 텍스트만 들어왔습니다. 이번 붙여넣기에는 서식 정보가 없습니다.'
+            : '확인할 붙여넣기 내용이 없습니다.';
+          return;
+        }
+        const template = document.createElement('template');
+        template.innerHTML = html;
+        const fragment = template.content;
+        const formats = [];
+        if (fragment.querySelector('b,strong,[style*="font-weight: bold"],[style*="font-weight: 700"]')) formats.push('굵게');
+        if (fragment.querySelector('a[href]')) formats.push('링크');
+        if (fragment.querySelector('br') || fragment.querySelectorAll('p,div,h1,h2,h3,li,tr').length > 1) formats.push('줄 구조');
+        pasteCheckResult.textContent = formats.length
+          ? `서식 HTML이 들어왔습니다. 감지된 항목은 ${formats.join(' · ')}입니다.`
+          : '서식 HTML이 들어왔습니다.';
+      });
+
       document.querySelectorAll('[data-action]').forEach((button) => {
         button.addEventListener('mousedown', () => saveSelection());
         button.addEventListener('click', async () => {
@@ -8727,6 +8813,12 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
             await saveDocument(action.slice(5));
           } else if (action === 'copy-all') {
             await copyAllRich();
+          } else if (action === 'copy-all-text') {
+            await copyAllTextWithLinks();
+          } else if (action === 'check-paste') {
+            pasteCheckField.replaceChildren();
+            pasteCheckResult.hidden = true;
+            pasteCheckDialog.showModal();
           } else if (action === 'print') {
             window.print();
           } else if (action === 'link') {
@@ -9260,6 +9352,8 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           }
         });
         mobileCopyButton.hidden = range.collapsed;
+        mobileCutButton.hidden = range.collapsed;
+        mobileSelectAllButton.hidden = editorIsBlank();
         mobileLinkButton.textContent = link ? '링크 수정' : '링크';
         mobileUnlinkButton.hidden = !link;
         mobileEditMenu.hidden = !range.collapsed && !visibleRects.length;
@@ -9295,19 +9389,30 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           Math.max(top, Math.min(bottom, drag.y - drag.offsetY))
         );
         if (!caret) return;
+        if (drag === touchPress) {
+          const range = drag.anchor.cloneRange();
+          const order = range.comparePoint(caret.startContainer, caret.startOffset);
+          if (order < 0) range.setStart(caret.startContainer, caret.startOffset);
+          if (order > 0) range.setEnd(caret.startContainer, caret.startOffset);
+          drag.range = order ? range : drag.anchor;
+          if (typeof Highlight === 'function') CSS.highlights?.set('mobile-touch-selection', new Highlight(drag.range));
+          return;
+        }
         const target = mobileEditTarget;
-        const fromStart = drag.edge === 'start';
-        const range = target.range.cloneRange();
-        const movingEdge = range.cloneRange();
-        movingEdge.collapse(fromStart);
-        if (movingEdge.comparePoint(caret.startContainer, caret.startOffset) === 0) return;
-        const opposite = range.cloneRange();
-        opposite.collapse(!fromStart);
-        const order = opposite.comparePoint(caret.startContainer, caret.startOffset);
-        if (fromStart ? order >= 0 : order <= 0) return;
-        if (fromStart) range.setStart(caret.startContainer, caret.startOffset);
+        const order = drag.anchor.comparePoint(caret.startContainer, caret.startOffset);
+        if (!order) return;
+        const range = drag.anchor.cloneRange();
+        if (order < 0) range.setStart(caret.startContainer, caret.startOffset);
         else range.setEnd(caret.startContainer, caret.startOffset);
         if (range.collapsed) return;
+        const edge = order < 0 ? 'start' : 'end';
+        if (edge !== drag.handle.dataset.selectionEdge) {
+          const other = mobileSelectionHandles.find(handle => handle !== drag.handle);
+          other.dataset.selectionEdge = drag.handle.dataset.selectionEdge;
+          other.setAttribute('aria-label', drag.handle.getAttribute('aria-label'));
+          drag.handle.dataset.selectionEdge = edge;
+          drag.handle.setAttribute('aria-label', edge === 'start' ? '선택 시작 손잡이' : '선택 끝 손잡이');
+        }
         const anchor = target.link;
         target.link = anchor?.contains(range.startContainer) && anchor.contains(range.endContainer) ? anchor : null;
         target.range = range;
@@ -9317,7 +9422,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       };
 
       const scrollMobileSelection = (now) => {
-        const drag = mobileHandleDrag;
+        const drag = mobileHandleDrag || touchPress;
         if (!drag || !mobileEditTarget) return;
         drag.frame = null;
         const view = mobileSelectionViewport();
@@ -9349,10 +9454,12 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           if (!position) return;
           event.preventDefault();
           handle.setPointerCapture(event.pointerId);
+          const anchor = mobileEditTarget.range.cloneRange();
+          anchor.collapse(edge === 'end');
           mobileHandleDrag = {
             id: event.pointerId,
             handle,
-            edge,
+            anchor,
             x: event.clientX,
             y: event.clientY,
             frame: null,
@@ -9385,6 +9492,9 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         const press = touchPress;
         if (!press) return null;
         clearTimeout(press.timer);
+        if (press.frame != null) cancelAnimationFrame(press.frame);
+        CSS.highlights?.delete('mobile-touch-selection');
+        mobileEditMenu.classList.remove('is-adjusting');
         touchPress = null;
         editor.classList.remove('touch-pressing');
         return press;
@@ -9410,7 +9520,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         const { clientX: x, clientY: y } = event.touches[0];
         const link = event.target.closest?.('a');
         editor.classList.add('touch-pressing');
-        const press = { x, y, anchor: null, range: null, link, timer: 0 };
+        const press = { x, y, anchor: null, range: null, link, timer: 0, frame: null, lastFrame: null, offsetX: 0, offsetY: 0 };
         press.timer = setTimeout(() => {
           press.anchor = press.range = rangeAtTouch(x, y, link);
           if (press.range) showMobileEditMenu(press.range, x, y, link);
@@ -9427,13 +9537,11 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           return;
         }
         if (event.cancelable) event.preventDefault();
-        const caret = caretAtTouch(x, y);
-        if (!caret) return;
-        const range = press.anchor.cloneRange();
-        const order = range.comparePoint(caret.startContainer, caret.startOffset);
-        if (order < 0) range.setStart(caret.startContainer, caret.startOffset);
-        if (order > 0) range.setEnd(caret.startContainer, caret.startOffset);
-        press.range = order ? range : press.anchor;
+        press.x = x;
+        press.y = y;
+        mobileEditMenu.classList.add('is-adjusting');
+        adjustMobileSelection(press, mobileSelectionViewport());
+        if (press.frame == null) press.frame = requestAnimationFrame(scrollMobileSelection);
       }, { passive: false });
 
       editor.addEventListener('touchend', (event) => {
@@ -9517,6 +9625,14 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           await pasteFromMobileMenu(target);
           return;
         }
+        if (action === 'select-all') {
+          const range = document.createRange();
+          range.selectNodeContents(editor);
+          selectEditorRange(range);
+          saveSelection();
+          showMobileEditMenu(range, target.x, target.y, null);
+          return;
+        }
         selectMobileEditTarget(target);
         if (action === 'link') openLinkDialog(target.link?.getAttribute('href') || '');
         if (action === 'unlink') runCommand('unlink');
@@ -9526,6 +9642,18 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
             showToast('복사했습니다.');
           } catch {
             showToast('복사하지 못했습니다.');
+          }
+        }
+        if (action === 'cut') {
+          try {
+            if (document.execCommand('copy')) {
+              deleteEditorSelection();
+              showToast('잘라냈습니다.');
+            } else {
+              showToast('잘라내지 못했습니다.');
+            }
+          } catch {
+            showToast('잘라내지 못했습니다.');
           }
         }
       });
@@ -9606,7 +9734,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       });
 
       document.addEventListener('keydown', async (event) => {
-        if (linkDialog.open) return;
+        if (linkDialog.open || pasteCheckDialog.open) return;
         const ctrl = event.ctrlKey || event.metaKey;
         const key = event.key.toLowerCase();
         if (event.key === 'Escape' && tablePicker.classList.contains('open')) {
