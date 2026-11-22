@@ -131,7 +131,9 @@ try {
   await page.evaluate(() => T.set('<p>첫 <strong id="touchWord">평가기록</strong> <span id="touchEnd">검토</span> 중입니다.</p><p id="touchBlank"><br></p>'));
   const touch = await context.newCDPSession(page);
   const touchAt = async (selector, horizontalFraction = 0.5) => {
-    const { x, y, width, height } = await page.locator(selector).boundingBox();
+    const target = page.locator(selector);
+    await target.scrollIntoViewIfNeeded();
+    const { x, y, width, height } = await target.boundingBox();
     return { x: Math.round(x + width * horizontalFraction), y: Math.round(y + height / 2) };
   };
   const press = async (selector) => {
@@ -141,7 +143,20 @@ try {
   const release = () => touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
   const hold = async (selector) => { await press(selector); await release(); };
 
-  await hold('#touchWord');
+  const dispatchSelectionEvent = (type) => page.locator('#touchWord').evaluate((node, name) => {
+    const event = name === 'contextmenu'
+      ? new PointerEvent(name, { bubbles: true, cancelable: true, pointerType: 'mouse' })
+      : new Event(name, { bubbles: true, cancelable: true });
+    return node.dispatchEvent(event);
+  }, type);
+  r.check('M11 평소에는 본문의 기본 선택 이벤트를 허용', await dispatchSelectionEvent('selectstart'), true);
+  await press('#touchWord');
+  r.check('M11 길게 누르면 기본 선택과 마우스로 표시된 컨텍스트 메뉴 이벤트를 취소', [
+    await dispatchSelectionEvent('selectstart'),
+    await dispatchSelectionEvent('contextmenu')
+  ], [false, false]);
+  await release();
+  r.check('M11 손을 뗀 뒤 늦게 온 기본 메뉴 이벤트도 취소', await dispatchSelectionEvent('contextmenu'), false);
   r.check('M11 글자를 길게 누르면 낱말을 고르고 편집기 메뉴 하나를 표시', [
     await page.evaluate(() => getSelection().toString()),
     await page.locator('#mobileEditMenu button:visible').allTextContents(),

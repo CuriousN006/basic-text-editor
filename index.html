@@ -9223,13 +9223,18 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         return press;
       };
 
+      // Chromium은 contextmenu를 보내기 전에 길게 누른 낱말을 먼저 선택할 수 있습니다.
+      editor.addEventListener('selectstart', (event) => {
+        if (touchPress || mobileEditTarget) event.preventDefault();
+      }, true);
+
       editor.addEventListener('contextmenu', (event) => {
         if (!mobileLayout.matches) return;
-        if (touchPress || event.pointerType === 'touch' || event.sourceCapabilities?.firesTouchEvents
+        if (touchPress || mobileEditTarget || event.pointerType === 'touch' || event.sourceCapabilities?.firesTouchEvents
           || (!event.pointerType && matchMedia('(hover: none)').matches)) {
           event.preventDefault();
         }
-      });
+      }, true);
 
       editor.addEventListener('touchstart', (event) => {
         finishTouchPress();
@@ -9282,8 +9287,13 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       document.addEventListener('pointerdown', (event) => {
         if (!mobileEditMenu.contains(event.target)) hideMobileEditMenu();
       });
-      window.addEventListener('scroll', hideMobileEditMenu, true);
-      window.addEventListener('resize', hideMobileEditMenu);
+      const dismissMobileEditMenuAfterViewportChange = () => {
+        // 누른 상태에서 키보드나 브라우저 도구 모음이 움직여도 손을 뗄 때
+        // 새 좌표로 메뉴를 다시 배치할 수 있습니다.
+        if (!touchPress?.range) hideMobileEditMenu();
+      };
+      window.addEventListener('scroll', dismissMobileEditMenuAfterViewportChange, true);
+      window.addEventListener('resize', dismissMobileEditMenuAfterViewportChange);
       mobileEditMenu.addEventListener('mousedown', (event) => event.preventDefault());
 
       const selectMobileEditTarget = (target) => {
