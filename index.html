@@ -9179,12 +9179,17 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       let mobileEditTarget = null;
       let mobileHandleDrag = null;
 
+      const stopMobileHandleDrag = () => {
+        if (mobileHandleDrag?.frame != null) cancelAnimationFrame(mobileHandleDrag.frame);
+        mobileHandleDrag = null;
+        mobileEditMenu.classList.remove('is-adjusting');
+      };
+
       const hideMobileEditMenu = () => {
         mobileEditMenu.hidden = true;
-        mobileEditMenu.classList.remove('is-adjusting');
+        stopMobileHandleDrag();
         mobileSelectionHandles.forEach(handle => { handle.hidden = true; });
         mobileEditTarget = null;
-        mobileHandleDrag = null;
       };
 
       const caretAtTouch = (x, y) => {
@@ -9231,19 +9236,27 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         return fallback && { x: edge === 'start' ? fallback.left : fallback.right, top: fallback.top, bottom: fallback.bottom };
       };
 
+      const mobileSelectionViewport = () => {
+        const { top, bottom, left, right } = workspace.getBoundingClientRect();
+        const viewportTop = visualViewport?.offsetTop ?? 0;
+        const visibleHeight = visualViewport?.height ?? innerHeight;
+        return { top: Math.max(top, viewportTop), bottom: Math.min(bottom, viewportTop + visibleHeight), left, right };
+      };
+
       const positionMobileEditMenu = () => {
         const { range, x, y, link } = mobileEditTarget;
-        const view = workspace.getBoundingClientRect();
+        const view = mobileSelectionViewport();
         const rects = range.getClientRects();
         const visibleRects = [...rects].filter(rect => rect.bottom > view.top && rect.top < view.bottom
           && rect.right >= view.left && rect.left <= view.right);
         mobileSelectionHandles.forEach(handle => {
           const edge = !touchPress && !range.collapsed && mobileSelectionEdge(range, handle.dataset.selectionEdge);
-          handle.hidden = !edge || edge.x < view.left || edge.x > view.right
-            || edge.bottom < view.top || edge.bottom > view.bottom;
+          const dragging = handle === mobileHandleDrag?.handle;
+          handle.hidden = !dragging && (!edge || edge.x < view.left || edge.x > view.right
+            || edge.bottom < view.top || edge.bottom > view.bottom);
           if (edge) {
-            handle.style.left = `${edge.x}px`;
-            handle.style.top = `${edge.bottom}px`;
+            handle.style.left = `${dragging ? Math.max(view.left, Math.min(view.right, edge.x)) : edge.x}px`;
+            handle.style.top = `${dragging ? Math.max(view.top, Math.min(view.bottom, edge.bottom)) : edge.bottom}px`;
           }
         });
         mobileCopyButton.hidden = range.collapsed;
@@ -9270,6 +9283,64 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         positionMobileEditMenu();
       };
 
+      const adjustMobileSelection = (drag, view) => {
+        const bounds = editor.getBoundingClientRect();
+        const left = Math.max(view.left, bounds.left);
+        const right = Math.min(view.right, bounds.right) - 1;
+        const top = Math.max(view.top, bounds.top);
+        const bottom = Math.min(view.bottom, bounds.bottom) - 1;
+        if (left > right || top > bottom) return;
+        const caret = caretAtTouch(
+          Math.max(left, Math.min(right, drag.x - drag.offsetX)),
+          Math.max(top, Math.min(bottom, drag.y - drag.offsetY))
+        );
+        if (!caret) return;
+        const target = mobileEditTarget;
+        const fromStart = drag.edge === 'start';
+        const range = target.range.cloneRange();
+        const movingEdge = range.cloneRange();
+        movingEdge.collapse(fromStart);
+        if (movingEdge.comparePoint(caret.startContainer, caret.startOffset) === 0) return;
+        const opposite = range.cloneRange();
+        opposite.collapse(!fromStart);
+        const order = opposite.comparePoint(caret.startContainer, caret.startOffset);
+        if (fromStart ? order >= 0 : order <= 0) return;
+        if (fromStart) range.setStart(caret.startContainer, caret.startOffset);
+        else range.setEnd(caret.startContainer, caret.startOffset);
+        if (range.collapsed) return;
+        const anchor = target.link;
+        target.link = anchor?.contains(range.startContainer) && anchor.contains(range.endContainer) ? anchor : null;
+        target.range = range;
+        selectEditorRange(range);
+        saveSelection();
+        positionMobileEditMenu();
+      };
+
+      const scrollMobileSelection = (now) => {
+        const drag = mobileHandleDrag;
+        if (!drag || !mobileEditTarget) return;
+        drag.frame = null;
+        const view = mobileSelectionViewport();
+        const edgeSize = Math.min(64, (view.bottom - view.top) / 3);
+        if (edgeSize <= 0) return;
+        const upward = Math.max(0, view.top + edgeSize - drag.y);
+        const downward = Math.max(0, drag.y - (view.bottom - edgeSize));
+        const intensity = Math.max(-1, Math.min(1, (downward - upward) / edgeSize));
+        if (!intensity) {
+          drag.lastFrame = null;
+          return;
+        }
+        const elapsed = drag.lastFrame == null ? 16 : Math.min(32, now - drag.lastFrame);
+        drag.lastFrame = now;
+        const previousTop = workspace.scrollTop;
+        const pixels = Math.sign(intensity) * Math.max(1, Math.round(Math.abs(intensity) * elapsed * 0.9));
+        workspace.scrollTop += pixels;
+        if (workspace.scrollTop === previousTop) return;
+        // 손가락이 같은 곳에 머물러도 스크롤 뒤에는 다른 글자가 선택 끝에 옵니다.
+        adjustMobileSelection(drag, view);
+        drag.frame = requestAnimationFrame(scrollMobileSelection);
+      };
+
       mobileSelectionHandles.forEach(handle => {
         handle.addEventListener('pointerdown', event => {
           if (!mobileEditTarget || mobileHandleDrag || event.button !== 0) return;
@@ -9280,7 +9351,12 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           handle.setPointerCapture(event.pointerId);
           mobileHandleDrag = {
             id: event.pointerId,
+            handle,
             edge,
+            x: event.clientX,
+            y: event.clientY,
+            frame: null,
+            lastFrame: null,
             offsetX: event.clientX - position.x,
             offsetY: event.clientY - (position.top + position.bottom) / 2
           };
@@ -9289,29 +9365,15 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         handle.addEventListener('pointermove', event => {
           const drag = mobileHandleDrag;
           if (!drag || drag.id !== event.pointerId || !mobileEditTarget) return;
-          const caret = caretAtTouch(event.clientX - drag.offsetX, event.clientY - drag.offsetY);
-          if (!caret) return;
-          const target = mobileEditTarget;
-          const range = target.range.cloneRange();
-          const opposite = range.cloneRange();
-          const fromStart = drag.edge === 'start';
-          opposite.collapse(!fromStart);
-          const order = opposite.comparePoint(caret.startContainer, caret.startOffset);
-          if (fromStart ? order >= 0 : order <= 0) return;
-          if (fromStart) range.setStart(caret.startContainer, caret.startOffset);
-          else range.setEnd(caret.startContainer, caret.startOffset);
-          if (range.collapsed) return;
-          const anchor = target.link;
-          target.link = anchor?.contains(range.startContainer) && anchor.contains(range.endContainer) ? anchor : null;
-          target.range = range;
-          selectEditorRange(range);
-          saveSelection();
-          positionMobileEditMenu();
+          drag.x = event.clientX;
+          drag.y = event.clientY;
+          adjustMobileSelection(drag, mobileSelectionViewport());
+          if (drag.frame == null) drag.frame = requestAnimationFrame(scrollMobileSelection);
         });
         const stopDragging = (event) => {
           if (mobileHandleDrag?.id !== event.pointerId) return;
-          mobileHandleDrag = null;
-          mobileEditMenu.classList.remove('is-adjusting');
+          stopMobileHandleDrag();
+          if (mobileEditTarget) positionMobileEditMenu();
         };
         handle.addEventListener('pointerup', stopDragging);
         handle.addEventListener('pointercancel', stopDragging);

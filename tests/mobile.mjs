@@ -345,6 +345,54 @@ try {
   await startHandle.waitFor({ state: 'hidden' });
   r.check('M14 본문을 짧게 누르면 손잡이 닫힘', await visibleHandles(), 0);
 
+  for (const scenario of [
+    { edge: 'end', at: 'bottom', direction: 1, finish: 'touchEnd', keyboard: true },
+    { edge: 'start', at: 'top', direction: -1, finish: 'touchCancel', keyboard: false }
+  ]) {
+    await tap('.brand');
+    await page.evaluate(keyboard => {
+      // 키보드가 화면 일부를 가려도 보이는 본문의 아래쪽부터 스크롤해야 합니다.
+      if (keyboard) Object.defineProperty(visualViewport, 'height', { configurable: true, value: 510 });
+      else delete visualViewport.height;
+      visualViewport.dispatchEvent(new Event('resize'));
+      T.set(Array.from({ length: 90 }, (_, index) =>
+        `<p data-line="${index}"><span>선택범위${index}</span> 화면 이동을 시험하는 문단</p>`).join(''));
+      document.querySelector('[data-line="32"]').scrollIntoView({ block: 'center' });
+    }, scenario.keyboard);
+    await hold('[data-line="32"] span');
+    const start = await touchAt(`[data-selection-edge="${scenario.edge}"]`);
+    const before = await page.evaluate(at => {
+      const workspace = document.querySelector('.workspace');
+      const rect = workspace.getBoundingClientRect();
+      return { scroll: workspace.scrollTop, y: Math.round(at === 'top' ? rect.top + 4 : rect.bottom - 4) };
+    }, scenario.at);
+    await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [start] });
+    await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 150, y: before.y }] });
+    const edgeLine = () => page.evaluate(edge => {
+      const range = getSelection().getRangeAt(0);
+      const node = edge === 'start' ? range.startContainer : range.endContainer;
+      return Number((node.nodeType === Node.TEXT_NODE ? node.parentElement : node).closest('[data-line]').dataset.line);
+    }, scenario.edge);
+    await page.waitForFunction(({ scroll, direction }) =>
+      (document.querySelector('.workspace').scrollTop - scroll) * direction >= 80,
+    { scroll: before.scroll, direction: scenario.direction });
+    const firstLine = await edgeLine();
+    await page.waitForFunction(({ scroll, direction }) =>
+      (document.querySelector('.workspace').scrollTop - scroll) * direction >= 200,
+    { scroll: before.scroll, direction: scenario.direction });
+    r.check(`M17 손잡이를 ${scenario.at === 'top' ? '위' : '키보드 위의 아래쪽'}에 고정하면 스크롤과 함께 선택이 계속 확장됨`,
+      ((await edgeLine()) - firstLine) * scenario.direction > 0, true);
+    await touch.send('Input.dispatchTouchEvent', { type: scenario.finish, touchPoints: [] });
+    const scrollStopped = await page.evaluate(async () => {
+      const workspace = document.querySelector('.workspace');
+      const scroll = workspace.scrollTop;
+      for (let frame = 0; frame < 5; frame++) await new Promise(requestAnimationFrame);
+      return workspace.scrollTop === scroll;
+    });
+    r.check(`M17 ${scenario.finish === 'touchEnd' ? '손을 떼면' : '터치가 취소되면'} 자동 스크롤이 멈춤`, scrollStopped, true);
+  }
+  await page.evaluate(() => T.set('<p>선택한단어 다음</p>'));
+
   const copyAll = page.locator('[data-action="copy-all"]');
   r.check('M15 휴대폰에서 파일 메뉴를 열기 전 전체 서식 복사는 숨김', await copyAll.isVisible(), false);
   await tap('#mobileFilesButton');
