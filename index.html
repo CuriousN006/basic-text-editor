@@ -9245,6 +9245,9 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       const positionMobileEditMenu = () => {
         const { range, x, y, link } = mobileEditTarget;
         const view = workspace.getBoundingClientRect();
+        const rects = range.getClientRects();
+        const visibleRects = [...rects].filter(rect => rect.bottom > view.top && rect.top < view.bottom
+          && rect.right >= view.left && rect.left <= view.right);
         mobileSelectionHandles.forEach(handle => {
           const edge = !touchPress && !range.collapsed && mobileSelectionEdge(range, handle.dataset.selectionEdge);
           handle.hidden = !edge || edge.x < view.left || edge.x > view.right
@@ -9257,14 +9260,15 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         mobileCopyButton.hidden = range.collapsed;
         mobileLinkButton.textContent = link ? '링크 수정' : '링크';
         mobileUnlinkButton.hidden = !link;
-        mobileEditMenu.hidden = false;
+        mobileEditMenu.hidden = !range.collapsed && !visibleRects.length;
+        if (mobileEditMenu.hidden) return;
         const menu = mobileEditMenu.getBoundingClientRect();
-        const rect = range.getClientRects()[0];
+        const rect = visibleRects[0] || rects[0];
         const center = rect ? rect.left + rect.width / 2 : x;
         const bottom = viewportHeight() - menu.height - 8;
         const above = (rect?.top ?? y) - menu.height - 8;
-        const end = mobileSelectionEdge(range, 'end');
-        const below = range.collapsed ? (rect?.bottom ?? y) + 8 : (end?.bottom ?? y) + 34;
+        const last = visibleRects[visibleRects.length - 1] || rect;
+        const below = (last?.bottom ?? y) + (range.collapsed ? 8 : 34);
         const top = above >= 8 ? above : below;
         mobileEditMenu.style.left = Math.max(8, Math.min(center - menu.width / 2, innerWidth - menu.width - 8)) + 'px';
         mobileEditMenu.style.top = Math.max(8, Math.min(top, bottom)) + 'px';
@@ -9350,7 +9354,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
 
       editor.addEventListener('touchstart', (event) => {
         finishTouchPress();
-        hideMobileEditMenu();
+        if (mobileEditTarget?.range.collapsed) hideMobileEditMenu();
         if (!mobileLayout.matches || composing || event.touches.length !== 1) return;
         const { clientX: x, clientY: y } = event.touches[0];
         const link = event.target.closest?.('a');
@@ -9383,7 +9387,11 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
 
       editor.addEventListener('touchend', (event) => {
         const press = finishTouchPress();
-        if (!press?.range) return;
+        if (!press) return;
+        if (!press.range) {
+          hideMobileEditMenu();
+          return;
+        }
         if (event.cancelable) event.preventDefault();
         const selection = window.getSelection();
         selection.removeAllRanges();
@@ -9393,20 +9401,23 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       }, { passive: false });
 
       editor.addEventListener('touchcancel', () => {
-        if (finishTouchPress()) hideMobileEditMenu();
+        if (finishTouchPress()?.range) hideMobileEditMenu();
       });
       editor.addEventListener('input', hideMobileEditMenu);
       document.addEventListener('pointerdown', (event) => {
+        // 본문 안의 터치는 스크롤일 수 있으므로 실제 탭이 확인될 때만 선택을 닫습니다.
+        if (event.pointerType === 'touch' && workspace.contains(event.target)) return;
         if (!mobileEditMenu.contains(event.target) && !mobileSelectionHandles.includes(event.target)) hideMobileEditMenu();
       });
-      const dismissMobileEditMenuAfterViewportChange = () => {
-        // 누른 상태에서 키보드나 브라우저 도구 모음이 움직여도 손을 뗄 때
-        // 새 좌표로 메뉴를 다시 배치할 수 있습니다.
-        if (mobileHandleDrag && mobileEditTarget) positionMobileEditMenu();
-        else if (!touchPress?.range) hideMobileEditMenu();
+      workspace.addEventListener('click', hideMobileEditMenu);
+      const updateMobileEditMenuAfterViewportChange = () => {
+        if (!mobileEditTarget || touchPress?.range) return;
+        if (mobileLayout.matches && !mobileEditTarget.range.collapsed) positionMobileEditMenu();
+        else hideMobileEditMenu();
       };
-      window.addEventListener('scroll', dismissMobileEditMenuAfterViewportChange, true);
-      window.addEventListener('resize', dismissMobileEditMenuAfterViewportChange);
+      window.addEventListener('scroll', updateMobileEditMenuAfterViewportChange, true);
+      window.addEventListener('resize', updateMobileEditMenuAfterViewportChange);
+      visualViewport?.addEventListener('resize', updateMobileEditMenuAfterViewportChange);
       mobileEditMenu.addEventListener('mousedown', (event) => event.preventDefault());
       mobileEditMenu.addEventListener('touchend', (event) => {
         const button = event.target.closest('[data-touch-edit]');

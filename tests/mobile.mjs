@@ -300,6 +300,46 @@ try {
   await release();
   await page.waitForFunction(() => document.querySelector('.workspace').scrollTop > 0);
   r.check('M11 밀어서 스크롤할 때는 메뉴가 열리지 않음', await page.locator('#mobileEditMenu').isVisible(), false);
+
+  await page.evaluate(() => {
+    const paragraph = '<p>스크롤할 보고서 내용</p>';
+    T.set(paragraph.repeat(8) + '<p><strong id="scrollWord">선택한단어</strong> <span id="scrollEnd">다음</span></p>'
+      + paragraph.repeat(35));
+    document.querySelector('.workspace').scrollTop = 0;
+  });
+  await hold('#scrollWord');
+  const startHandle = page.locator('[data-selection-edge="start"]');
+  const oldTop = (await startHandle.boundingBox()).y;
+  await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 170, y: 560 }] });
+  for (const y of [530, 500, 470]) {
+    await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 170, y }] });
+  }
+  await release();
+  await page.waitForFunction(() => document.querySelector('.workspace').scrollTop > 20);
+  r.check('M14 본문을 밀어 스크롤하면 선택 범위와 손잡이가 함께 이동', [
+    await visibleHandles(), (await startHandle.boundingBox())?.y < oldTop, await page.evaluate(() => T.selection())
+  ], [2, true, '선택한단어']);
+  await page.evaluate(() => { document.querySelector('.workspace').scrollTop = 900; });
+  await startHandle.waitFor({ state: 'hidden' });
+  r.check('M14 선택이 화면 밖이면 손잡이와 메뉴를 숨김', [
+    await visibleHandles(), await page.locator('#mobileEditMenu').isVisible()
+  ], [0, false]);
+  await page.evaluate(() => { document.querySelector('.workspace').scrollTop = 0; });
+  await startHandle.waitFor();
+  await dragSelectionHandle('end', '#scrollEnd', 2);
+  r.check('M14 돌아온 손잡이로 이전 선택을 계속 조절', await page.evaluate(() => T.selection()), '선택한단어 다음');
+  await tap('#scrollWord');
+  await startHandle.waitFor({ state: 'hidden' });
+  r.check('M14 본문을 짧게 누르면 손잡이 닫힘', await visibleHandles(), 0);
+
+  const copyAll = page.locator('[data-action="copy-all"]');
+  r.check('M15 휴대폰에서 파일 메뉴를 열기 전 전체 서식 복사는 숨김', await copyAll.isVisible(), false);
+  await tap('#mobileFilesButton');
+  await copyAll.tap();
+  r.check('M15 파일 메뉴에서 문서 전체를 복사', await page.evaluate(async () =>
+    (await navigator.clipboard.readText()).includes('선택한단어 다음')), true);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  r.check('M15 데스크톱 상단에서 전체 서식 복사를 바로 사용 가능', await copyAll.isVisible(), true);
 } finally {
   await context.close();
   await browser.close();
