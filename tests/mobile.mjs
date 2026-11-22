@@ -160,6 +160,10 @@ try {
 
   await hold('#touchWord');
   await tap('[data-touch-edit="link"]');
+  r.check('M11 새 링크 입력창은 비어 있음', await page.inputValue('#linkAddress'), '');
+  await page.evaluate(() => T.writeClipboard('', 'https://example.com/report'));
+  await page.keyboard.press('Control+V');
+  await tap('#linkDialog [type="submit"]');
   r.check('M11 링크를 누르면 기존 표시 글자에 주소 연결',
     await page.locator('#editor a').getAttribute('href'), 'https://example.com/report');
   await hold('#editor a');
@@ -167,6 +171,14 @@ try {
     await page.locator('[data-touch-edit="link"]').textContent(),
     await page.locator('[data-touch-edit="unlink"]').isVisible()
   ], ['링크 수정', true]);
+  await tap('[data-touch-edit="link"]');
+  r.check('M11 링크 수정에 실제 기존 주소 표시', await page.inputValue('#linkAddress'), 'https://example.com/report');
+  await page.fill('#linkAddress', 'https://example.com/revised');
+  await tap('#linkDialog [type="submit"]');
+  r.check('M11 링크 수정 후 표시 글자 유지',
+    [await page.locator('#editor a').getAttribute('href'), await page.locator('#editor a').textContent()],
+    ['https://example.com/revised', '평가기록']);
+  await hold('#editor a');
   await tap('[data-touch-edit="unlink"]');
   r.check('M11 링크 해제 후에도 표시 글자 유지', [
     await page.locator('#editor a').count(), await page.locator('#touchWord').textContent()

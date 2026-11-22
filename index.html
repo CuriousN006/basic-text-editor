@@ -62,7 +62,7 @@
     .file-actions { display: contents; }
     .mobile-only { display: none; }
 
-    .plain-paste-dialog {
+    .editor-dialog {
       width: min(420px, calc(100% - 24px));
       max-height: calc(var(--mobile-height, 100dvh) - 24px);
       padding: 14px;
@@ -73,15 +73,16 @@
       box-shadow: var(--shadow);
     }
 
-    .plain-paste-dialog::backdrop { background: rgb(15 23 42 / .35); }
-    .plain-paste-dialog label { display: block; margin-bottom: 8px; font-weight: 700; }
-    .plain-paste-dialog textarea {
+    .editor-dialog::backdrop { background: rgb(15 23 42 / .35); }
+    .editor-dialog label { display: block; margin-bottom: 8px; font-weight: 700; }
+    .editor-dialog input, .editor-dialog textarea {
       width: 100%;
-      min-height: 80px;
       font: inherit;
-      resize: vertical;
     }
-    .plain-paste-dialog .find-actions { margin-top: 8px; }
+    .editor-dialog textarea { min-height: 80px; resize: vertical; }
+    .editor-dialog input { min-height: 44px; padding: 6px 8px; }
+    .editor-dialog .find-actions { margin-top: 8px; }
+    .link-address-error { margin: 6px 0 0; color: var(--danger); font-size: 13px; }
 
     .brand {
       margin-right: 8px;
@@ -1131,7 +1132,11 @@
         overflow: auto;
         overscroll-behavior: contain;
       }
-      .find-input, .table-direct input { font-size: 16px; }
+      .find-input, .table-direct input, .editor-dialog input { font-size: 16px; }
+      #linkDialog {
+        inset: 8px 0 auto;
+        margin: 0 auto;
+      }
       .find-row, .find-options { margin-bottom: 4px; }
       .find-actions .toolbar-button, .find-icon-button { min-height: 44px; }
       .find-icon-button, .table-picker-close { min-width: 44px; min-height: 44px; }
@@ -1341,13 +1346,26 @@
     </section>
   </div>
 
-  <dialog id="plainPasteDialog" class="plain-paste-dialog" aria-labelledby="plainPasteLabel">
+  <dialog id="plainPasteDialog" class="editor-dialog" aria-labelledby="plainPasteLabel">
     <form method="dialog">
       <label id="plainPasteLabel" for="plainPasteText">텍스트만 붙여넣기</label>
       <textarea id="plainPasteText" rows="3" placeholder="여기를 길게 눌러 붙여넣으세요." autofocus></textarea>
       <div class="find-actions">
         <button class="toolbar-button" type="submit" value="cancel">취소</button>
         <button class="toolbar-button primary" type="submit" value="insert">삽입</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="linkDialog" class="editor-dialog" aria-labelledby="linkAddressLabel">
+    <form>
+      <label id="linkAddressLabel" for="linkAddress">링크 주소</label>
+      <input id="linkAddress" type="text" inputmode="url" autocomplete="off" autocapitalize="none"
+        spellcheck="false" aria-describedby="linkAddressError" autofocus>
+      <p id="linkAddressError" class="link-address-error" role="status" hidden></p>
+      <div class="find-actions">
+        <button id="cancelLinkButton" class="toolbar-button" type="button">취소</button>
+        <button class="toolbar-button primary" type="submit">적용</button>
       </div>
     </form>
   </dialog>
@@ -1470,6 +1488,9 @@
       const formatbar = document.getElementById('formatbar');
       const plainPasteDialog = document.getElementById('plainPasteDialog');
       const plainPasteText = document.getElementById('plainPasteText');
+      const linkDialog = document.getElementById('linkDialog');
+      const linkAddress = document.getElementById('linkAddress');
+      const linkAddressError = document.getElementById('linkAddressError');
       const fileInput = document.getElementById('fileInput');
       const fileNameLabel = document.getElementById('fileName');
       const countLabel = document.getElementById('count');
@@ -3392,31 +3413,54 @@
         return result;
       };
 
-      const insertLink = (urlOverride = '') => {
-        restoreSelection();
-        focusEditor();
-        const selection = window.getSelection();
-        const selectedText = selection ? selection.toString() : '';
-        const initial = urlOverride || (isUrl(selectedText) ? selectedText : 'https://');
-        const url = window.prompt('연결할 주소를 입력하세요.', initial);
-        if (!url) return;
+      const clearLinkAddressError = () => {
+        linkAddress.removeAttribute('aria-invalid');
+        linkAddressError.hidden = true;
+      };
 
-        const trimmed = url.trim();
-        // 스킴만 있는 값(기본값 https:// 를 그대로 확인한 경우)은 거부합니다.
-        if (!isUrl(trimmed)) {
-          showToast('http://, https://, mailto:, tel: 뒤에 주소를 입력하세요.');
+      const openLinkDialog = (existingUrl = '') => {
+        if (linkDialog.open) return;
+        hideSelectionToolbar();
+        hideLinkPreview();
+        clearLinkAddressError();
+        linkAddress.value = existingUrl;
+        linkDialog.showModal();
+        if (existingUrl) linkAddress.select();
+      };
+
+      const closeLinkDialog = () => {
+        linkDialog.close();
+        focusEditor();
+        restoreSelection();
+      };
+
+      linkAddress.addEventListener('input', clearLinkAddressError);
+      document.getElementById('cancelLinkButton').addEventListener('click', closeLinkDialog);
+      linkDialog.addEventListener('cancel', (event) => {
+        event.preventDefault();
+        closeLinkDialog();
+      });
+      linkDialog.querySelector('form').addEventListener('submit', (event) => {
+        event.preventDefault();
+        const url = linkAddress.value.trim();
+        if (!isUrl(url)) {
+          linkAddress.setAttribute('aria-invalid', 'true');
+          linkAddressError.textContent = url ? 'http://, https://, mailto:, tel:로 시작하는 전체 주소를 입력하세요.' : '링크 주소를 입력하세요.';
+          linkAddressError.hidden = false;
+          linkAddress.focus();
           return;
         }
 
-        restoreSelection();
+        closeLinkDialog();
+        const selection = window.getSelection();
         if (selection && !selection.isCollapsed) {
-          createLinkWithoutScrolling(trimmed);
+          createLinkWithoutScrolling(url);
         } else {
-          const label = trimmed;
-          document.execCommand('insertHTML', false, `<a href="${escapeAttribute(label)}">${escapeHtml(label)}</a>`);
+          document.execCommand('insertHTML', false, `<a href="${escapeAttribute(url)}">${escapeHtml(url)}</a>`);
         }
+        saveSelection();
         updateCount();
-      };
+      });
 
       const escapeHtml = (value) => String(value)
         .replace(/&/g, '&amp;')
@@ -8665,7 +8709,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           } else if (action === 'print') {
             window.print();
           } else if (action === 'link') {
-            insertLink();
+            openLinkDialog();
           } else if (action === 'clear-format') {
             if (!applyTableCellCommand('clear-format')) clearFormatting();
           } else if (action === 'quote') {
@@ -9280,7 +9324,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           return;
         }
         selectMobileEditTarget(target);
-        if (action === 'link') insertLink(target.link?.getAttribute('href') || '');
+        if (action === 'link') openLinkDialog(target.link?.getAttribute('href') || '');
         if (action === 'unlink') runCommand('unlink');
         if (action === 'copy') {
           try {
@@ -9368,6 +9412,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       });
 
       document.addEventListener('keydown', async (event) => {
+        if (linkDialog.open) return;
         const ctrl = event.ctrlKey || event.metaKey;
         const key = event.key.toLowerCase();
         if (event.key === 'Escape' && tablePicker.classList.contains('open')) {
@@ -9423,7 +9468,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         if (key === 'k') {
           event.preventDefault();
           saveSelection();
-          insertLink();
+          openLinkDialog();
         } else if (key === 'h') {
           event.preventDefault();
           openFindbar(true);

@@ -217,18 +217,25 @@ await withPage({}, async (page) => {
   await page.waitForTimeout(200);
   r.check('F1 코드 스팬의 $& 보존', (await page.evaluate(() => T.text())).trim(), '시작 $& 끝');
 });
-await withPage({ promptAnswer: 'https://' }, async (page) => {
+await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<p>대상</p>'));
   await page.evaluate(() => T.select('대상'));
   await page.keyboard.press('Control+k');
-  await page.waitForTimeout(150);
+  await page.fill('#linkAddress', 'https://');
+  await page.press('#linkAddress', 'Enter');
   r.check('G1 스킴만 있는 주소 거부', await page.evaluate(() => T.html()), '<p>대상</p>');
+  r.check('G1 주소 입력창에 오류 표시', await page.locator('#linkAddressError').isVisible(), true);
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => document.activeElement === T.ed());
+  r.check('G1 취소 후 원래 선택 복귀', await page.evaluate(() => T.selection()), '대상');
 });
-await withPage({ promptAnswer: 'https://example.com/a' }, async (page) => {
+await withPage({}, async (page) => {
   await page.evaluate(() => T.set('<p>대상</p>'));
   await page.evaluate(() => T.select('대상'));
   await page.keyboard.press('Control+k');
-  await page.waitForTimeout(150);
+  r.check('G2 새 링크 주소 입력칸은 비어 있음', await page.inputValue('#linkAddress'), '');
+  await page.fill('#linkAddress', 'https://example.com/a');
+  await page.press('#linkAddress', 'Enter');
   r.check('G2 정상 주소는 링크 생성',
     await page.evaluate(() => T.html()), '<p><a href="https://example.com/a">대상</a></p>');
 });
