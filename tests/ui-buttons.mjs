@@ -43,6 +43,21 @@ await withPage({}, async (page) => {
   r.check('U2 고르지 않은 문단은 그대로', await page.evaluate(() => T.ed().lastElementChild.outerHTML), '<p>다음 문단</p>');
 });
 
+console.log('\n--- 위첨자·아래첨자 ---');
+
+await withPage({}, async (page) => {
+  await page.evaluate(() => { T.set('<p>x한글q+z</p>'); T.select('한글q+'); });
+  await page.click('[data-command="superscript"]');
+  r.check('임의의 글자를 위첨자로 표시', await page.evaluate(() => T.html()), '<p>x<sup>한글q+</sup>z</p>');
+  await page.click('[data-command="subscript"]');
+  r.check('위첨자를 아래첨자로 전환', await page.evaluate(() => T.html()), '<p>x<sub>한글q+</sub>z</p>');
+  await page.keyboard.press('Control+z');
+  r.check('실행 취소로 위첨자 복원', await page.evaluate(() => T.html()), '<p>x<sup>한글q+</sup>z</p>');
+  await page.evaluate(() => T.select('한글q+'));
+  await page.click('[data-command="superscript"]');
+  r.check('같은 버튼으로 첨자 해제', await page.evaluate(() => T.html()), '<p>x한글q+z</p>');
+});
+
 console.log('\n--- 실행 취소·다시 실행 버튼 ---');
 
 await withPage({}, async (page) => {
@@ -138,6 +153,13 @@ const docxXml = async (page, html) => {
 };
 // 글자가 든 w:r(런)의 속성만 뽑습니다.
 const runOf = (xml, text) => xml.match(new RegExp(`<w:r>(?:(?!</w:r>).)*<w:t[^>]*>${text}</w:t></w:r>`))?.[0] || '';
+
+await withPage({ noFilePicker: true }, async (page) => {
+  const xml = await docxXml(page, '<p>x<sup>한글</sup><sub>q+</sub></p>');
+  const alignment = (text) => [...runOf(xml, text).matchAll(/<w:vertAlign w:val="([^"]+)"\/>/g)].map((match) => match[1]);
+  r.check('DOCX에서 원래 글자와 첨자 서식을 유지', [alignment('한글'), alignment('q\\+'), alignment('x')],
+    [['superscript'], ['subscript'], []]);
+});
 
 await withPage({ noFilePicker: true }, async (page) => {
   const xml = await docxXml(page, '<p><span style="font-weight:700">굵게</span> <span style="text-decoration:underline">밑줄</span> 보통</p>');

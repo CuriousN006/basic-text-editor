@@ -1293,6 +1293,8 @@
       <button class="toolbar-button" type="button" data-command="italic" aria-pressed="false" title="기울임 (Ctrl+I)"><i>I</i></button>
       <button class="toolbar-button" type="button" data-command="underline" aria-pressed="false" title="밑줄 (Ctrl+U)"><u>U</u></button>
       <button class="toolbar-button" type="button" data-command="strikeThrough" aria-pressed="false" title="취소선"><s>S</s></button>
+      <button class="toolbar-button" type="button" data-command="superscript" aria-pressed="false" aria-label="위첨자" title="위첨자">x<sup>2</sup></button>
+      <button class="toolbar-button" type="button" data-command="subscript" aria-pressed="false" aria-label="아래첨자" title="아래첨자">x<sub>2</sub></button>
       <span class="separator" aria-hidden="true"></span>
       <button class="toolbar-button" type="button" data-command="justifyLeft" aria-pressed="false" title="왼쪽 정렬" data-mobile-extra>왼쪽</button>
       <button class="toolbar-button" type="button" data-command="justifyCenter" aria-pressed="false" title="가운데 정렬" data-mobile-extra>가운데</button>
@@ -1515,6 +1517,8 @@
     <button class="mini-format-button" type="button" data-selection-command="italic" aria-pressed="false" title="기울임 (Ctrl+I)"><i>I</i></button>
     <button class="mini-format-button" type="button" data-selection-command="underline" aria-pressed="false" title="밑줄 (Ctrl+U)"><u>U</u></button>
     <button class="mini-format-button" type="button" data-selection-command="strikeThrough" aria-pressed="false" title="취소선"><s>S</s></button>
+    <button class="mini-format-button" type="button" data-selection-command="superscript" aria-pressed="false" aria-label="위첨자" title="위첨자">x<sup>2</sup></button>
+    <button class="mini-format-button" type="button" data-selection-command="subscript" aria-pressed="false" aria-label="아래첨자" title="아래첨자">x<sub>2</sub></button>
     <button id="selectionMergeCells" class="mini-format-button" type="button" title="드래그한 칸을 하나로 병합" hidden>셀 병합</button>
   </div>
   <div id="mobileEditMenu" class="mobile-edit-menu" role="toolbar" aria-label="터치 편집 메뉴" hidden>
@@ -3699,9 +3703,12 @@
         bold: { tag: 'b', selector: 'b,strong' },
         italic: { tag: 'i', selector: 'i,em' },
         underline: { tag: 'u', selector: 'u' },
-        strikeThrough: { tag: 's', selector: 's,strike,del' }
+        strikeThrough: { tag: 's', selector: 's,strike,del' },
+        superscript: { tag: 'sup', selector: 'sup' },
+        subscript: { tag: 'sub', selector: 'sub' }
       };
 
+      const SCRIPT_ALIGNMENTS = { superscript: 'super', subscript: 'sub' };
       const FORMAT_DECORATIONS = { underline: 'underline', strikeThrough: 'line-through' };
 
       const styleCarriesFormat = (element, format) => {
@@ -3712,6 +3719,7 @@
           return weight === 'bold' || Number.parseInt(weight, 10) >= 600;
         }
         if (format === 'italic') return style.fontStyle === 'italic';
+        if (SCRIPT_ALIGNMENTS[format]) return style.verticalAlign === SCRIPT_ALIGNMENTS[format];
         const decoration = String(style.textDecorationLine || style.textDecoration || '');
         return decoration.includes(FORMAT_DECORATIONS[format]);
       };
@@ -3721,6 +3729,7 @@
         if (!style) return;
         if (format === 'bold') style.fontWeight = '';
         else if (format === 'italic') style.fontStyle = '';
+        else if (SCRIPT_ALIGNMENTS[format]) style.verticalAlign = '';
         else {
           const decoration = String(style.textDecorationLine || style.textDecoration || '');
           const next = decoration.split(/\s+/)
@@ -3884,7 +3893,7 @@
 
       // 내용이 사라진 인라인 래퍼를 정리합니다.
       const pruneEmptyInlineElements = (root) => {
-        [...root.querySelectorAll('b,strong,i,em,u,s,strike,del,span,code,a')].forEach((element) => {
+        [...root.querySelectorAll('b,strong,i,em,u,s,strike,del,sup,sub,span,code,a')].forEach((element) => {
           if (element.textContent) return;
           if (element.querySelector('img,br,hr,table,svg,video,audio,canvas')) return;
           element.remove();
@@ -3940,6 +3949,7 @@
 
       // 강조 표시입니다. _는 CommonMark처럼 단어 안(snake_case_name)에서는 강조로 보지 않습니다.
       const emphasizeInlineMarkdown = (value) => value
+        .replace(/&lt;(sup|sub)&gt;([^\n]*?)&lt;\/\1&gt;/gi, '<$1>$2</$1>')
         .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
         .replace(/(^|[^\p{L}\p{N}_])__([^_]+)__(?![\p{L}\p{N}_])/gu, '$1<strong>$2</strong>')
         .replace(/~~([^~]+)~~/g, '<s>$1</s>')
@@ -4167,7 +4177,7 @@
         if (tag === 'strong' || tag === 'b') return `**${children}**`;
         if (tag === 'em' || tag === 'i') return `*${children}*`;
         if (tag === 's' || tag === 'strike' || tag === 'del') return `~~${children}~~`;
-        if (tag === 'u') return `<u>${children}</u>`;
+        if (tag === 'u' || tag === 'sup' || tag === 'sub') return `<${tag}>${children}</${tag}>`;
         if (tag === 'code' && node.parentElement?.tagName.toLowerCase() !== 'pre') return `\`${children}\``;
         if (tag === 'a') return `[${children}](${node.getAttribute('href') || ''})`;
         if (tag === 'img') return `![${node.getAttribute('alt') || ''}](${node.getAttribute('src') || ''})`;
@@ -4343,8 +4353,13 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         if (['I', 'EM'].includes(tag)) next.italic = true;
         if (tag === 'U') next.underline = true;
         if (['S', 'STRIKE', 'DEL'].includes(tag)) next.strike = true;
-        if (tag === 'SUP') next.superscript = true;
-        if (tag === 'SUB') next.subscript = true;
+        if (elementCarriesFormat(element, 'superscript')) {
+          next.superscript = true;
+          next.subscript = false;
+        } else if (elementCarriesFormat(element, 'subscript')) {
+          next.superscript = false;
+          next.subscript = true;
+        }
         if (tag === 'CODE') next.code = true;
 
         const weight = String(element.style?.fontWeight || '');
@@ -4773,6 +4788,8 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           const decoration = `${element.style?.textDecoration || ''} ${element.style?.textDecorationLine || ''}`;
           if (/underline/i.test(decoration)) formats.push('u');
           if (/line-through/i.test(decoration)) formats.push('s');
+          if (element.style?.verticalAlign === 'super') formats.push('sup');
+          if (element.style?.verticalAlign === 'sub') formats.push('sub');
 
           if (!formats.length) {
             element.replaceWith(...element.childNodes);
@@ -4831,7 +4848,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
             if (node.nodeType !== Node.ELEMENT_NODE) return;
 
             const tagName = node.tagName.toLowerCase();
-            if (['b', 'i', 'u', 's'].includes(tagName)) {
+            if (['b', 'i', 'u', 's', 'sup', 'sub'].includes(tagName)) {
               [...node.childNodes].forEach((child) => appendSegments(child, [...formats, tagName], destination));
               return;
             }
@@ -4952,7 +4969,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       };
 
       const INLINE_COPY_TAGS = new Set([
-        'B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'DEL', 'A', 'CODE', 'SPAN', 'FONT'
+        'B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'DEL', 'SUP', 'SUB', 'A', 'CODE', 'SPAN', 'FONT'
       ]);
 
       // Range.cloneContents는 범위를 감싸고 있는 조상 태그를 포함하지 않습니다.
@@ -5263,13 +5280,16 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       // 붙여넣기에서 유지하는 인라인 서식입니다. 글꼴·글자 크기·색처럼 문서
       // 전체 모양을 흔드는 외부 서식은 가져오지 않습니다.
       const EMPTY_CLIPBOARD_STYLE = {
-        bold: false, italic: false, underline: false, strike: false, href: ''
+        bold: false, italic: false, underline: false, strike: false,
+        superscript: false, subscript: false, href: ''
       };
 
       const sameClipboardStyle = (left, right) => left.bold === right.bold
         && left.italic === right.italic
         && left.underline === right.underline
         && left.strike === right.strike
+        && left.superscript === right.superscript
+        && left.subscript === right.subscript
         && left.href === right.href
         && (left.quote || 0) === (right.quote || 0)
         && Boolean(left.orderedMarker) === Boolean(right.orderedMarker)
@@ -5329,11 +5349,17 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         style.italic = resolveInheritedFormat(node, root, 'italic');
         style.underline = hasDecorationFormat(node, root, 'underline');
         style.strike = hasDecorationFormat(node, root, 'strikeThrough');
+        let scriptFound = false;
         for (let element = node.parentNode; element && element !== root; element = element.parentNode) {
-          if (element.nodeType === Node.ELEMENT_NODE && element.tagName === 'A') {
-            style.href = clipboardLinkHref(element);
-            if (style.href) break;
+          if (!scriptFound) {
+            style.superscript = elementCarriesFormat(element, 'superscript');
+            style.subscript = !style.superscript && elementCarriesFormat(element, 'subscript');
+            scriptFound = style.superscript || style.subscript;
           }
+          if (!style.href && element.nodeType === Node.ELEMENT_NODE && element.tagName === 'A') {
+            style.href = clipboardLinkHref(element);
+          }
+          if (scriptFound && style.href) break;
         }
         return style;
       };
@@ -5425,7 +5451,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
           else spaced.push({ ...style, text });
         };
         working.forEach((run) => {
-          const styled = run.bold || run.italic || run.underline || run.strike || run.href;
+          const styled = run.bold || run.italic || run.underline || run.strike || run.superscript || run.subscript || run.href;
           const parts = run.text.match(/^(\s*)([\s\S]*?)(\s*)$/);
           if (!styled || !parts || !parts[2]) {
             push(run, run.text);
@@ -5666,6 +5692,8 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         if (run.italic) html = `<i>${html}</i>`;
         if (run.underline) html = `<u>${html}</u>`;
         if (run.strike) html = `<s>${html}</s>`;
+        if (run.superscript) html = `<sup>${html}</sup>`;
+        if (run.subscript) html = `<sub>${html}</sub>`;
         if (run.href) html = `<a href="${escapeAttribute(run.href)}">${html}</a>`;
         return html;
       }).join('');
@@ -7381,7 +7409,9 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         ['bold', 'bold'],
         ['italic', 'italic'],
         ['underline', 'underline'],
-        ['strike', 'strikeThrough']
+        ['strike', 'strikeThrough'],
+        ['superscript', 'superscript'],
+        ['subscript', 'subscript']
       ];
 
       const normalizeClipboardText = (value) => String(value).replace(/\r\n?/g, '\n');
@@ -7683,8 +7713,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
       // 바꿀 내용에는 예시를 원하는 모양으로 고쳐 적습니다. 예시와 맞대어 숫자나
       // 지수가 어디로 옮겨졌는지 알아내 나머지 일치에도 똑같이 적용합니다.
       //
-      // 이 편집기는 위·아래첨자 서식을 쓰지 않습니다(붙여넣기와 카페 복사에서 빠짐).
-      // 그래서 기호 창의 첨자 숫자처럼 유니코드 첨자 문자(x², H₂O)로 바꿉니다.
+      // 비슷한 모양 바꾸기는 기호 창과 같은 유니코드 첨자 문자(x², H₂O)를 사용합니다.
       const SUPERSCRIPT_CHARACTERS = {
         0: '⁰', 1: '¹', 2: '²', 3: '³', 4: '⁴', 5: '⁵', 6: '⁶', 7: '⁷', 8: '⁸', 9: '⁹',
         '+': '⁺', '-': '⁻', '−': '⁻', '=': '⁼', '(': '⁽', ')': '⁾',
@@ -9218,9 +9247,9 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
             const markdownSource = unwrapClipboardMarkdown(plain).replace(/ +$/, spaces => '\u00a0'.repeat(spaces.length));
             const html = markdownToHtml(markdownSource, { literalOrderedLists: true }).replace(/\u00a0/g, ' ');
             const parsed = new DOMParser().parseFromString(html, 'text/html');
-            const plainMarkdown = !richDocument || !richDocument.body.querySelector('b,strong,i,em,u,s,a,pre,table,ul,ol,blockquote,h1,h2,h3');
+            const plainMarkdown = !richDocument || !richDocument.body.querySelector('b,strong,i,em,u,s,sup,sub,[style*="vertical-align"],a,pre,table,ul,ol,blockquote,h1,h2,h3');
             if ((plainMarkdown || parsed.body.querySelector('table'))
-              && parsed.body.querySelector('table,h1,h2,h3,pre,ul,ol,blockquote,hr,strong,em,s,a,code')) {
+              && parsed.body.querySelector('table,h1,h2,h3,pre,ul,ol,blockquote,hr,strong,em,s,sup,sub,a,code')) {
               const hasBlocks = parsed.body.querySelector('table,h1,h2,h3,pre,ul,ol,blockquote,hr');
               const tokens = hasBlocks
                 ? [...parsed.body.children].map(block => ({ type: 'block', html: block.outerHTML }))
