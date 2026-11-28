@@ -46,17 +46,36 @@
       z-index: 10;
     }
 
-    .filebar,
-    .formatbar {
+    .filebar {
       display: flex;
       align-items: center;
       flex-wrap: wrap;
       gap: 6px;
       padding: 7px 12px;
+      border-bottom: 1px solid #edf0f3;
     }
 
-    .filebar {
-      border-bottom: 1px solid #edf0f3;
+    .formatbar {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 3px;
+      padding: 6px 10px;
+    }
+
+    .formatbar .toolbar-button {
+      min-width: 30px;
+      padding: 5px 7px;
+      font-size: 13px;
+    }
+
+    .formatbar .toolbar-select {
+      padding: 5px 22px 5px 7px;
+      font-size: 13px;
+    }
+
+    .formatbar .separator {
+      margin: 0 1px;
     }
 
     .file-actions { display: contents; }
@@ -166,6 +185,7 @@
     }
 
     .editor-shell {
+      position: relative;
       display: flex;
       flex: 1 1 auto;
       min-height: 0;
@@ -473,8 +493,8 @@
       flex: none;
       min-height: 44px;
       min-width: 0;
-      padding: 0 9px;
-      font-size: 13px;
+      padding: 0 6px;
+      font-size: 12px;
       white-space: nowrap;
     }
     .mobile-edit-menu.is-adjusting { visibility: hidden; }
@@ -864,8 +884,8 @@
 
     .findbar {
       display: none;
-      position: fixed;
-      top: 104px;
+      position: absolute;
+      top: 10px;
       right: 22px;
       width: min(460px, calc(100vw - 32px));
       padding: 12px;
@@ -1127,7 +1147,13 @@
       .mobile-only { display: inline-block; }
       .filebar, .formatbar { padding: 3px 8px; gap: 3px; }
       .brand { flex: 1; min-width: 0; font-size: 14px; }
-      .toolbar-button, .toolbar-select { min-height: 44px; min-width: 44px; }
+      .toolbar-button, .toolbar-select,
+      .formatbar .toolbar-button, .formatbar .toolbar-select {
+        min-height: 44px;
+        min-width: 44px;
+        padding: 6px 9px;
+        font-size: inherit;
+      }
       .file-actions { display: none; }
       .file-actions.is-expanded {
         display: grid;
@@ -1762,17 +1788,28 @@
         tableSizeLabel.textContent = `${safeRows}행 × ${safeColumns}열`;
       };
 
+      const closeMobilePanels = () => {
+        if (!mobileLayout.matches) return;
+        mobileFilesButton.setAttribute('aria-expanded', 'false');
+        fileActions.classList.remove('is-expanded');
+        mobileToolsButton.setAttribute('aria-expanded', 'false');
+        formatbar.classList.remove('is-expanded');
+      };
+
       const positionTablePicker = () => {
         const buttonRect = tableButton.getBoundingClientRect();
         const pickerRect = tablePicker.getBoundingClientRect();
-        const left = Math.max(8, Math.min(
-          Math.max(8, buttonRect.left),
-          window.innerWidth - pickerRect.width - 8
-        ));
-        const below = buttonRect.bottom + 7;
+        const hasAnchor = buttonRect.width > 0 && buttonRect.height > 0;
+        const left = hasAnchor
+          ? Math.max(8, Math.min(Math.max(8, buttonRect.left), window.innerWidth - pickerRect.width - 8))
+          : Math.max(8, Math.round((window.innerWidth - pickerRect.width) / 2));
+        const anchorBottom = hasAnchor
+          ? buttonRect.bottom
+          : document.querySelector('.topbar').getBoundingClientRect().bottom;
+        const below = anchorBottom + 7;
         const top = below + pickerRect.height <= viewportHeight() - 8
           ? below
-          : Math.max(8, buttonRect.top - pickerRect.height - 7);
+          : Math.max(8, (hasAnchor ? buttonRect.top : viewportHeight()) - pickerRect.height - 7);
         tablePicker.style.left = `${left}px`;
         tablePicker.style.top = `${top}px`;
       };
@@ -1780,6 +1817,7 @@
       const openTablePicker = () => {
         hideSelectionToolbar();
         closeFindbar();
+        closeMobilePanels();
         tablePicker.classList.add('open');
         tablePicker.setAttribute('aria-hidden', 'false');
         updateTableGridHighlight(tableRows.value, tableColumns.value);
@@ -1841,11 +1879,18 @@
         }
         const buttonRect = symbolButton.getBoundingClientRect();
         const pickerRect = symbolPicker.getBoundingClientRect();
-        const below = buttonRect.bottom + 7;
+        const hasAnchor = buttonRect.width > 0 && buttonRect.height > 0;
+        const left = hasAnchor
+          ? buttonRect.left
+          : Math.round((window.innerWidth - pickerRect.width) / 2);
+        const anchorBottom = hasAnchor
+          ? buttonRect.bottom
+          : document.querySelector('.topbar').getBoundingClientRect().bottom;
+        const below = anchorBottom + 7;
         const top = below + pickerRect.height <= viewportHeight() - 8
           ? below
-          : buttonRect.top - pickerRect.height - 7;
-        placeSymbolPicker(buttonRect.left, top);
+          : (hasAnchor ? buttonRect.top : viewportHeight()) - pickerRect.height - 7;
+        placeSymbolPicker(left, top);
       };
 
       // 기호 창은 여러 개를 이어 넣을 수 있게 떠 있는 창입니다. 기호를 넣거나 본문을
@@ -1853,6 +1898,7 @@
       const openSymbolPicker = () => {
         hideSelectionToolbar();
         closeTablePicker();
+        closeMobilePanels();
         if (symbolPicker.classList.contains('open')) return;
         symbolPicker.classList.add('open');
         symbolPicker.setAttribute('aria-hidden', 'false');
@@ -5987,12 +6033,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
 
       const openFindbar = (withReplace) => {
         hideSelectionToolbar();
-        if (mobileLayout.matches) {
-          mobileFilesButton.setAttribute('aria-expanded', 'false');
-          fileActions.classList.remove('is-expanded');
-          mobileToolsButton.setAttribute('aria-expanded', 'false');
-          formatbar.classList.remove('is-expanded');
-        }
+        closeMobilePanels();
         findbarReplaceMode = Boolean(withReplace);
         const selection = window.getSelection();
         const selectedRange = selection
@@ -8805,6 +8846,7 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         if (mobileLayout.matches) saveSelection();
       });
       const openPlainPasteDialog = () => {
+        closeMobilePanels();
         plainPasteDialog.returnValue = '';
         plainPasteText.value = '';
         plainPasteDialog.showModal();

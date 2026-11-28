@@ -43,7 +43,7 @@ try {
   r.check('M4 다른 곳을 터치하면 미리보기 닫힘', await page.locator('#linkPreview').isVisible(), false);
 
   await page.evaluate(() => T.caretIn(2, true));
-  await tap('#mobileToolsButton');
+  if (await page.locator('#mobileToolsButton').getAttribute('aria-expanded') === 'false') await tap('#mobileToolsButton');
   await tap('#tableButton');
   r.check('M5 좁은 화면의 표 삽입은 행·열 입력을 사용', await page.locator('#tableGrid').isVisible(), false);
   await page.locator('#tableRows').fill('3');
