@@ -461,11 +461,22 @@
     .selection-toolbar.visible { display: flex; }
     .mobile-edit-menu:not([hidden]) {
       display: flex;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
+      gap: 2px;
+      padding: 3px;
       max-width: calc(100vw - 16px);
+      overflow-x: auto;
+      overscroll-behavior: contain;
       touch-action: manipulation;
     }
-    .mobile-edit-menu .toolbar-button { min-height: 44px; white-space: nowrap; }
+    .mobile-edit-menu .toolbar-button {
+      flex: none;
+      min-height: 44px;
+      min-width: 0;
+      padding: 0 9px;
+      font-size: 13px;
+      white-space: nowrap;
+    }
     .mobile-edit-menu.is-adjusting { visibility: hidden; }
     ::highlight(mobile-touch-selection) { background-color: var(--accent-soft); }
 
@@ -1165,7 +1176,7 @@
       #editor table { table-layout: auto; }
       .findbar {
         position: static;
-        flex: 0 1 auto;
+        flex: 0 0 auto;
         max-height: 55%;
         width: auto;
         margin: 4px 6px 0;
@@ -1179,7 +1190,9 @@
         margin: 0 auto;
       }
       .find-row, .find-options { margin-bottom: 4px; }
+      .find-actions { gap: 4px; }
       .find-actions .toolbar-button, .find-icon-button { min-height: 44px; }
+      .find-actions .toolbar-button { padding-inline: 8px; font-size: 13px; }
       .find-icon-button, .table-picker-close { min-width: 44px; min-height: 44px; }
       .table-grid, .table-size-label { display: none; }
       .table-picker {
@@ -1220,15 +1233,15 @@
       .short-mobile-viewport.findbar-open .find-result-sentence { white-space: nowrap; }
     }
 
-    @media screen and (min-width: 640px) {
-      .short-mobile-viewport.findbar-open .editor-shell {
+    @media screen and (pointer: coarse) and (min-width: 640px) and (max-height: 540px) {
+      .findbar-open .editor-shell {
         display: grid;
         grid-template-columns: minmax(0, 1fr) minmax(320px, 43%);
         grid-template-rows: minmax(0, 1fr) min(40%, 72px);
       }
-      .short-mobile-viewport.findbar-open .workspace { grid-area: 1 / 1; }
-      .short-mobile-viewport.findbar-open .find-results-panel { grid-area: 2 / 1; }
-      .short-mobile-viewport .findbar.open {
+      .findbar-open .workspace { grid-area: 1 / 1; }
+      .findbar-open .find-results-panel { grid-area: 2 / 1; }
+      .findbar-open .findbar.open {
         display: grid;
         grid-area: 1 / 2 / 3;
         grid-template-columns: minmax(0, 1fr);
@@ -1238,13 +1251,17 @@
         margin: 4px;
         padding: 4px 6px;
       }
-      .short-mobile-viewport .findbar .find-row { margin-bottom: 2px; }
-      .short-mobile-viewport .find-row.has-count { grid-row: 1; }
-      .short-mobile-viewport #replaceRow { grid-row: 2; }
-      .short-mobile-viewport .find-options { grid-row: 3; margin-bottom: 0; overflow: auto; }
-      .short-mobile-viewport .find-help { grid-row: 4; max-height: 44px; overflow: auto; }
-      .short-mobile-viewport #findActions { grid-row: 5; gap: 2px; }
-      .short-mobile-viewport #findActions .toolbar-button { padding-inline: 5px; }
+      .findbar-open .findbar .find-row { margin-bottom: 2px; }
+      .findbar-open .find-row.has-count { grid-row: 1; }
+      .findbar-open #replaceRow { grid-row: 2; }
+      .findbar-open .find-options { grid-row: 3; margin-bottom: 0; overflow: auto; }
+      .findbar-open .find-help { grid-row: 4; max-height: 44px; overflow: auto; }
+      .findbar-open #findActions { grid-row: 5; gap: 2px; }
+      .findbar-open #findActions .toolbar-button { padding-inline: 5px; }
+      .findbar-open .find-results-list { padding: 3px 6px; }
+      .findbar-open .find-result-item { margin-bottom: 4px; padding: 3px 8px; }
+      .findbar-open .find-result-location { margin-bottom: 1px; }
+      .findbar-open .find-result-sentence { white-space: nowrap; }
     }
 
     @media print {
@@ -1293,8 +1310,8 @@
       <button class="toolbar-button" type="button" data-command="italic" aria-pressed="false" title="기울임 (Ctrl+I)"><i>I</i></button>
       <button class="toolbar-button" type="button" data-command="underline" aria-pressed="false" title="밑줄 (Ctrl+U)"><u>U</u></button>
       <button class="toolbar-button" type="button" data-command="strikeThrough" aria-pressed="false" title="취소선"><s>S</s></button>
-      <button class="toolbar-button" type="button" data-command="superscript" aria-pressed="false" aria-label="위첨자" title="위첨자">x<sup>2</sup></button>
-      <button class="toolbar-button" type="button" data-command="subscript" aria-pressed="false" aria-label="아래첨자" title="아래첨자">x<sub>2</sub></button>
+      <button class="toolbar-button" type="button" data-command="superscript" aria-pressed="false" aria-label="위첨자" title="위첨자" data-mobile-extra>x<sup>2</sup></button>
+      <button class="toolbar-button" type="button" data-command="subscript" aria-pressed="false" aria-label="아래첨자" title="아래첨자" data-mobile-extra>x<sub>2</sub></button>
       <span class="separator" aria-hidden="true"></span>
       <button class="toolbar-button" type="button" data-command="justifyLeft" aria-pressed="false" title="왼쪽 정렬" data-mobile-extra>왼쪽</button>
       <button class="toolbar-button" type="button" data-command="justifyCenter" aria-pressed="false" title="가운데 정렬" data-mobile-extra>가운데</button>
@@ -5970,6 +5987,12 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
 
       const openFindbar = (withReplace) => {
         hideSelectionToolbar();
+        if (mobileLayout.matches) {
+          mobileFilesButton.setAttribute('aria-expanded', 'false');
+          fileActions.classList.remove('is-expanded');
+          mobileToolsButton.setAttribute('aria-expanded', 'false');
+          formatbar.classList.remove('is-expanded');
+        }
         findbarReplaceMode = Boolean(withReplace);
         const selection = window.getSelection();
         const selectedRange = selection
@@ -9390,13 +9413,14 @@ ${sanitizeHtml(editorContentForExport().innerHTML)}
         const menu = mobileEditMenu.getBoundingClientRect();
         const rect = visibleRects[0] || rects[0];
         const center = rect ? rect.left + rect.width / 2 : x;
+        const minTop = view.top + 8;
         const bottom = viewportHeight() - menu.height - 8;
         const above = (rect?.top ?? y) - menu.height - 8;
         const last = visibleRects[visibleRects.length - 1] || rect;
         const below = (last?.bottom ?? y) + (range.collapsed ? 8 : 34);
-        const top = above >= 8 ? above : below;
+        const top = above >= minTop ? above : below;
         mobileEditMenu.style.left = Math.max(8, Math.min(center - menu.width / 2, innerWidth - menu.width - 8)) + 'px';
-        mobileEditMenu.style.top = Math.max(8, Math.min(top, bottom)) + 'px';
+        mobileEditMenu.style.top = Math.max(8, Math.min(Math.max(minTop, top), bottom)) + 'px';
       };
 
       const showMobileEditMenu = (range, x, y, link) => {
