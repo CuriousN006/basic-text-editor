@@ -408,7 +408,7 @@ try {
     return { scroll: area.scrollTop, y: Math.round(area.getBoundingClientRect().bottom - 4) };
   });
   await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 150, y: initialDrag.y }] });
-  await page.waitForFunction(scroll => document.querySelector('.workspace').scrollTop - scroll > 120, initialDrag.scroll);
+  await page.waitForFunction(scroll => document.querySelector('.workspace').scrollTop - scroll > 220, initialDrag.scroll);
   await release();
   r.check('M18 처음 길게 누른 손을 떼기 전에도 스크롤하면서 선택이 이어짐', await page.evaluate(() => {
     const range = getSelection().getRangeAt(0);
